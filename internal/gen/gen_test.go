@@ -1325,3 +1325,38 @@ func TestArgv0StaysAsTheProgramSawIt(t *testing.T) {
 		t.Errorf("manifest = %+v", m)
 	}
 }
+
+func TestDockerfileVariableIsANote(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"] = ServiceInput{Observed: observed("web"), Stage: &dockerfile.Stage{Unknown: []string{
+		"line 2: ENV X holds a variable (kept as written)",
+		"line 3: ONBUILD",
+	}}}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "dockerfile", "ENV X holds a variable; the value in the package is the one observed while the image ran")
+	if m := itemsOf(p, "web", plan.Note, "dockerfile")[0].Message; strings.Contains(m, "line 2") {
+		t.Errorf("message = %q", m)
+	}
+	want1(t, p, "web", plan.Unsupported, "dockerfile", "line 3: ONBUILD")
+}
+
+func TestHealthcheckOptionsFoldIntoItem(t *testing.T) {
+	s := svc("web")
+	s.Healthcheck = &compose.Healthcheck{Test: compose.Command{Exec: []string{"CMD-SHELL", "curl -f http://localhost"}, Set: true}}
+	s.Unknown = []string{"healthcheck.interval", "healthcheck.timeout", "healthcheck.retries", "privileged"}
+	p, _ := one(t, &fake{}, s)
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "options not converted: interval, timeout, retries")
+	wantNone(t, p, "web", plan.Unsupported, "healthcheck.interval")
+	wantNone(t, p, "web", plan.Unsupported, "healthcheck.timeout")
+	wantNone(t, p, "web", plan.Unsupported, "healthcheck.retries")
+	want1(t, p, "web", plan.Unsupported, "privileged", "not converted")
+
+	// disabled healthcheck: no healthcheck item, so the keys keep their own items
+	s = svc("web")
+	s.Healthcheck = &compose.Healthcheck{Disable: true}
+	s.Unknown = []string{"healthcheck.interval"}
+	p, _ = one(t, &fake{}, s)
+	wantNone(t, p, "web", plan.Unsupported, "healthcheck")
+	want1(t, p, "web", plan.Unsupported, "healthcheck.interval", "not converted")
+}

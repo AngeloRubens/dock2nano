@@ -271,17 +271,35 @@ func (r *run) logf(format string, args ...any) {
 	}
 }
 
-// redact hides the values of Options.Env in text that comes from outside (the output of the
-// container, errors of Docker). The names are not secret and are left alone.
+// redact hides the values of the variables of Options.Env whose name looks like a secret (see
+// secretNames) in text that comes from outside (the output of the container, errors of Docker).
+// The names are not secret and are left alone, and so are the values of the other variables
+// (DB_NAME=petclinic), which would garble the text around them.
 func (r *run) redact(text string) string {
 	for _, e := range r.o.Env {
 		// a short value (DEBUG=1) or one the image has anyway is not a secret, and replacing it
 		// would damage the text around it
-		if _, v, ok := strings.Cut(e, "="); ok && len(v) >= minSecret && !r.imageValues[v] {
+		k, v, ok := strings.Cut(e, "=")
+		if ok && secretName(k) && len(v) >= minSecret && !r.imageValues[v] {
 			text = strings.ReplaceAll(text, v, "***")
 		}
 	}
 	return text
+}
+
+// secretNames are the parts of the name of a variable (compared in upper case) that make redact
+// hide its value.
+var secretNames = []string{"PASS", "SECRET", "TOKEN", "KEY", "CRED", "AUTH", "PRIVATE", "CERT", "SIGN", "SALT"}
+
+// secretName tells whether the name of a variable looks like the name of a secret.
+func secretName(name string) bool {
+	name = strings.ToUpper(name)
+	for _, part := range secretNames {
+		if strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // minSecret is the shortest value of Options.Env that redact hides.

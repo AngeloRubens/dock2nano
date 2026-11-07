@@ -2008,3 +2008,14 @@ func TestObservePassesTheNetworkToTheTracedContainer(t *testing.T) {
 		t.Errorf("%d traced containers", n)
 	}
 }
+
+func TestObserveRedactOnlyValuesOfSecretNames(t *testing.T) {
+	s := newScene(t)
+	s.o.Env = []string{"DB_NAME=petclinic", "DB_PASSWORD=hunter22", "API_KEY=abcdef123", "PETCLINIC=zzzzzzzz"}
+	r := &run{o: s.o}
+	got := r.redact("/opt/applications/petclinic/WEB-INF hunter22 abcdef123 zzzzzzzz")
+	want := "/opt/applications/petclinic/WEB-INF *** *** zzzzzzzz"
+	if got != want {
+		t.Errorf("redact = %q, want %q", got, want)
+	}
+}

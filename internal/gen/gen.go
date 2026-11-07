@@ -503,12 +503,34 @@ func (g *generator) healthcheck(s *compose.Service, si ServiceInput) {
 	switch h := s.Healthcheck; {
 	case h != nil && h.Disable:
 	case h != nil:
-		g.add(s.Name, plan.Unsupported, "healthcheck", "ops compose runs no healthchecks; "+testSummary(h.Test.Shell, h.Test.Exec))
+		msg := "ops compose runs no healthchecks; " + testSummary(h.Test.Shell, h.Test.Exec)
+		if opts := healthcheckOptions(s); len(opts) > 0 {
+			msg += "; options not converted: " + strings.Join(opts, ", ")
+		}
+		g.add(s.Name, plan.Unsupported, "healthcheck", msg)
 	case si.Stage != nil && si.Stage.Healthcheck != nil && !si.Stage.Healthcheck.None:
 		t := si.Stage.Healthcheck.Test
 		g.add(s.Name, plan.Unsupported, "healthcheck", "the HEALTHCHECK of the Dockerfile is not run by ops compose; "+testSummary(t.Shell, t.Exec))
 	}
 }
+
+// healthcheckOptions are the options of the healthcheck of the service that the compose parser
+// recorded as not modelled, by name (interval, timeout...). They are named in the healthcheck item
+// when there is one, and have no item of their own then.
+func healthcheckOptions(s *compose.Service) []string {
+	if s.Healthcheck == nil || s.Healthcheck.Disable {
+		return nil
+	}
+	var out []string
+	for _, u := range s.Unknown {
+		if name, ok := strings.CutPrefix(u, "healthcheck."); ok && healthcheckOptionNames[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+var healthcheckOptionNames = map[string]bool{"interval": true, "timeout": true, "retries": true, "start_period": true, "start_interval": true}
 
 // testSummary describes a healthcheck test by its first word and the number of
 // words, because the rest may hold a password.
@@ -569,14 +591,38 @@ func (g *generator) identity(s *compose.Service, obs *observe.Result, m *plan.Ma
 
 // unknown reports what the parsers recorded as not modelled.
 func (g *generator) unknown(s *compose.Service, si ServiceInput) {
+	folded := map[string]bool{}
+	for _, name := range healthcheckOptions(s) {
+		folded["healthcheck."+name] = true
+	}
 	for _, u := range s.Unknown {
+		if folded[u] {
+			continue
+		}
 		g.add(s.Name, plan.Unsupported, u, "this key of the service is not converted")
 	}
 	if si.Stage != nil {
 		for _, u := range si.Stage.Unknown {
+			if what, ok := variableNote(u); ok {
+				g.add(s.Name, plan.Note, "dockerfile", what+" holds a variable; the value in the package is the one observed while the image ran")
+				continue
+			}
 			g.add(s.Name, plan.Unsupported, "dockerfile", "not converted: "+u)
 		}
 	}
+}
+
+// variableNote recognizes the entries of the Dockerfile parser of the form
+// "line N: <instruction> holds a variable (kept as written)" and returns the instruction.
+func variableNote(u string) (string, bool) {
+	rest := u
+	if strings.HasPrefix(rest, "line ") {
+		if _, after, ok := strings.Cut(rest, ": "); ok {
+			rest = after
+		}
+	}
+	what, ok := strings.CutSuffix(rest, " holds a variable (kept as written)")
+	return what, ok && what != ""
 }
 
 func (g *generator) observed(s *compose.Service, obs *observe.Result) {
