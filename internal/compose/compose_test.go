@@ -53,7 +53,7 @@ func TestParseTwoServices(t *testing.T) {
 	if !reflect.DeepEqual(app.Environment, wantEnv) {
 		t.Errorf("env %+v", app.Environment)
 	}
-	if app.Healthcheck == nil || len(app.Healthcheck.Test.Exec) != 5 {
+	if app.Healthcheck == nil || !reflect.DeepEqual(app.Healthcheck.Test.Exec, []string{"CMD", "wget", "-q", "-O-", "http://localhost:9000/"}) {
 		t.Errorf("healthcheck %+v", app.Healthcheck)
 	}
 	if !reflect.DeepEqual(app.Unknown, []string{"healthcheck.interval", "privileged"}) {
@@ -74,6 +74,8 @@ func TestShortPorts(t *testing.T) {
 		{"127.0.0.1:8080:80", Port{HostIP: "127.0.0.1", Published: "8080", Target: "80", Protocol: "tcp"}},
 		{"53:53/udp", Port{Published: "53", Target: "53", Protocol: "udp"}},
 		{"8000-8010:80", Port{Published: "8000-8010", Target: "80", Protocol: "tcp"}},
+		{"127.0.0.1::80", Port{HostIP: "127.0.0.1", Target: "80", Protocol: "tcp"}},
+		{"[::1]::80", Port{HostIP: "::1", Target: "80", Protocol: "tcp"}},
 		{"[::1]:8080:80", Port{HostIP: "::1", Published: "8080", Target: "80", Protocol: "tcp"}},
 	}
 	for _, c := range cases {
@@ -136,6 +138,9 @@ func TestShortVolumes(t *testing.T) {
 		{".data:/data", Volume{Type: "bind", Source: ".data", Target: "/data"}},
 		{"C:\\data:/data", Volume{Type: "bind", Source: "C:\\data", Target: "/data"}},
 		{"a:/b", Volume{Type: "volume", Source: "a", Target: "/b"}},
+		{"a:/b:ro", Volume{Type: "volume", Source: "a", Target: "/b", ReadOnly: true}},
+		{"C:/data:/data", Volume{Type: "bind", Source: "C:/data", Target: "/data"}},
+		{"./${X}:/app", Volume{Type: "bind", Source: "./${X}", Target: "/app"}},
 		{"db:/d:nocopy", Volume{Type: "volume", Source: "db", Target: "/d", Options: "nocopy"}},
 	}
 	for _, c := range cases {
@@ -323,12 +328,13 @@ func TestErrorNamesServiceAndLine(t *testing.T) {
 	}
 }
 
-func TestMergeBombIsBounded(t *testing.T) {
+// mergeBomb builds a file where each level merges the level below fan times.
+func mergeBomb(depth, fan int) string {
 	var b strings.Builder
 	b.WriteString("x-l0: &l0 {k: v}\n")
-	for i := 1; i <= 9; i++ {
+	for i := 1; i <= depth; i++ {
 		fmt.Fprintf(&b, "x-l%d: &l%d {<<: [", i, i)
-		for j := 0; j < 10; j++ {
+		for j := 0; j < fan; j++ {
 			if j > 0 {
 				b.WriteString(",")
 			}
@@ -336,19 +342,73 @@ func TestMergeBombIsBounded(t *testing.T) {
 		}
 		b.WriteString("]}\n")
 	}
-	b.WriteString("services: {s: {<<: *l9, image: x}}\n")
+	fmt.Fprintf(&b, "services: {s: {<<: *l%d, image: x}}\n", depth)
+	return b.String()
+}
+
+// parseWithin fails the test if Parse does not return within the limit.
+func parseWithin(t *testing.T, src string, limit time.Duration) error {
+	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		_, err := Parse([]byte(b.String()))
+		_, err := Parse([]byte(src))
 		done <- err
 	}()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "too many merged") {
-			t.Errorf("error %v", err)
+		return err
+	case <-time.After(limit):
+		t.Fatal("Parse did not return in time")
+		return nil
+	}
+}
+
+func TestMergeBombIsBounded(t *testing.T) {
+	err := parseWithin(t, mergeBomb(5, 9), 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "too many merged") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestDeepMergeBombIsRefused(t *testing.T) {
+	if err := parseWithin(t, mergeBomb(9, 10), 10*time.Second); err == nil {
+		t.Error("a merge bomb was accepted")
+	}
+}
+
+func TestWideMergeIsBounded(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("x-b: &b {")
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "k%d: v,", i)
+	}
+	b.WriteString("}\nservices: {s: {image: x, <<: [")
+	for i := 0; i < 200; i++ {
+		if i > 0 {
+			b.WriteString(",")
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("merge expansion is not bounded")
+		b.WriteString("*b")
+	}
+	b.WriteString("]}}\n")
+	err := parseWithin(t, b.String(), 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "too many merged") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestAliasAmplificationIsRefused(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("x-big: &big [")
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "%d,", i)
+	}
+	b.WriteString("]\nservices:\n")
+	for i := 0; i < 1500; i++ {
+		fmt.Fprintf(&b, "  s%d:\n    image: x\n    expose: *big\n", i)
+	}
+	err := parseWithin(t, b.String(), 20*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("error %v", err)
 	}
 }
 
@@ -437,11 +497,89 @@ func TestUnresolvedVolumeIsListed(t *testing.T) {
 func TestNamesStartingWithX(t *testing.T) {
 	p := mustParse(t, "services:\n  a:\n    image: x\n    environment:\n      x-token: s\n    build:\n      context: .\n      args:\n        x-arg: v\n    depends_on:\n      x-db:\n    networks:\n      x-net:\n  x-db:\n    image: y\n")
 	a := p.Services[0]
+	if len(p.Services) != 2 || p.Service("x-db") == nil {
+		t.Errorf("services %d", len(p.Services))
+	}
 	if !reflect.DeepEqual(a.Environment, []EnvVar{{"x-token", "s", true}}) || !reflect.DeepEqual(a.Build.Args, []EnvVar{{"x-arg", "v", true}}) {
 		t.Errorf("env %+v args %+v", a.Environment, a.Build.Args)
 	}
 	if len(a.DependsOn) != 1 || a.DependsOn[0].Service != "x-db" || !reflect.DeepEqual(a.Networks, []string{"x-net"}) {
 		t.Errorf("depends_on %+v networks %v", a.DependsOn, a.Networks)
+	}
+	const note = " (Compose reads it as an extension and drops it)"
+	want := []string{"environment.x-token" + note, "build.args.x-arg" + note, "networks.x-net" + note}
+	if !reflect.DeepEqual(a.Unknown, want) {
+		t.Errorf("unknown %v", a.Unknown)
+	}
+}
+
+func TestXNamesUnderServicesAndTopLevel(t *testing.T) {
+	p := mustParse(t, "services:\n  x-db:\n    image: y\nvolumes:\n  x-data:\nnetworks:\n  x-net:\n")
+	if p.Service("x-db") == nil || !reflect.DeepEqual(p.Volumes, []string{"x-data"}) || !reflect.DeepEqual(p.Networks, []string{"x-net"}) {
+		t.Errorf("%+v", p)
+	}
+}
+
+func TestInterpolationWithDefaultInShortSyntax(t *testing.T) {
+	p, err := parseShortPort("${WEB_PORT:-8080}:80")
+	if err != nil || p != (Port{Published: "${WEB_PORT:-8080}", Target: "80", Protocol: "tcp"}) {
+		t.Errorf("port %+v %v", p, err)
+	}
+	v, err := parseShortVolume("${DATA:-./data}:/data:ro")
+	if err != nil || v != (Volume{Type: "unresolved", Source: "${DATA:-./data}", Target: "/data", ReadOnly: true}) {
+		t.Errorf("volume %+v %v", v, err)
+	}
+}
+
+func TestVariablesInCountsAndBooleans(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    scale: ${N}\n    deploy:\n      replicas: ${N:-2}\n    volumes:\n      - {type: bind, source: ., target: /t, read_only: '${RO}'}\n    healthcheck:\n      test: [CMD, 'true']\n      disable: ${OFF}\n")
+	a := p.Services[0]
+	want := []string{"scale (holds a variable)", "deploy.replicas (holds a variable)", "volumes[0].read_only (holds a variable)", "healthcheck.disable (holds a variable)"}
+	if a.Replicas != nil || !reflect.DeepEqual(a.Unknown, want) {
+		t.Errorf("replicas %v unknown %v", a.Replicas, a.Unknown)
+	}
+}
+
+func TestNullEntriesInLists(t *testing.T) {
+	for _, src := range []string{
+		"services:\n  a:\n    image: x\n    ports: [~]\n",
+		"services:\n  a:\n    image: x\n    volumes: [null]\n",
+		"services:\n  a:\n    image: x\n    expose: [~]\n",
+	} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("accepted: %q", src)
+		}
+	}
+}
+
+func TestNestedNulls(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    ports: [{target: 80, protocol: null}]\n    depends_on: {db: {condition: null}}\n    build: {context: ., args: null}\n    deploy: {replicas: null}\n    volumes: [{type: bind, source: ., target: /t, read_only: null}]\n")
+	a := p.Services[0]
+	if a.Ports[0].Protocol != "tcp" || a.DependsOn[0].Condition != "service_started" || a.Replicas != nil || a.Volumes[0].ReadOnly || len(a.Unknown) != 0 {
+		t.Errorf("service %+v", a)
+	}
+}
+
+func TestLongVolumeTypes(t *testing.T) {
+	if _, err := Parse([]byte("services:\n  a:\n    image: x\n    volumes:\n      - {source: ./src, target: /app}\n")); err == nil {
+		t.Error("a long volume without a type was accepted")
+	}
+	p := mustParse(t, "services:\n  a:\n    image: x\n    volumes:\n      - {type: npipe, source: x, target: /y}\n")
+	if !reflect.DeepEqual(p.Services[0].Unknown, []string{"volumes[0].type (npipe)"}) {
+		t.Errorf("unknown %v", p.Services[0].Unknown)
+	}
+}
+
+func TestLongPortProtocolIsChecked(t *testing.T) {
+	if _, err := Parse([]byte("services:\n  a:\n    image: x\n    ports: [{target: 80, protocol: foo}]\n")); err == nil {
+		t.Error("an unknown protocol was accepted")
+	}
+}
+
+func TestHealthcheckNone(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    healthcheck:\n      test: [NONE]\n")
+	if !p.Services[0].Healthcheck.Disable {
+		t.Error("test NONE must disable the healthcheck")
 	}
 }
 
@@ -461,20 +599,25 @@ services:
     profiles:
     healthcheck:
     deploy:
+    command:
 volumes:
 networks:
 `)
 	a := p.Services[0]
 	if a.Build != nil || a.Ports != nil || a.Volumes != nil || a.Environment != nil || a.EnvFile != nil ||
-		a.DependsOn != nil || a.Networks != nil || a.Expose != nil || a.Profiles != nil || a.Healthcheck != nil || len(a.Unknown) != 0 {
+		a.DependsOn != nil || a.Networks != nil || a.Expose != nil || a.Profiles != nil || a.Healthcheck != nil ||
+		a.Replicas != nil || a.Command.IsSet() || len(a.Unknown) != 0 {
 		t.Errorf("service %+v", a)
+	}
+	if p.Networks != nil || p.Volumes != nil {
+		t.Errorf("top level %v %v", p.Networks, p.Volumes)
 	}
 }
 
 func TestResetTagIsNull(t *testing.T) {
 	p := mustParse(t, "services:\n  a:\n    image: !reset null\n    ports: !reset []\n")
-	if p.Services[0].Image != "" {
-		t.Errorf("image %q", p.Services[0].Image)
+	if p.Services[0].Image != "" || p.Services[0].Ports != nil {
+		t.Errorf("image %q ports %v", p.Services[0].Image, p.Services[0].Ports)
 	}
 }
 

@@ -158,6 +158,9 @@ func Parse(data []byte) (*Project, error) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil, fmt.Errorf("the file is empty")
 	}
+	if err := checkSize(&doc); err != nil {
+		return nil, err
+	}
 	top, err := entries(doc.Content[0])
 	if err != nil {
 		return nil, err
@@ -209,9 +212,6 @@ func keyNames(n *yaml.Node, prefix string, unknown *[]string) ([]string, error) 
 	}
 	var out []string
 	for _, e := range es {
-		if isExtension(e.key) {
-			continue
-		}
 		out = append(out, e.key)
 		if isNull(e.val) {
 			continue
@@ -235,9 +235,6 @@ func (p *Project) parseServices(n *yaml.Node) error {
 		return err
 	}
 	for _, e := range es {
-		if isExtension(e.key) {
-			continue
-		}
 		s, err := parseService(e.key, e.val)
 		if err != nil {
 			return fmt.Errorf("service %q: %w", e.key, err)
@@ -293,7 +290,7 @@ func (s *Service) set(e entry) (err error) {
 	case "network_mode":
 		s.NetworkMode, err = scalar(e.val)
 	case "environment":
-		s.Environment, err = parseEnv(e.val)
+		s.Environment, err = parseEnv(e.val, s, "environment")
 	case "env_file":
 		s.EnvFile, err = parseEnvFile(e.val, s)
 	case "ports":
@@ -311,7 +308,7 @@ func (s *Service) set(e entry) (err error) {
 	case "profiles":
 		s.Profiles, err = stringList(e.val)
 	case "scale":
-		err = s.setReplicas(e.val)
+		err = s.setReplicas(e.val, "scale")
 	case "deploy":
 		err = s.parseDeploy(e.val)
 	default:
@@ -322,24 +319,33 @@ func (s *Service) set(e entry) (err error) {
 	return err
 }
 
-func parseCount(n *yaml.Node) (int, error) {
+// parseCount reads a count. ok is false when the value holds a ${VAR}, which
+// is not interpolated: the caller must list it.
+func parseCount(n *yaml.Node) (c int, ok bool, err error) {
 	v, err := scalar(n)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	c, err := strconv.Atoi(v)
+	if strings.Contains(v, "$") {
+		return 0, false, nil
+	}
+	c, err = strconv.Atoi(v)
 	if err != nil || c < 0 {
-		return 0, errAt(deref(n), "%q is not a count", v)
+		return 0, false, errAt(deref(n), "%q is not a count", v)
 	}
-	return c, nil
+	return c, true, nil
 }
 
 // setReplicas stores deploy.replicas or scale; the two must agree if both are
 // given.
-func (s *Service) setReplicas(n *yaml.Node) error {
-	c, err := parseCount(n)
+func (s *Service) setReplicas(n *yaml.Node, label string) error {
+	c, ok, err := parseCount(n)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		s.Unknown = append(s.Unknown, label+" (holds a variable)")
+		return nil
 	}
 	if s.Replicas != nil && *s.Replicas != c {
 		return errAt(deref(n), "scale and deploy.replicas disagree")
@@ -355,8 +361,9 @@ func (s *Service) parseDeploy(n *yaml.Node) error {
 	}
 	for _, e := range es {
 		switch {
+		case e.key == "replicas" && isNull(e.val):
 		case e.key == "replicas":
-			if err = s.setReplicas(e.val); err != nil {
+			if err = s.setReplicas(e.val, "deploy.replicas"); err != nil {
 				return fmt.Errorf("replicas: %w", err)
 			}
 		case isExtension(e.key):
@@ -387,7 +394,9 @@ func parseBuild(n *yaml.Node, s *Service) (*Build, error) {
 		case "target":
 			b.Target, err = scalar(e.val)
 		case "args":
-			b.Args, err = parseEnv(e.val)
+			if !isNull(e.val) {
+				b.Args, err = parseEnv(e.val, s, "build.args")
+			}
 		default:
 			if !isExtension(e.key) {
 				s.Unknown = append(s.Unknown, "build."+e.key)
@@ -415,7 +424,7 @@ func parseCommand(n *yaml.Node) (Command, error) {
 
 // parseEnv reads a mapping or a list of NAME=value, for environment and for
 // build args.
-func parseEnv(n *yaml.Node) ([]EnvVar, error) {
+func parseEnv(n *yaml.Node, s *Service, label string) ([]EnvVar, error) {
 	d := deref(n)
 	var out []EnvVar
 	switch d.Kind {
@@ -425,6 +434,9 @@ func parseEnv(n *yaml.Node) ([]EnvVar, error) {
 			return nil, err
 		}
 		for _, e := range es {
+			if isExtension(e.key) {
+				s.Unknown = append(s.Unknown, label+"."+e.key+" (Compose reads it as an extension and drops it)")
+			}
 			v := EnvVar{Name: e.key}
 			if !isNull(e.val) {
 				val, err := scalar(e.val)
@@ -504,6 +516,9 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 	var out []Port
 	for i, c := range d.Content {
 		c = deref(c)
+		if isNull(c) {
+			return nil, errAt(c, "empty entry in ports")
+		}
 		if c.Kind == yaml.ScalarNode {
 			p, err := parseShortPort(c.Value)
 			if err != nil {
@@ -518,6 +533,9 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 		}
 		p := Port{Protocol: "tcp"}
 		for _, e := range es {
+			if isNull(e.val) && (e.key == "published" || e.key == "host_ip" || e.key == "protocol") {
+				continue
+			}
 			switch e.key {
 			case "target":
 				p.Target, err = scalar(e.val)
@@ -539,9 +557,34 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 		if p.Target == "" {
 			return nil, errAt(c, "port has no target")
 		}
+		if !validProtocol(p.Protocol) {
+			return nil, errAt(c, "port has the protocol %q", p.Protocol)
+		}
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+func validProtocol(p string) bool { return p == "tcp" || p == "udp" || p == "sctp" }
+
+// splitOutsideVars splits s at sep, except inside a ${...} reference, so that
+// "${PORT:-8080}:80" has two parts.
+func splitOutsideVars(s string, sep byte) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '{':
+			depth++
+			i++
+		case s[i] == '}' && depth > 0:
+			depth--
+		case s[i] == sep && depth == 0:
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(parts, s[start:])
 }
 
 // parseShortPort reads [HOST_IP:][PUBLISHED:]TARGET[/PROTOCOL]. An IPv6
@@ -549,12 +592,10 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 func parseShortPort(v string) (Port, error) {
 	p := Port{Protocol: "tcp"}
 	rest := v
-	if i := strings.LastIndex(rest, "/"); i >= 0 {
+	if i := strings.LastIndex(rest, "/"); i >= 0 && !strings.Contains(rest[i:], "}") {
 		p.Protocol = rest[i+1:]
 		rest = rest[:i]
-		switch p.Protocol {
-		case "tcp", "udp", "sctp":
-		default:
+		if !validProtocol(p.Protocol) {
 			return p, fmt.Errorf("port %q has the protocol %q", v, p.Protocol)
 		}
 		if strings.Contains(rest, "/") {
@@ -567,13 +608,13 @@ func parseShortPort(v string) (Port, error) {
 			return p, fmt.Errorf("port %q is not valid", v)
 		}
 		p.HostIP = rest[1:j]
-		parts := strings.Split(rest[j+2:], ":")
+		parts := splitOutsideVars(rest[j+2:], ':')
 		if len(parts) != 2 {
 			return p, fmt.Errorf("port %q is not valid", v)
 		}
 		p.Published, p.Target = parts[0], parts[1]
 	} else {
-		parts := strings.Split(rest, ":")
+		parts := splitOutsideVars(rest, ':')
 		switch len(parts) {
 		case 1:
 			p.Target = parts[0]
@@ -599,6 +640,9 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 	var out []Volume
 	for i, c := range d.Content {
 		c = deref(c)
+		if isNull(c) {
+			return nil, errAt(c, "empty entry in volumes")
+		}
 		if c.Kind == yaml.ScalarNode {
 			v, err := parseShortVolume(c.Value)
 			if err != nil {
@@ -624,7 +668,10 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 			case "target":
 				v.Target, err = scalar(e.val)
 			case "read_only":
-				v.ReadOnly, err = boolean(e.val)
+				var ok bool
+				if v.ReadOnly, ok, err = boolean(e.val); err == nil && !ok {
+					s.Unknown = append(s.Unknown, fmt.Sprintf("volumes[%d].read_only (holds a variable)", i))
+				}
 			default:
 				if !isExtension(e.key) {
 					s.Unknown = append(s.Unknown, fmt.Sprintf("volumes[%d].%s", i, e.key))
@@ -637,8 +684,12 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 		if v.Target == "" {
 			return nil, errAt(c, "volume has no target")
 		}
-		if v.Type == "" {
-			v.Type = "volume"
+		switch v.Type {
+		case "":
+			return nil, errAt(c, "volume has no type")
+		case "bind", "volume", "tmpfs":
+		default:
+			s.Unknown = append(s.Unknown, fmt.Sprintf("volumes[%d].type (%s)", i, v.Type))
 		}
 		out = append(out, v)
 	}
@@ -652,10 +703,17 @@ func parseShortVolume(v string) (Volume, error) {
 	drive := ""
 	rest := v
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	if len(v) >= 3 && v[1] == ':' && v[2] == '\\' && strings.ContainsAny(v[:1], letters) {
-		drive, rest = v[:2], v[2:]
+	if len(v) >= 3 && v[1] == ':' && strings.ContainsAny(v[:1], letters) {
+		if v[2] == '\\' {
+			drive, rest = v[:2], v[2:]
+		} else if v[2] == '/' {
+			// "C:/data:/data" is a drive; "a:/b:ro" is a volume called a.
+			if more := splitOutsideVars(v[2:], ':'); len(more) >= 2 && strings.HasPrefix(more[1], "/") {
+				drive, rest = v[:2], v[2:]
+			}
+		}
 	}
-	parts := strings.Split(rest, ":")
+	parts := splitOutsideVars(rest, ':')
 	parts[0] = drive + parts[0]
 	var out Volume
 	switch len(parts) {
@@ -688,10 +746,10 @@ func parseShortVolume(v string) (Volume, error) {
 	switch {
 	case out.Source == "":
 		out.Type = "volume"
-	case strings.Contains(out.Source, "$"):
-		out.Type = "unresolved"
 	case strings.ContainsAny(out.Source[:1], "./~") || drive != "":
 		out.Type = "bind"
+	case strings.Contains(out.Source, "$"):
+		out.Type = "unresolved"
 	default:
 		out.Type = "volume"
 	}
@@ -726,6 +784,9 @@ func parseDependsOn(n *yaml.Node, s *Service) ([]Dependency, error) {
 			for _, se := range sub {
 				switch se.key {
 				case "condition":
+					if isNull(se.val) {
+						break
+					}
 					if dep.Condition, err = scalar(se.val); err != nil {
 						return nil, err
 					}
@@ -753,6 +814,9 @@ func parseServiceNetworks(n *yaml.Node, s *Service) ([]string, error) {
 	var out []string
 	for _, e := range es {
 		out = append(out, e.key)
+		if isExtension(e.key) {
+			s.Unknown = append(s.Unknown, "networks."+e.key+" (Compose reads it as an extension and drops it)")
+		}
 		if !isNull(e.val) {
 			sub, err := entries(e.val)
 			if err != nil {
@@ -779,7 +843,10 @@ func parseHealthcheck(n *yaml.Node, s *Service) (*Healthcheck, error) {
 		case "test":
 			h.Test, err = parseCommand(e.val)
 		case "disable":
-			h.Disable, err = boolean(e.val)
+			var ok bool
+			if h.Disable, ok, err = boolean(e.val); err == nil && !ok {
+				s.Unknown = append(s.Unknown, "healthcheck.disable (holds a variable)")
+			}
 		default:
 			if !isExtension(e.key) {
 				s.Unknown = append(s.Unknown, "healthcheck."+e.key)
@@ -788,6 +855,9 @@ func parseHealthcheck(n *yaml.Node, s *Service) (*Healthcheck, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", e.key, err)
 		}
+	}
+	if len(h.Test.Exec) == 1 && h.Test.Exec[0] == "NONE" {
+		h.Disable = true
 	}
 	return h, nil
 }

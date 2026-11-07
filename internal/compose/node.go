@@ -25,9 +25,10 @@ func errAt(n *yaml.Node, format string, args ...any) error {
 	return fmt.Errorf("line %d: %s", n.Line, fmt.Sprintf(format, args...))
 }
 
-// maxMergeSteps bounds how many mappings one call of entries may expand, so
-// that a file with deeply repeated merges ends in an error and not in a hang.
-const maxMergeSteps = 10000
+// maxMergeSteps bounds the work of one call of entries: each mapping expanded
+// and each entry merged counts one. A file with repeated or wide merges then
+// ends in an error and not in a hang or in memory exhaustion.
+const maxMergeSteps = 100000
 
 // entries lists the keys of a mapping in file order. Aliases are followed and
 // merge keys ("<<") are expanded: an explicit key wins over a merged one, and
@@ -57,6 +58,7 @@ func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, erro
 	}
 	var out, merged []entry
 	seen := map[string]bool{}
+	mergedSeen := map[string]bool{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
 		if k.Kind == yaml.ScalarNode && k.Tag == "!!merge" {
@@ -69,7 +71,16 @@ func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, erro
 				if err != nil {
 					return nil, err
 				}
-				merged = append(merged, es...)
+				*steps += len(es)
+				if *steps > maxMergeSteps {
+					return nil, errAt(n, "too many merged mappings")
+				}
+				for _, e := range es {
+					if !mergedSeen[e.key] {
+						mergedSeen[e.key] = true
+						merged = append(merged, e)
+					}
+				}
 			}
 			continue
 		}
@@ -118,6 +129,9 @@ func stringList(n *yaml.Node) ([]string, error) {
 	}
 	out := make([]string, 0, len(n.Content))
 	for _, c := range n.Content {
+		if isNull(c) {
+			return nil, errAt(deref(c), "empty entry in the list")
+		}
 		s, err := scalar(c)
 		if err != nil {
 			return nil, err
@@ -139,17 +153,65 @@ func stringOrList(n *yaml.Node) ([]string, error) {
 }
 
 // boolean reads a YAML boolean, including the yes/no and on/off spellings
-// that Compose accepts.
-func boolean(n *yaml.Node) (bool, error) {
+// that Compose accepts. A null is false. ok is false when the value holds a
+// ${VAR}, which is not interpolated: the caller must list it.
+func boolean(n *yaml.Node) (val, ok bool, err error) {
 	v, err := scalar(n)
 	if err != nil {
-		return false, err
+		return false, false, err
+	}
+	if strings.Contains(v, "$") {
+		return false, false, nil
 	}
 	switch strings.ToLower(v) {
 	case "true", "yes", "on":
-		return true, nil
-	case "false", "no", "off":
-		return false, nil
+		return true, true, nil
+	case "false", "no", "off", "":
+		return false, true, nil
 	}
-	return false, errAt(deref(n), "%q is not a boolean", v)
+	return false, false, errAt(deref(n), "%q is not a boolean", v)
+}
+
+// maxExpandedNodes bounds how large the file becomes once every alias and
+// merge is followed, so that aliases cannot be used to multiply a big list or
+// mapping into an amount of work that grows with the square of the file.
+const maxExpandedNodes = 1000000
+
+// checkSize fails when following the aliases of the document gives more than
+// maxExpandedNodes nodes. A reference that leads back to a node being counted
+// adds one and stops; expand reports such cycles where they matter.
+func checkSize(root *yaml.Node) error {
+	memo := map[*yaml.Node]int{}
+	active := map[*yaml.Node]bool{}
+	var size func(n *yaml.Node) int
+	size = func(n *yaml.Node) int {
+		if n == nil {
+			return 0
+		}
+		if n.Kind == yaml.AliasNode {
+			return 1 + size(n.Alias)
+		}
+		if v, ok := memo[n]; ok {
+			return v
+		}
+		if active[n] {
+			return 1
+		}
+		active[n] = true
+		total := 1
+		for _, c := range n.Content {
+			total += size(c)
+			if total > maxExpandedNodes {
+				total = maxExpandedNodes + 1
+				break
+			}
+		}
+		delete(active, n)
+		memo[n] = total
+		return total
+	}
+	if size(root) > maxExpandedNodes {
+		return fmt.Errorf("the file expands to more than %d nodes through aliases and merges", maxExpandedNodes)
+	}
+	return nil
 }
