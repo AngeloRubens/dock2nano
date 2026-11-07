@@ -21,6 +21,7 @@ package trace
 
 import (
 	"debug/elf"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -120,56 +121,154 @@ func ResultOf(after string) (string, bool) {
 // the program, and a unikernel runs no script, so what they opened is not what the program needs.
 // Both results are cleaned, without duplicates and sorted; executed holds the paths of execve.
 //
-// TODO(bug): workingDir is applied to the whole trace after from. A chdir made by the program
-// (chdir("/srv") followed by openat(AT_FDCWD, "app.conf", ...)) is not followed, so the file is
-// looked for under the directory the process started in.
+// The working directory is followed per process (the pid that opens each line of strace -f). Every
+// process starts in workingDir, except one that a clone, fork or vfork line names as its child: it
+// starts with the directory its parent has at that line. strace -e trace=file does not print
+// clone, so a process whose first line is not preceded by such a record starts with the directory
+// of the process that wrote the line before its first one (the likeliest parent), or workingDir
+// when it is the very first line. A successful chdir sets the directory (a relative one is read
+// against the current directory; one cut in two is applied when its resumed line says 0). A
+// successful fchdir sets it to unknown, since the path of a descriptor is not in the trace; a
+// relative path is left out while the directory is unknown, as with an empty workingDir.
+//
+// An execve counts when it succeeded on one line, or when it is unfinished and its resumed line
+// has not said otherwise: a resumed line with a result other than 0 cancels it, from both results.
+// FinalProgram follows the same rule.
 func TouchedPaths(trace []byte, workingDir string, from int) (paths []string, executed []string) {
 	seen := map[string]bool{}
-	ran := map[string]bool{}
+	ran := map[string]int{}
+	cwd := map[string]string{}
+	waitingExec := map[string]string{}
+	waitingChdir := map[string]string{}
+	active := ""
 
 	for i, line := range strings.Split(string(trace), "\n") {
 		if i < from {
 			continue
 		}
+		prefix := pidPrefix.FindStringSubmatch(line)
+		if prefix == nil {
+			continue
+		}
+		pid := prefix[1] + prefix[2]
+		if _, known := cwd[pid]; !known {
+			if active != "" {
+				cwd[pid] = cwd[active]
+			} else {
+				cwd[pid] = workingDir
+			}
+		}
+		active = pid
+		rest := line[len(prefix[0]):]
+
+		if child := forkLine.FindStringSubmatch(line); child != nil {
+			if _, known := cwd[child[3]]; !known {
+				cwd[child[3]] = cwd[pid]
+			}
+			continue
+		}
+
+		if strings.HasPrefix(rest, "<... ") {
+			result, found := ResultOf(rest)
+			switch {
+			case strings.HasPrefix(rest, "<... execve resumed>"):
+				if waiting, ok := waitingExec[pid]; ok {
+					delete(waitingExec, pid)
+					if found && result != "0" {
+						ran[waiting]--
+					}
+				}
+			case strings.HasPrefix(rest, "<... chdir resumed>"), strings.HasPrefix(rest, "<... fchdir resumed>"):
+				if dir, ok := waitingChdir[pid]; ok {
+					delete(waitingChdir, pid)
+					if found && result == "0" {
+						cwd[pid] = dir
+					}
+				}
+			}
+			continue
+		}
+
 		call := TraceCall.FindStringSubmatch(line)
 		if call == nil {
 			continue
 		}
+		args := line[len(call[0]):]
 
-		name, after, relativeToCwd, ok := FirstQuoted(line[len(call[0]):])
+		if call[1] == "fchdir" {
+			if strings.Contains(args, "<unfinished ...>") {
+				waitingChdir[pid] = ""
+			} else if result, found := ResultOf(args); found && result == "0" {
+				cwd[pid] = ""
+			}
+			continue
+		}
+
+		name, after, relativeToCwd, ok := FirstQuoted(args)
 		if !ok {
 			continue
 		}
-		if !strings.Contains(after, "<unfinished ...>") {
+		unfinished := strings.Contains(after, "<unfinished ...>")
+		if !unfinished {
 			result, found := ResultOf(after)
 			if !found || strings.HasPrefix(result, "-") {
+				continue
+			}
+			if call[1] == "execve" && result != "0" {
 				continue
 			}
 		}
 
 		if !strings.HasPrefix(name, "/") {
-			if !relativeToCwd || workingDir == "" || name == "" {
+			dir := cwd[pid]
+			if !relativeToCwd || dir == "" || name == "" {
 				continue
 			}
-			name = path.Join(workingDir, name)
+			name = path.Join(dir, name)
 		}
-		seen[path.Clean(name)] = true
-		if call[1] == "execve" {
-			ran[path.Clean(name)] = true
+		name = path.Clean(name)
+
+		switch call[1] {
+		case "execve":
+			ran[name]++
+			if unfinished {
+				waitingExec[pid] = name
+			}
+		case "chdir":
+			seen[name] = true
+			if unfinished {
+				waitingChdir[pid] = name
+			} else {
+				cwd[pid] = name
+			}
+		default:
+			seen[name] = true
 		}
 	}
 
+	for p, n := range ran {
+		if n > 0 {
+			seen[p] = true
+			executed = append(executed, p)
+		}
+	}
 	for p := range seen {
 		paths = append(paths, p)
-	}
-	for p := range ran {
-		executed = append(executed, p)
 	}
 	sort.Strings(paths)
 	sort.Strings(executed)
 
 	return paths, executed
 }
+
+// pidPrefix matches the process prefix of a line of strace -f, in either form, and captures the pid
+// in the first or the second group.
+var pidPrefix = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)`)
+
+// forkLine matches a clone, clone3, fork or vfork that came back with the pid of the child, on one
+// line or on the resumed line, and captures the pid of the caller (groups 1 or 2) and of the child
+// (group 3).
+var forkLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:(?:clone3?|fork|vfork)\(|<\.\.\. (?:clone3?|fork|vfork) resumed>).*\) = ([0-9]+)`)
 
 // NotCarried says whether a path is one the kernel of the machine makes or the container runtime
 // puts in, which no package has to bring.
@@ -192,14 +291,16 @@ func IsConsoleLink(p string) bool {
 }
 
 // CarryConsoleLink puts an empty file in the sysroot under name, creating its directories, so that
-// opening a log that was a link to the console works.
-//
-// TODO(bug): errors are dropped, as in the original: a sysroot that cannot be written to gives a
-// package without the file and no message.
-func CarryConsoleLink(sysroot string, name string) {
-	if os.MkdirAll(filepath.Join(sysroot, path.Dir(name)), 0755) == nil {
-		os.WriteFile(filepath.Join(sysroot, name), nil, 0644)
+// opening a log that was a link to the console works. A failure is returned, with the path it
+// happened on.
+func CarryConsoleLink(sysroot string, name string) error {
+	if err := os.MkdirAll(filepath.Join(sysroot, path.Dir(name)), 0755); err != nil {
+		return fmt.Errorf("carry console link %s: %w", name, err)
 	}
+	if err := os.WriteFile(filepath.Join(sysroot, name), nil, 0644); err != nil {
+		return fmt.Errorf("carry console link %s: %w", name, err)
+	}
+	return nil
 }
 
 // ResolveLink gives the path a symbolic link found at p leads to: a link that is not absolute is
@@ -213,70 +314,110 @@ func ResolveLink(p string, link string) string {
 	return path.Clean(link)
 }
 
-// CopyHostFile puts a copy of a file that is in the sysroot under another name. It does nothing if
-// the destination exists (even as a link), or the source cannot be read.
-//
-// TODO(bug): every failure is silent, as in the original: a copy that cannot be made leaves the
-// alias missing and says nothing.
-func CopyHostFile(sysroot string, from string, to string) {
+// CopyHostFile puts a copy of a file that is in the sysroot under another name. It does nothing,
+// and returns nil, if the destination exists (even as a link). Any other failure (the source
+// cannot be read, the destination cannot be written) is returned, wrapped with the path it
+// happened on; a destination left half written is removed.
+func CopyHostFile(sysroot string, from string, to string) error {
 	source := filepath.Join(sysroot, from)
 	destination := filepath.Join(sysroot, to)
 	if _, err := os.Lstat(destination); err == nil {
-		return
+		return nil
 	}
 	info, err := os.Stat(source)
-	if err != nil || os.MkdirAll(path.Dir(destination), 0755) != nil {
-		return
+	if err != nil {
+		return fmt.Errorf("copy %s: %w", source, err)
+	}
+	if err := os.MkdirAll(path.Dir(destination), 0755); err != nil {
+		return fmt.Errorf("copy to %s: %w", destination, err)
 	}
 	in, err := os.Open(source)
 	if err != nil {
-		return
+		return fmt.Errorf("copy %s: %w", source, err)
 	}
 	defer in.Close()
 	out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY, info.Mode()|0600)
 	if err != nil {
-		return
+		return fmt.Errorf("copy to %s: %w", destination, err)
 	}
-	io.Copy(out, in)
-	out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(destination)
+		return fmt.Errorf("copy %s to %s: %w", source, destination, err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(destination)
+		return fmt.Errorf("copy to %s: %w", destination, err)
+	}
+	return nil
 }
 
 // InSysroot follows the symbolic links of a path that was carried, inside the sysroot rather than
-// on this machine, and gives the path of the file they lead to. It follows at most 16 links and
-// then gives the path it has reached.
-//
-// TODO(bug): only the last component is looked at. If a directory on the way is a link (an
-// absolute /lib -> /usr/lib in the sysroot), the Lstat of sysroot+p follows it on this machine,
-// not inside the sysroot.
+// on this machine, and gives the path of the file they lead to. Every component is resolved, the
+// directories on the way as well as the last one, from the root of the sysroot: an absolute link
+// restarts there, and ".." at the root stays at the root, so the walk never leaves the sysroot.
+// It follows at most 40 links and then gives the path it has reached.
 func InSysroot(sysroot string, p string) string {
-	for i := 0; i < 16; i++ {
-		info, err := os.Lstat(filepath.Join(sysroot, p))
+	parts := strings.Split(p, "/")
+	var resolved []string
+	links := 0
+
+	for len(parts) > 0 {
+		part := parts[0]
+		parts = parts[1:]
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if len(resolved) > 0 {
+				resolved = resolved[:len(resolved)-1]
+			}
+			continue
+		}
+
+		candidate := append(append([]string{}, resolved...), part)
+		host := filepath.Join(sysroot, filepath.FromSlash("/"+strings.Join(candidate, "/")))
+		info, err := os.Lstat(host)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
-			return p
+			resolved = candidate
+			continue
 		}
-		link, err := os.Readlink(filepath.Join(sysroot, p))
+		link, err := os.Readlink(host)
 		if err != nil {
-			return p
+			resolved = candidate
+			continue
 		}
-		p = ResolveLink(p, link)
+
+		links++
+		if links > 40 {
+			return "/" + strings.Join(append(candidate, parts...), "/")
+		}
+		if strings.HasPrefix(link, "/") {
+			resolved = nil
+		}
+		parts = append(strings.Split(link, "/"), parts...)
 	}
-	return p
+
+	return "/" + strings.Join(resolved, "/")
 }
 
 // InterpreterOf is the file the kernel loads to run a program: the dynamic loader named by an ELF
 // file, or the program a script names after #!. A file that names none, a static binary or a
-// library, gives "". file is a path on this machine.
-//
-// TODO(bug): the loader is read from the .interp section, not from the PT_INTERP program header
-// the kernel uses. An ELF file with no section headers (stripped with sstrip) has a loader and
-// gives "".
+// library, gives "". file is a path on this machine. The loader of an ELF file is read from its
+// PT_INTERP program header, as the kernel does, so a file with no section headers has one too.
 func InterpreterOf(file string) string {
 	if f, err := elf.Open(file); err == nil {
 		defer f.Close()
-		if section := f.Section(".interp"); section != nil {
-			if raw, err := section.Data(); err == nil {
-				return strings.TrimRight(string(raw), "\x00")
+		for _, prog := range f.Progs {
+			if prog.Type != elf.PT_INTERP {
+				continue
 			}
+			raw, err := io.ReadAll(io.LimitReader(prog.Open(), 4096))
+			if err != nil {
+				return ""
+			}
+			interp, _, _ := strings.Cut(string(raw), "\x00")
+			return interp
 		}
 		return ""
 	}
@@ -304,7 +445,10 @@ func InterpreterOf(file string) string {
 // sysroot before it returns: the original calls copyTouched with the single path, which copies it
 // out of the container. note, when not nil, is told about each interpreter found, in the manner
 // of fmt.Printf; the original prints "%s is run by %s\n" when verbose.
-func CarryInterpreters(sysroot string, executed []string, carry func(interpreter string), note func(format string, args ...any)) {
+//
+// If carry fails, the walk stops and the first error is returned, wrapped with the interpreter
+// it was called for. Nothing is carried after it.
+func CarryInterpreters(sysroot string, executed []string, carry func(interpreter string) error, note func(format string, args ...any)) error {
 	done := map[string]bool{}
 	queue := append([]string{}, executed...)
 
@@ -321,9 +465,13 @@ func CarryInterpreters(sysroot string, executed []string, carry func(interpreter
 		if note != nil {
 			note("%s is run by %s\n", p, interp)
 		}
-		carry(interp)
+		if err := carry(interp); err != nil {
+			return fmt.Errorf("carry %s: %w", interp, err)
+		}
 		queue = append(queue, interp)
 	}
+
+	return nil
 }
 
 // WhereIs finds a program the way a shell would, among the files already carried. A program with
@@ -367,38 +515,68 @@ func ListeningPorts(table string) []int {
 	return ports
 }
 
-var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*\) = 0 *$`)
+var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*(\) = 0 *|<unfinished \.\.\.>)$`)
 var exitedLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)\+\+\+ (?:exited|killed)`)
 
 // FinalProgram is the program the image ends up running: the last one started that is still running
 // when the trace ends, or the last one started when none is. An entrypoint script starts tools, and
 // then the program, and the program is what a unikernel runs. It gives the process, the path the
 // program was started by and the line of the trace (counted from 0) where it was. Only an execve
-// that succeeded on a single line counts. When nothing was started, found is false and line is -1.
+// that succeeded counts: on a single line, or cut in two by strace ("execve(... <unfinished ...>"
+// with its result on a "<... execve resumed>" line), where it counts at the line of the first part
+// unless the resumed line says it failed, which cancels it and gives back the state of the process
+// before it. An unfinished one that is never resumed counts. TouchedPaths follows the same rule.
+// When nothing was started, found is false and line is -1.
 //
 // The command line and the environment of the program are not in this trace (it is written with
 // -e trace=file, and strace prints them only in part): the original reads them from /proc/<pid>/cmdline
 // and /proc/<pid>/environ of the running container, which is for the caller to do.
-//
-// TODO(bug): an execve that strace cuts in two ("execve(... <unfinished ...>" with its result on
-// a "<... execve resumed>" line, which happens when another thread runs meanwhile) never matches,
-// so the program it started is not seen and an earlier one can be reported as the final one.
 func FinalProgram(trace []byte) (pid string, program string, line int, found bool) {
 	type started struct {
 		program string
 		line    int
 	}
+	type before struct {
+		previous    started
+		hadPrevious bool
+		wasGone     bool
+	}
 	last := map[string]started{}
 	gone := map[string]bool{}
+	waiting := map[string]before{}
 
 	for i, text := range strings.Split(string(trace), "\n") {
 		if m := execveLine.FindStringSubmatch(text); m != nil {
+			process := m[1] + m[2]
 			name := m[3]
 			if unquoted, err := strconv.Unquote("\"" + name + "\""); err == nil {
 				name = unquoted
 			}
-			last[m[1]+m[2]] = started{program: name, line: i}
-			delete(gone, m[1]+m[2])
+			if strings.HasPrefix(m[4], "<unfinished") {
+				previous, had := last[process]
+				waiting[process] = before{previous: previous, hadPrevious: had, wasGone: gone[process]}
+			} else {
+				delete(waiting, process)
+			}
+			last[process] = started{program: name, line: i}
+			delete(gone, process)
+		} else if prefix := pidPrefix.FindStringSubmatch(text); prefix != nil && strings.HasPrefix(text[len(prefix[0]):], "<... execve resumed>") {
+			process := prefix[1] + prefix[2]
+			state, ok := waiting[process]
+			if !ok {
+				continue
+			}
+			delete(waiting, process)
+			if result, has := ResultOf(text); has && result != "0" {
+				if state.hadPrevious {
+					last[process] = state.previous
+				} else {
+					delete(last, process)
+				}
+				if state.wasGone {
+					gone[process] = true
+				}
+			}
 		} else if m := exitedLine.FindStringSubmatch(text); m != nil {
 			gone[m[1]+m[2]] = true
 		}
@@ -434,19 +612,20 @@ var BelongsToTheContainer = []string{"HOSTNAME", "SHLVL", "OLDPWD", "_"}
 // the program read from /etc, and the files named as configuration. A file that is put in the
 // image with the same name in the configuration of the user replaces the one in the package.
 // sysroot is a directory on this machine; the names are given as paths inside it, sorted. Only
-// regular files count.
-//
-// TODO(bug): the name is made by cutting sysroot+"/" off the front. A sysroot given with a
-// trailing slash ("/tmp/x/") is walked as "/tmp/x/etc/a", which does not start with "/tmp/x//",
-// so the names come out as "/tmp/x/etc/a" and the /etc rule never matches.
+// regular files count. The sysroot is cleaned first, so a trailing slash makes no difference.
 func ConfigurationFiles(sysroot string) []string {
 	var found []string
 
+	sysroot = filepath.Clean(sysroot)
 	filepath.Walk(sysroot, func(file string, info os.FileInfo, err error) error {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil
 		}
-		name := "/" + filepath.ToSlash(strings.TrimPrefix(file, sysroot+"/"))
+		rel, err := filepath.Rel(sysroot, file)
+		if err != nil {
+			return nil
+		}
+		name := "/" + filepath.ToSlash(rel)
 		switch {
 		case strings.HasPrefix(name, "/etc/ssl/certs/"), strings.HasPrefix(name, "/etc/ld.so"), name == "/etc/hosts", name == "/etc/hostname":
 		case strings.HasPrefix(name, "/etc/"):

@@ -3,10 +3,12 @@ package trace
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +60,23 @@ func buildELF(interp string) []byte {
 		put(&b, uint32(1), uint32(1), uint64(2), uint64(0), interpOff, size, uint32(0), uint32(0), uint64(1), uint64(0))
 	}
 	put(&b, shstrName, uint32(3), uint64(0), uint64(0), strOff, uint64(len(shstr)), uint32(0), uint32(0), uint64(1), uint64(0))
+
+	return b.Bytes()
+}
+
+// buildELFNoSections makes a 64-bit ELF file with a PT_INTERP program header naming interp and no
+// section headers at all, as sstrip leaves it.
+func buildELFNoSections(interp string) []byte {
+	data := []byte(interp + "\x00")
+	off := uint64(64 + 56)
+	size := uint64(len(data))
+
+	var b bytes.Buffer
+	b.Write([]byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	put(&b, uint16(2), uint16(62), uint32(1), uint64(0), uint64(64), uint64(0), uint32(0))
+	put(&b, uint16(64), uint16(56), uint16(1), uint16(64), uint16(0), uint16(0))
+	put(&b, uint32(3), uint32(4), off, off, off, size, size, uint64(1))
+	b.Write(data)
 
 	return b.Bytes()
 }
@@ -223,6 +242,74 @@ openat(AT_FDCWD, "/no/prefix", O_RDONLY) = 3
 	}
 }
 
+func TestTouchedPathsChdir(t *testing.T) {
+	tests := []struct {
+		name     string
+		trace    string
+		dir      string
+		paths    []string
+		executed []string
+	}{
+		{"chdir to a path", `7  chdir("/srv") = 0
+7  openat(AT_FDCWD, "app.conf", O_RDONLY) = 3
+`, "/app", []string{"/srv", "/srv/app.conf"}, nil},
+		{"relative chdir", `7  chdir("sub") = 0
+7  openat(AT_FDCWD, "x", O_RDONLY) = 3
+`, "/app", []string{"/app/sub", "/app/sub/x"}, nil},
+		{"failed chdir changes nothing", `7  chdir("/nope") = -1 ENOENT (No such file or directory)
+7  openat(AT_FDCWD, "a", O_RDONLY) = 3
+`, "/app", []string{"/app/a"}, nil},
+		{"chdir cut in two", `7  chdir("/srv" <unfinished ...>
+7  <... chdir resumed>) = 0
+7  openat(AT_FDCWD, "a", O_RDONLY) = 3
+`, "/app", []string{"/srv", "/srv/a"}, nil},
+		{"chdir cut in two that failed", `7  chdir("/srv" <unfinished ...>
+7  <... chdir resumed>) = -1 ENOENT (No such file or directory)
+7  openat(AT_FDCWD, "a", O_RDONLY) = 3
+`, "/app", []string{"/app/a", "/srv"}, nil},
+		{"fchdir makes the directory unknown", `7  fchdir(3) = 0
+7  openat(AT_FDCWD, "x", O_RDONLY) = 3
+7  openat(AT_FDCWD, "/abs/ok", O_RDONLY) = 4
+`, "/app", []string{"/abs/ok"}, nil},
+		{"per process, a child starts with the cwd of its parent at the clone", `7  clone(child_stack=NULL, flags=SIGCHLD) = 8
+8  openat(AT_FDCWD, "c.conf", O_RDONLY) = 3
+7  chdir("/srv") = 0
+7  openat(AT_FDCWD, "a.conf", O_RDONLY) = 3
+8  openat(AT_FDCWD, "d.conf", O_RDONLY) = 3
+`, "/app", []string{"/app/c.conf", "/app/d.conf", "/srv", "/srv/a.conf"}, nil},
+		{"a child cloned after the chdir has the new directory", `9  chdir("/srv") = 0
+9  clone(child_stack=NULL, flags=SIGCHLD) = 10
+10  openat(AT_FDCWD, "e.conf", O_RDONLY) = 3
+9  chdir("/other") = 0
+10  openat(AT_FDCWD, "f.conf", O_RDONLY) = 3
+`, "/app", []string{"/other", "/srv", "/srv/e.conf", "/srv/f.conf"}, nil},
+		{"clone cut in two", `9  chdir("/srv") = 0
+[pid  9] clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+[pid  9] <... clone resumed>) = 10
+[pid 10] openat(AT_FDCWD, "e.conf", O_RDONLY) = 3
+`, "/app", []string{"/srv", "/srv/e.conf"}, nil},
+		{"a process with no clone record takes the directory of the line before", `7  chdir("/srv") = 0
+8  openat(AT_FDCWD, "g.conf", O_RDONLY) = 3
+`, "/app", []string{"/srv", "/srv/g.conf"}, nil},
+		{"execve cancelled by its resumed line", `[pid 4] execve("/usr/bin/c", ["c"], 0x1 /* 1 var */ <unfinished ...>
+[pid 4] <... execve resumed>) = -1 ENOENT (No such file or directory)
+[pid 5] execve("/usr/bin/d", ["d"], 0x1 /* 1 var */ <unfinished ...>
+[pid 5] <... execve resumed>) = 0
+`, "", []string{"/usr/bin/d"}, []string{"/usr/bin/d"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths, executed := TouchedPaths([]byte(tt.trace), tt.dir, 0)
+			if !reflect.DeepEqual(paths, tt.paths) {
+				t.Errorf("paths = %q, want %q", paths, tt.paths)
+			}
+			if !reflect.DeepEqual(executed, tt.executed) {
+				t.Errorf("executed = %q, want %q", executed, tt.executed)
+			}
+		})
+	}
+}
+
 func TestNotCarried(t *testing.T) {
 	for _, p := range []string{"/proc", "/proc/self/fd/1", "/sys/kernel/mm", "/dev/null", "/dev/stderr", "/.ops-trace", "/.ops-trace/files"} {
 		if !NotCarried(p) {
@@ -251,13 +338,22 @@ func TestIsConsoleLink(t *testing.T) {
 
 func TestCarryConsoleLink(t *testing.T) {
 	root := t.TempDir()
-	CarryConsoleLink(root, "/var/log/nginx/error.log")
+	if err := CarryConsoleLink(root, "/var/log/nginx/error.log"); err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(filepath.Join(root, "var/log/nginx/error.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.Mode().IsRegular() || info.Size() != 0 {
 		t.Errorf("want an empty regular file, got mode %v size %d", info.Mode(), info.Size())
+	}
+
+	// a sysroot that is a file cannot hold a directory: the error is returned, with the path
+	blocker := writeFile(t, root, "blocker", []byte("x"))
+	err = CarryConsoleLink(blocker, "/var/log/error.log")
+	if err == nil || !strings.Contains(err.Error(), "/var/log/error.log") {
+		t.Errorf("CarryConsoleLink into a file = %v, want an error naming the path", err)
 	}
 }
 
@@ -284,19 +380,26 @@ func TestCopyHostFile(t *testing.T) {
 	writeFile(t, root, "a/src", []byte("content"))
 	writeFile(t, root, "b/taken", []byte("old"))
 
-	CopyHostFile(root, "/a/src", "/b/c/dst")
+	if err := CopyHostFile(root, "/a/src", "/b/c/dst"); err != nil {
+		t.Fatal(err)
+	}
 	got, err := os.ReadFile(filepath.Join(root, "b/c/dst"))
 	if err != nil || string(got) != "content" {
 		t.Errorf("copy = %q, %v; want content", got, err)
 	}
 
-	CopyHostFile(root, "/a/src", "/b/taken")
+	if err := CopyHostFile(root, "/a/src", "/b/taken"); err != nil {
+		t.Errorf("an existing destination is not an error, got %v", err)
+	}
 	got, _ = os.ReadFile(filepath.Join(root, "b/taken"))
 	if string(got) != "old" {
 		t.Errorf("an existing destination was overwritten: %q", got)
 	}
 
-	CopyHostFile(root, "/a/missing", "/x/y/dst")
+	err = CopyHostFile(root, "/a/missing", "/x/y/dst")
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "a/missing")) || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("CopyHostFile with a missing source = %v, want an error naming the source and wrapping ErrNotExist", err)
+	}
 	if _, err := os.Lstat(filepath.Join(root, "x")); err == nil {
 		t.Errorf("a missing source created the destination directory")
 	}
@@ -337,6 +440,54 @@ func TestInSysroot(t *testing.T) {
 		if got := InSysroot(root, tt.p); got != tt.want {
 			t.Errorf("InSysroot(%q) = %q, want %q", tt.p, got, tt.want)
 		}
+	}
+}
+
+func TestInSysrootDirectoryLinks(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "usr/lib/libx.so.1", []byte("x"))
+	for _, l := range [][2]string{
+		{"lib", "/usr/lib"},
+		{"usr/lib/libx.so", "libx.so.1"},
+		{"escape", "../../../../usr/lib"},
+		{"a", "b"},
+		{"b", "c/../usr"},
+		{"deep/lib64", "/lib"},
+	} {
+		link, target := l[0], l[1]
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(link)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		p    string
+		want string
+	}{
+		{"/lib/libx.so", "/usr/lib/libx.so.1"},
+		{"/lib/libx.so.1", "/usr/lib/libx.so.1"},
+		{"/escape/libx.so", "/usr/lib/libx.so.1"},
+		{"/deep/lib64/libx.so", "/usr/lib/libx.so.1"},
+		{"/a/lib/libx.so", "/usr/lib/libx.so.1"},
+		{"/lib/../lib/libx.so", "/usr/lib/libx.so.1"},
+		{"/../../lib/libx.so", "/usr/lib/libx.so.1"},
+		{"/", "/"},
+	}
+	for _, tt := range tests {
+		if got := InSysroot(root, tt.p); got != tt.want {
+			t.Errorf("InSysroot(%q) = %q, want %q", tt.p, got, tt.want)
+		}
+	}
+}
+
+func TestInterpreterOfProgramHeader(t *testing.T) {
+	root := t.TempDir()
+	file := writeFile(t, root, "sstripped", buildELFNoSections("/lib/ld-musl-x86_64.so.1"))
+	if got := InterpreterOf(file); got != "/lib/ld-musl-x86_64.so.1" {
+		t.Errorf("InterpreterOf(ELF with PT_INTERP and no sections) = %q, want /lib/ld-musl-x86_64.so.1", got)
 	}
 }
 
@@ -395,14 +546,17 @@ func TestCarryInterpreters(t *testing.T) {
 	writeFile(t, root, "app/run", []byte("#!/usr/local/bin/wrapper --flag\n"))
 
 	var carried, notes []string
-	carry := func(interp string) {
+	carry := func(interp string) error {
 		carried = append(carried, interp)
 		writeFile(t, root, interp, contents[interp])
+		return nil
 	}
 	note := func(format string, args ...any) {
 		notes = append(notes, fmt.Sprintf(format, args...))
 	}
-	CarryInterpreters(root, []string{"/app/run"}, carry, note)
+	if err := CarryInterpreters(root, []string{"/app/run"}, carry, note); err != nil {
+		t.Fatal(err)
+	}
 
 	wantCarried := []string{"/usr/local/bin/wrapper", "/bin/sh", "/lib/ld-musl-x86_64.so.1"}
 	if !reflect.DeepEqual(carried, wantCarried) {
@@ -432,17 +586,44 @@ func TestCarryInterpretersLinksAndRepeats(t *testing.T) {
 	}
 
 	var carried []string
-	carry := func(interp string) { carried = append(carried, interp) }
-	CarryInterpreters(root, []string{"/usr/bin/app", "/opt/app/real", "/app/other", "/app/missing"}, carry, nil)
+	carry := func(interp string) error {
+		carried = append(carried, interp)
+		return nil
+	}
+	if err := CarryInterpreters(root, []string{"/usr/bin/app", "/opt/app/real", "/app/other", "/app/missing"}, carry, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	if !reflect.DeepEqual(carried, []string{loader}) {
 		t.Errorf("carried = %q, want the loader once", carried)
 	}
 
 	carried = nil
-	CarryInterpreters(root, []string{"/usr/bin/app"}, carry, nil)
+	if err := CarryInterpreters(root, []string{"/usr/bin/app"}, carry, nil); err != nil {
+		t.Fatal(err)
+	}
 	if len(carried) != 1 {
 		t.Errorf("carried = %q, want one entry", carried)
+	}
+}
+
+func TestCarryInterpretersError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "app/run", []byte("#!/usr/local/bin/wrapper\n"))
+	writeFile(t, root, "usr/local/bin/wrapper", []byte("#!/bin/sh\n"))
+
+	boom := errors.New("boom")
+	var carried []string
+	carry := func(interp string) error {
+		carried = append(carried, interp)
+		return boom
+	}
+	err := CarryInterpreters(root, []string{"/app/run"}, carry, nil)
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "/usr/local/bin/wrapper") {
+		t.Errorf("CarryInterpreters = %v, want the error of carry naming /usr/local/bin/wrapper", err)
+	}
+	if !reflect.DeepEqual(carried, []string{"/usr/local/bin/wrapper"}) {
+		t.Errorf("carried = %q, want the walk to stop at the first error", carried)
 	}
 }
 
@@ -527,6 +708,25 @@ func TestFinalProgram(t *testing.T) {
 50  +++ exited with 0 +++
 [pid  50] execve("/opt/my\040app/run", ["run"], 0x1 /* 1 var */) = 0
 `, "50", "/opt/my app/run", 2, true},
+		{"execve cut in two is the program", `10  execve("/bin/sh", ["sh"], 0x1 /* 1 var */) = 0
+10  clone(child_stack=NULL, flags=SIGCHLD) = 11
+[pid  11] execve("/usr/bin/server", ["server"], 0x1 /* 1 var */ <unfinished ...>
+10  openat(AT_FDCWD, "/etc/x", O_RDONLY) = 3
+[pid  11] <... execve resumed>) = 0
+`, "11", "/usr/bin/server", 2, true},
+		{"unfinished execve never resumed counts", `30  execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+30  execve("/bin/b", ["b"], 0x1 /* 1 var */ <unfinished ...>
+`, "30", "/bin/b", 1, true},
+		{"execve cut in two that failed is cancelled", `20  execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+20  execve("/bin/b", ["b"], 0x1 /* 1 var */ <unfinished ...>
+20  <... execve resumed>) = -1 ENOENT (No such file or directory)
+`, "20", "/bin/a", 0, true},
+		{"cancelled execve of an exited process gives back the exit", `60  execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+60  +++ exited with 0 +++
+60  execve("/bin/b", ["b"], 0x1 /* 1 var */ <unfinished ...>
+60  <... execve resumed>) = -1 ENOENT (No such file or directory)
+61  execve("/bin/c", ["c"], 0x1 /* 1 var */) = 0
+`, "61", "/bin/c", 4, true},
 		{"failed execve does not count", `40  execve("/bin/x", ["x"], 0x1 /* 1 var */) = -1 ENOENT (No such file or directory)
 `, "", "", -1, false},
 		{"empty trace", ``, "", "", -1, false},
@@ -589,6 +789,10 @@ func TestConfigurationFiles(t *testing.T) {
 	}
 	if got := ConfigurationFiles(root); !reflect.DeepEqual(got, want) {
 		t.Errorf("ConfigurationFiles = %q, want %q", got, want)
+	}
+
+	if got := ConfigurationFiles(root + "/"); !reflect.DeepEqual(got, want) {
+		t.Errorf("ConfigurationFiles with a trailing slash = %q, want %q", got, want)
 	}
 
 	if got := ConfigurationFiles(t.TempDir()); got != nil {
