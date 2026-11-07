@@ -1,0 +1,59 @@
+name: petclinic
+
+permissions:
+  contents: read
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  convert:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[petclinic]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the tool
+        run: go build -o /tmp/d2n .
+      - name: Convert petclinic
+        run: |
+          mkdir -p /tmp/out /tmp/home
+          set +e
+          /tmp/d2n convert -f examples/petclinic-glassfish/docker-compose.yml \
+            --ops-home /tmp/home -o /tmp/out --pull --seconds 120 \
+            > /tmp/out/report.txt 2> /tmp/out/stderr.txt
+          status=$?
+          set -e
+          echo "exit status: $status"
+          echo "exit status: $status" > /tmp/out/status.txt
+          echo "=== report ==="
+          head -c 20000 /tmp/out/report.txt
+          echo "=== stderr (last 60 lines) ==="
+          tail -n 60 /tmp/out/stderr.txt
+          {
+            echo "exit status: $status"
+            echo '```'
+            head -c 20000 /tmp/out/report.txt
+            echo '```'
+            echo "stderr, last 60 lines"
+            echo '```'
+            tail -n 60 /tmp/out/stderr.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "=== package sizes ==="
+          du -sh /tmp/home/.ops/local_packages/*/* 2>/dev/null || true
+          if [ "$status" -eq 1 ]; then
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: petclinic-report
+          path: |
+            /tmp/out
+            /tmp/home/.ops/local_packages
+          if-no-files-found: warn
