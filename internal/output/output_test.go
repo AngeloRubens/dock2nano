@@ -1,0 +1,597 @@
+package output
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/AngeloRubens/dock2nano/internal/plan"
+)
+
+func put(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func read(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func names(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+func svc(name, sysroot string) plan.Service {
+	return plan.Service{Name: name, PackageName: name, Sysroot: sysroot, Manifest: plan.Manifest{Program: "/" + name}}
+}
+
+func composeOf(pkgs ...string) plan.ComposeFile {
+	var c plan.ComposeFile
+	for _, n := range pkgs {
+		c.Packages = append(c.Packages, plan.ComposePackage{Pkg: n, Name: n, Local: true, Arch: "amd64", BaseVolumeSz: "1g"})
+	}
+	return c
+}
+
+func onePlan(sys string) *plan.Plan {
+	return &plan.Plan{Arch: "amd64", Compose: composeOf("web"), Services: []plan.Service{svc("web", sys)}}
+}
+
+const webManifest = "{\n  \"Program\": \"/web\",\n  \"RunConfig\": {}\n}\n"
+
+const webCompose = "packages:\n  - pkg: web\n    name: web\n    local: true\n    arch: amd64\n    base_volume_sz: 1g\n"
+
+func TestWriteExactFiles(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "out", "compose.yaml")
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "binary", 0o755)
+	put(t, filepath.Join(src1, "etc", "conf"), "x=1\n", 0o644)
+	if err := os.Symlink("web", filepath.Join(src1, "link")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(src2, "app"), "app", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	p.Services[0].Manifest = plan.Manifest{Program: "/web", Args: []string{"-p", "80"}, Env: map[string]string{"B": "2", "A": "1"}}
+	p.Services[0].Manifest.RunConfig.Ports = []string{"80"}
+
+	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(home, "local_packages", "amd64")
+	want := []string{filepath.Join(base, "web"), filepath.Join(base, "app"), composePath}
+	if !reflect.DeepEqual(written, want) {
+		t.Fatalf("written = %v, want %v", written, want)
+	}
+	wantManifest := "{\n  \"Program\": \"/web\",\n  \"Args\": [\n    \"-p\",\n    \"80\"\n  ],\n  \"Env\": {\n    \"A\": \"1\",\n    \"B\": \"2\"\n  },\n  \"RunConfig\": {\n    \"Ports\": [\n      \"80\"\n    ]\n  }\n}\n"
+	if got := read(t, filepath.Join(base, "web", "package.manifest")); got != wantManifest {
+		t.Fatalf("manifest = %q, want %q", got, wantManifest)
+	}
+	if got := read(t, filepath.Join(base, "app", "package.manifest")); got != "{\n  \"Program\": \"/app\",\n  \"RunConfig\": {}\n}\n" {
+		t.Fatalf("app manifest = %q", got)
+	}
+	fi, err := os.Stat(filepath.Join(base, "web", "package.manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("manifest mode = %v, want 0644", fi.Mode().Perm())
+	}
+	wantCompose := webCompose + "  - pkg: app\n    name: app\n    local: true\n    arch: amd64\n    base_volume_sz: 1g\n"
+	if got := read(t, composePath); got != wantCompose {
+		t.Fatalf("compose = %q, want %q", got, wantCompose)
+	}
+	if got := read(t, filepath.Join(base, "web", "sysroot", "web")); got != "binary" {
+		t.Fatalf("sysroot/web = %q", got)
+	}
+	if got := read(t, filepath.Join(base, "web", "sysroot", "etc", "conf")); got != "x=1\n" {
+		t.Fatalf("sysroot/etc/conf = %q", got)
+	}
+	if l, err := os.Readlink(filepath.Join(base, "web", "sysroot", "link")); err != nil || l != "web" {
+		t.Fatalf("link = %q, %v", l, err)
+	}
+	if got := names(t, filepath.Join(base, "web")); !reflect.DeepEqual(got, []string{"package.manifest", "sysroot"}) {
+		t.Fatalf("package folder holds %v", got)
+	}
+	if got := names(t, base); !reflect.DeepEqual(got, []string{"app", "web"}) {
+		t.Fatalf("arch folder holds %v", got)
+	}
+	if got := names(t, filepath.Dir(composePath)); !reflect.DeepEqual(got, []string{"compose.yaml"}) {
+		t.Fatalf("compose folder holds %v", got)
+	}
+	if exists(src1) || exists(src2) {
+		t.Fatal("source sysroot still exists after a move")
+	}
+}
+
+func TestWriteManifestPassesValidation(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	p := onePlan(src)
+	p.Services[0].Manifest = plan.Manifest{
+		Program:      "/web",
+		Args:         []string{"a"},
+		Env:          map[string]string{"K": "V"},
+		Version:      "1",
+		MapDirs:      map[string]string{"/h": "/g"},
+		RebootOnExit: true,
+		RunConfig:    plan.RunConfig{Ports: []string{"80"}, UDPPorts: []string{"53"}},
+	}
+	home := filepath.Join(dir, "home")
+	if _, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	b := []byte(read(t, filepath.Join(home, "local_packages", "amd64", "web", "package.manifest")))
+	if err := ValidateManifestJSON(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManifestJSON([]byte(`{"Program":"/a","Bogus":1}`)); err == nil {
+		t.Fatal("unknown field accepted")
+	}
+	if err := ValidateManifestJSON([]byte(`{"RunConfig":{"Nope":[]}}`)); err == nil {
+		t.Fatal("unknown nested field accepted")
+	}
+	if err := ValidateManifestJSON([]byte(`{"Program":"/a"} {}`)); err == nil {
+		t.Fatal("trailing data accepted")
+	}
+	if err := ValidateManifestJSON([]byte(`{"Program":"/a"}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteFolderExists(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	base := filepath.Join(home, "local_packages", "amd64")
+	put(t, filepath.Join(base, "app", "marker"), "old", 0o644)
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+
+	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(base, "app")) {
+		t.Fatalf("error does not name the folder: %v", err)
+	}
+	if written != nil {
+		t.Fatalf("written = %v", written)
+	}
+	if got := names(t, base); !reflect.DeepEqual(got, []string{"app"}) {
+		t.Fatalf("arch folder holds %v", got)
+	}
+	if got := read(t, filepath.Join(base, "app", "marker")); got != "old" {
+		t.Fatalf("marker = %q", got)
+	}
+	if exists(composePath) {
+		t.Fatal("compose.yaml written")
+	}
+	if !exists(filepath.Join(src1, "web")) || !exists(filepath.Join(src2, "app")) {
+		t.Fatal("a source sysroot was consumed")
+	}
+}
+
+func TestWriteForceReplaces(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	base := filepath.Join(home, "local_packages", "amd64")
+	put(t, filepath.Join(base, "web", "marker"), "old", 0o644)
+	put(t, composePath, "old\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "new", 0o755)
+
+	if _, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: composePath, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, filepath.Join(base, "web")); !reflect.DeepEqual(got, []string{"package.manifest", "sysroot"}) {
+		t.Fatalf("package folder holds %v", got)
+	}
+	if got := names(t, base); !reflect.DeepEqual(got, []string{"web"}) {
+		t.Fatalf("arch folder holds %v", got)
+	}
+	if got := read(t, filepath.Join(base, "web", "package.manifest")); got != webManifest {
+		t.Fatalf("manifest = %q", got)
+	}
+	if got := read(t, composePath); got != webCompose {
+		t.Fatalf("compose = %q", got)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"compose.yaml", "home"}) {
+		t.Fatalf("temp folder holds %v", got)
+	}
+}
+
+func TestWriteComposeExistsBeforeAnyPackage(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	put(t, composePath, "old\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+
+	_, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err == nil || !strings.Contains(err.Error(), composePath) {
+		t.Fatalf("error = %v", err)
+	}
+	if exists(home) {
+		t.Fatal("a package was written before the compose.yaml check")
+	}
+	if got := read(t, composePath); got != "old\n" {
+		t.Fatalf("compose = %q", got)
+	}
+	if !exists(filepath.Join(src, "web")) {
+		t.Fatal("source sysroot was consumed")
+	}
+}
+
+func TestWriteRollbackWhenSecondPackageFails(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	src1 := filepath.Join(dir, "src1")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", filepath.Join(dir, "missing"))}
+
+	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if written != nil {
+		t.Fatalf("written = %v", written)
+	}
+	if exists(home) {
+		t.Fatalf("home left behind: %v", names(t, home))
+	}
+	if exists(composePath) {
+		t.Fatal("compose.yaml left behind")
+	}
+	if got := read(t, filepath.Join(src1, "web")); got != "b" {
+		t.Fatalf("first sysroot not given back: %q", got)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"src1"}) {
+		t.Fatalf("temp folder holds %v", got)
+	}
+}
+
+func TestWriteRollbackKeepsWhatExisted(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	base := filepath.Join(home, "local_packages", "amd64")
+	put(t, filepath.Join(base, "web", "marker"), "old", 0o644)
+	put(t, filepath.Join(base, "other", "keep"), "keep", 0o644)
+	put(t, composePath, "old\n", 0o644)
+	src1 := filepath.Join(dir, "src1")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", filepath.Join(dir, "missing"))}
+
+	if _, err := Write(p, Options{OpsHome: home, ComposePath: composePath, Force: true}); err == nil {
+		t.Fatal("no error")
+	}
+	if got := names(t, base); !reflect.DeepEqual(got, []string{"other", "web"}) {
+		t.Fatalf("arch folder holds %v", got)
+	}
+	if got := names(t, filepath.Join(base, "web")); !reflect.DeepEqual(got, []string{"marker"}) {
+		t.Fatalf("web holds %v", got)
+	}
+	if got := read(t, filepath.Join(base, "other", "keep")); got != "keep" {
+		t.Fatalf("keep = %q", got)
+	}
+	if got := read(t, composePath); got != "old\n" {
+		t.Fatalf("compose = %q", got)
+	}
+	if got := read(t, filepath.Join(src1, "web")); got != "b" {
+		t.Fatalf("sysroot not given back: %q", got)
+	}
+}
+
+func TestWriteRefusesBadNames(t *testing.T) {
+	bad := []string{"", ".", "..", "a/b", "../x", "a..b", "a\\b", "/abs"}
+	for _, name := range bad {
+		for _, field := range []string{"package", "arch"} {
+			dir := t.TempDir()
+			home := filepath.Join(dir, "home")
+			src := filepath.Join(dir, "src")
+			put(t, filepath.Join(src, "f"), "b", 0o644)
+			p := onePlan(src)
+			if field == "package" {
+				p.Services[0].PackageName = name
+			} else {
+				p.Arch = name
+			}
+			written, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "compose.yaml")})
+			if err == nil {
+				t.Fatalf("%s %q accepted", field, name)
+			}
+			if written != nil {
+				t.Fatalf("%s %q: written = %v", field, name, written)
+			}
+			if got := names(t, dir); !reflect.DeepEqual(got, []string{"src"}) {
+				t.Fatalf("%s %q: temp folder holds %v", field, name, got)
+			}
+		}
+	}
+}
+
+func TestWriteRefusesDuplicatePackage(t *testing.T) {
+	dir := t.TempDir()
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "f"), "b", 0o644)
+	put(t, filepath.Join(src2, "f"), "b", 0o644)
+	p := &plan.Plan{Arch: "amd64", Services: []plan.Service{svc("web", src1), svc("web", src2)}}
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "c.yaml")}); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	if exists(filepath.Join(dir, "home")) {
+		t.Fatal("something written")
+	}
+}
+
+func TestWriteRelativeComposePath(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(work)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	home := filepath.Join(dir, "home")
+
+	written, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: filepath.Join("sub", "compose.yaml")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := written[len(written)-1]; last != filepath.Join("sub", "compose.yaml") {
+		t.Fatalf("last written = %q", last)
+	}
+	if got := read(t, filepath.Join(work, "sub", "compose.yaml")); got != webCompose {
+		t.Fatalf("compose = %q", got)
+	}
+
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src2, "web"), "b", 0o755)
+	written, err = Write(onePlan(src2), Options{OpsHome: home, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := written[len(written)-1]; last != "compose.yaml" {
+		t.Fatalf("default compose path = %q", last)
+	}
+	if got := read(t, filepath.Join(work, "compose.yaml")); got != webCompose {
+		t.Fatalf("default compose = %q", got)
+	}
+}
+
+func TestWriteOpsHomeFromEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "envhome")
+	t.Setenv("OPS_HOME", home)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(onePlan(src), Options{ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(home, "local_packages", "amd64", "web", "package.manifest")); got != webManifest {
+		t.Fatalf("manifest = %q", got)
+	}
+}
+
+func TestCopyTreeKeepsModesAndLinks(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	outside := filepath.Join(dir, "outside")
+	put(t, outside, "secret", 0o644)
+	put(t, filepath.Join(src, "bin", "run"), "run", 0o755)
+	put(t, filepath.Join(src, "secret"), "s", 0o600)
+	put(t, filepath.Join(src, "priv", "f"), "p", 0o640)
+	if err := os.Chmod(filepath.Join(src, "priv"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("bin/run", filepath.Join(src, "rel")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(src, "abs")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(src, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("bin", filepath.Join(src, "dirlink")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]os.FileMode{"bin/run": 0o755, "secret": 0o600, "priv/f": 0o640, "priv": 0o700, "empty": 0o755, "bin": 0o755}
+	for rel, want := range modes {
+		fi, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Fatalf("%s mode = %v, want %v", rel, fi.Mode().Perm(), want)
+		}
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "empty")); err != nil || !fi.IsDir() {
+		t.Fatalf("empty dir not copied: %v", err)
+	}
+	links := map[string]string{"rel": "bin/run", "abs": outside, "dangling": "nowhere", "dirlink": "bin"}
+	for rel, want := range links {
+		fi, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is not a link: %v", rel, fi.Mode())
+		}
+		got, err := os.Readlink(filepath.Join(dst, rel))
+		if err != nil || got != want {
+			t.Fatalf("%s -> %q, %v; want %q", rel, got, err, want)
+		}
+	}
+	if got := read(t, filepath.Join(dst, "bin", "run")); got != "run" {
+		t.Fatalf("content = %q", got)
+	}
+	if !exists(filepath.Join(src, "bin", "run")) {
+		t.Fatal("copyTree removed the source")
+	}
+}
+
+func TestCopyTreeRefusesNonDirectory(t *testing.T) {
+	dir := t.TempDir()
+	put(t, filepath.Join(dir, "f"), "x", 0o644)
+	if err := copyTree(filepath.Join(dir, "f"), filepath.Join(dir, "dst")); err == nil {
+		t.Fatal("file accepted")
+	}
+	if exists(filepath.Join(dir, "dst")) {
+		t.Fatal("dst created")
+	}
+}
+
+func failRename(t *testing.T, errno syscall.Errno) {
+	t.Helper()
+	old := rename
+	rename = func(a, b string) error {
+		return &os.LinkError{Op: "rename", Old: a, New: b, Err: errno}
+	}
+	t.Cleanup(func() { rename = old })
+}
+
+func TestMoveTreeFallsBackToCopyOnCrossDevice(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	put(t, filepath.Join(src, "bin", "run"), "run", 0o755)
+	if err := os.Symlink("bin/run", filepath.Join(src, "l")); err != nil {
+		t.Fatal(err)
+	}
+	failRename(t, syscall.EXDEV)
+
+	copied, err := moveTree(src, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !copied {
+		t.Fatal("copied = false")
+	}
+	if got := read(t, filepath.Join(dst, "bin", "run")); got != "run" {
+		t.Fatalf("content = %q", got)
+	}
+	if l, err := os.Readlink(filepath.Join(dst, "l")); err != nil || l != "bin/run" {
+		t.Fatalf("link = %q, %v", l, err)
+	}
+	if !exists(filepath.Join(src, "bin", "run")) {
+		t.Fatal("moveTree removed the source; the caller does that")
+	}
+}
+
+func TestMoveTreeOtherErrorsDoNotCopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	put(t, filepath.Join(src, "f"), "x", 0o644)
+	failRename(t, syscall.EACCES)
+
+	if _, err := moveTree(src, dst); err == nil {
+		t.Fatal("no error")
+	}
+	if exists(dst) {
+		t.Fatal("copied after a non cross-device error")
+	}
+}
+
+func TestMoveTreeRenames(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	put(t, filepath.Join(src, "f"), "x", 0o644)
+	copied, err := moveTree(src, dst)
+	if err != nil || copied {
+		t.Fatalf("copied = %v, err = %v", copied, err)
+	}
+	if exists(src) || read(t, filepath.Join(dst, "f")) != "x" {
+		t.Fatal("not moved")
+	}
+}
+
+func TestWriteCrossDeviceRemovesSourceAfterSuccess(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	failRename(t, syscall.EXDEV)
+
+	if _, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(home, "local_packages", "amd64", "web", "sysroot", "web")); got != "b" {
+		t.Fatalf("content = %q", got)
+	}
+	if exists(src) {
+		t.Fatal("source sysroot not removed after the copy")
+	}
+}
+
+func TestWriteCrossDeviceKeepsSourceOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src), svc("app", filepath.Join(dir, "missing"))}
+	failRename(t, syscall.EXDEV)
+
+	if _, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "c.yaml")}); err == nil {
+		t.Fatal("no error")
+	}
+	if got := read(t, filepath.Join(src, "web")); got != "b" {
+		t.Fatalf("source = %q", got)
+	}
+	if exists(home) {
+		t.Fatal("home left behind")
+	}
+}
