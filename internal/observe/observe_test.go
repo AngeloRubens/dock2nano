@@ -591,6 +591,62 @@ func TestObserveTargetExecutableAndArgs(t *testing.T) {
 	equal(t, "working dir", s.d.creates[1].WorkingDir, "/w")
 }
 
+// wrappedArgv returns the program argv inside the entrypoint of the traced container.
+func wrappedArgv(t *testing.T, s *scene, argv []string) []string {
+	t.Helper()
+	return trace.WrapCommandAs(trace.TraceMount, loader, "", argv)
+}
+
+func TestObserveCommandOverrides(t *testing.T) {
+	empty := []string{}
+	for _, tc := range []struct {
+		name       string
+		entrypoint *[]string
+		cmd        []string
+		args       []string
+		want       []string
+	}{
+		{"image entrypoint and cmd", nil, nil, nil, []string{"/entry.sh", "--serve"}},
+		{"entrypoint replaces and drops the image cmd", &[]string{"/usr/bin/app"}, nil, nil, []string{"/usr/bin/app"}},
+		{"empty entrypoint clears it and drops the image cmd", &empty, []string{"/usr/bin/app", "-x"}, nil, []string{"/usr/bin/app", "-x"}},
+		{"cmd replaces the image cmd, entrypoint kept", nil, []string{"--other"}, nil, []string{"/entry.sh", "--other"}},
+		{"entrypoint and cmd both set", &[]string{"/usr/bin/app", "-a"}, []string{"-b"}, nil, []string{"/usr/bin/app", "-a", "-b"}},
+		{"args last", &[]string{"/usr/bin/app"}, []string{"-b"}, []string{"-z"}, []string{"/usr/bin/app", "-b", "-z"}},
+		{"args last after the image command", nil, nil, []string{"-z"}, []string{"/entry.sh", "--serve", "-z"}},
+	} {
+		s := newScene(t)
+		s.o.Entrypoint = tc.entrypoint
+		s.o.Cmd = tc.cmd
+		s.o.Args = tc.args
+		_, err := s.observe(t, context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		equal(t, tc.name+": traced entrypoint", *s.d.creates[1].Entrypoint, wrappedArgv(t, s, tc.want))
+	}
+}
+
+func TestObserveEmptyEntrypointWithoutCmdStartsNothing(t *testing.T) {
+	s := newScene(t)
+	s.o.Entrypoint = &[]string{}
+	if _, err := s.observe(t, context.Background()); err == nil || !strings.Contains(err.Error(), "starts nothing") {
+		t.Fatalf("err = %v, want it to say the image starts nothing", err)
+	}
+}
+
+func TestObserveEnvReplacesTheVariableOfTheImage(t *testing.T) {
+	got := mergeEnv([]string{"PATH=/usr/bin", "HOME=/root"}, []string{"HOME=/h", "NEW=1"})
+	equal(t, "merged env", got, []string{"PATH=/usr/bin", "HOME=/h", "NEW=1"})
+
+	s := newScene(t)
+	s.o.Env = []string{"HOME=/h", "NEW=1"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// docker create applies the same rule: it is given only the entries of the options
+	equal(t, "env given to create", s.d.creates[1].Env, []string{"HOME=/h", "NEW=1"})
+}
+
 func TestObserveTimeoutEndsTheWatch(t *testing.T) {
 	s := newScene(t)
 	s.o.Seconds = 7

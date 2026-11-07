@@ -210,6 +210,39 @@ func TestObserveNginx(t *testing.T) {
 	checkNoLeftovers(t, before, tmp)
 }
 
+func TestObserveNginxCommandOverride(t *testing.T) {
+	needDocker(t)
+	tmp := privateTemp(t)
+	before := containerIDs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := []string{"nginx", "-g", "daemon off; worker_processes 1;"}
+	res, err := observe.Observe(ctx, docker.Default(), observe.Options{
+		Image:      "nginx:1.27-alpine",
+		Pull:       true,
+		Seconds:    30,
+		Entrypoint: &[]string{},
+		Cmd:        cmd,
+		Log:        t.Logf,
+	})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(res.Sysroot) })
+
+	t.Logf("program %s, argv %v", res.Program, res.Argv)
+	if !slices.Equal(res.Argv, cmd) {
+		t.Errorf("Argv = %q, want %q", res.Argv, cmd)
+	}
+	if !strings.HasSuffix(res.Program, "nginx") {
+		t.Errorf("Program = %q, want it to end with nginx", res.Program)
+	}
+
+	os.RemoveAll(res.Sysroot)
+	checkNoLeftovers(t, before, tmp)
+}
+
 const entrypointDockerfile = `FROM alpine:3.20
 RUN apk add --no-cache busybox-extras
 COPY entry.sh /entry.sh

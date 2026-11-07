@@ -84,11 +84,21 @@ type Options struct {
 	// is missing, Observe fails.
 	Pull bool
 	// TargetExecutable (--file), when set, replaces the entrypoint and cmd of the image: it
-	// followed by Args is run.
+	// followed by Args is run. It wins over Entrypoint and Cmd.
 	TargetExecutable string
-	// Args are added after the entrypoint and cmd of the image, or after TargetExecutable.
+	// Entrypoint replaces the entrypoint of the image, as the entrypoint of a compose file or
+	// docker run --entrypoint does. nil keeps the one of the image; a pointer to an empty slice
+	// clears it, as --entrypoint "" does. Setting it (even to an empty slice) also drops the
+	// CMD of the image, as Docker does, unless Cmd is given.
+	Entrypoint *[]string
+	// Cmd replaces the CMD of the image. nil keeps the CMD of the image, unless Entrypoint is
+	// set, in which case the CMD of the image is dropped and nothing takes its place.
+	Cmd []string
+	// Args are added after the entrypoint and cmd (the effective ones), or after
+	// TargetExecutable.
 	Args []string
-	// Env is added to the environment of the image.
+	// Env is added to the environment of the image; an entry replaces the variable of the image
+	// with the same name.
 	Env []string
 	// WorkingDir replaces the working directory of the image when not empty.
 	WorkingDir string
@@ -261,6 +271,45 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 	return res, err
 }
 
+// effectiveArgv is the command line Docker would run: the entrypoint (the one in the options, or
+// the image's) followed by the cmd (the one in the options; the image's only when the options do
+// not set an entrypoint, because Docker drops the image cmd then), followed by o.Args.
+func effectiveArgv(imageEntrypoint, imageCmd []string, o Options) []string {
+	entrypoint := imageEntrypoint
+	cmd := imageCmd
+	if o.Entrypoint != nil {
+		entrypoint = *o.Entrypoint
+		cmd = nil
+	}
+	if o.Cmd != nil {
+		cmd = o.Cmd
+	}
+	argv := append([]string{}, entrypoint...)
+	argv = append(argv, cmd...)
+	return append(argv, o.Args...)
+}
+
+// mergeEnv returns base with the entries of add put in: an entry replaces the variable of base with
+// the same name, in its place; the others follow.
+func mergeEnv(base, add []string) []string {
+	out := append([]string{}, base...)
+	for _, e := range add {
+		name, _, _ := strings.Cut(e, "=")
+		replaced := false
+		for i, b := range out {
+			if n, _, _ := strings.Cut(b, "="); n == name {
+				out[i] = e
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	image := r.o.Image
 
@@ -291,7 +340,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	if r.o.TargetExecutable != "" {
 		argv = append([]string{r.o.TargetExecutable}, r.o.Args...)
 	} else {
-		argv = append(append(append([]string{}, cfg.Entrypoint...), cfg.Cmd...), r.o.Args...)
+		argv = effectiveArgv(cfg.Entrypoint, cfg.Cmd, r.o)
 	}
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("observe: %s starts nothing: say what to run with --file", image)
@@ -300,7 +349,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	if r.o.WorkingDir != "" {
 		workingDir = r.o.WorkingDir
 	}
-	env := append(append([]string{}, cfg.Env...), r.o.Env...)
+	env := mergeEnv(cfg.Env, r.o.Env)
 
 	tracerDir, loader, err := r.prepareTracer(ctx)
 	if tracerDir != "" {
