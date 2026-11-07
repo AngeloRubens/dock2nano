@@ -1206,7 +1206,8 @@ func TestNetworkCreatedOnceAndRemoved(t *testing.T) {
 func TestNoNetworkWhenNothingIsConverted(t *testing.T) {
 	h := newHarness(t)
 	h.write("compose.yaml", "services:\n  bare:\n    command: x\n")
-	h.mustRun(0, "convert")
+	// no service can be converted: the report is printed and the status is 1
+	h.mustRun(1, "convert")
 	if len(h.dock.netCreated) != 0 || len(h.dock.netRemoved) != 0 {
 		t.Errorf("network calls: %v %v", h.dock.netCreated, h.dock.netRemoved)
 	}

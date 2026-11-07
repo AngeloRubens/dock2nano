@@ -1911,7 +1911,7 @@ func TestStartExitsBeforeReady(t *testing.T) {
 	}
 	_, tail, _ := strings.Cut(msg, "ready: ")
 	if len(tail) > 1024 {
-		t.Errorf("log in the error has %d bytes", len(tail))
+		t.Errorf("log in the error has %d bytes, it starts %q and ends %q", len(tail), tail[:60], tail[len(tail)-60:])
 	}
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
 	equal(t, "stopped", s.d.stopped, []string{"dep-1"})
