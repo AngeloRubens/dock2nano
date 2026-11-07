@@ -66,9 +66,10 @@ in silenzio. Si punta allo zero impatto, non lo si garantisce.
 
 ## Stato di partenza
 - Il nome non e' definitivo: ToolName = "dock2nano" e' di lavoro. Il 2026-11-07
-  si e' chiesto a Ian un suggerimento (commento su nanovms/ops#1802), risposta
-  in attesa. Il repo e' AngeloRubens/dock2nano (privato); se il nome cambia si
-  rinomina il repo e si cambia la costante.
+  si e' chiesto a Ian un suggerimento (commento su nanovms/ops#1802); ha
+  risposto (16:24 UTC) che il nome e' una scelta dell'utente: ops e nanos non
+  hanno una regola di nomi. Il repo e' AngeloRubens/dock2nano (privato); se il
+  nome cambia si rinomina il repo e si cambia la costante.
 - Ian ha risposto sulla 1802 (2026-11-06): vuole uno strumento esterno, perche'
   creare un pacchetto e' un lavoro di cura, l'ecosistema ha idiomi diversi
   (python, java, go) e il problema non ha limite. Non ha risposto se
