@@ -1910,6 +1910,8 @@ func TestStartExitsBeforeReady(t *testing.T) {
 		t.Errorf("err = %q", msg)
 	}
 	_, tail, _ := strings.Cut(msg, "ready: ")
+	// the error of stopping the container is joined after the log
+	tail, _, _ = strings.Cut(tail, "\nstopping container")
 	if len(tail) > 1024 {
 		t.Errorf("log in the error has %d bytes, it starts %q and ends %q", len(tail), tail[:60], tail[len(tail)-60:])
 	}
