@@ -250,6 +250,16 @@ func (f *fakeDocker) CopyTar(ctx context.Context, id, containerPath string, w io
 			return err
 		}
 	case e.dir:
+		// a write that fails after the first header means the reader went away
+		refused := func(err error) error {
+			if f.tarStopped == nil {
+				f.tarStopped = map[string]bool{}
+				f.tarCancelled = map[string]bool{}
+			}
+			f.tarStopped[containerPath] = true
+			f.tarCancelled[containerPath] = ctx.Err() != nil
+			return err
+		}
 		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: name + "/", Mode: 0755}); err != nil {
 			return err
 		}
@@ -257,18 +267,12 @@ func (f *fakeDocker) CopyTar(ctx context.Context, id, containerPath string, w io
 		// reader goes away
 		const size = 8 << 20
 		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name + "/big", Mode: 0644, Size: size}); err != nil {
-			return err
+			return refused(err)
 		}
 		chunk := make([]byte, 64<<10)
 		for n := 0; n < size; n += len(chunk) {
 			if _, err := tw.Write(chunk); err != nil {
-				if f.tarStopped == nil {
-					f.tarStopped = map[string]bool{}
-					f.tarCancelled = map[string]bool{}
-				}
-				f.tarStopped[containerPath] = true
-				f.tarCancelled[containerPath] = ctx.Err() != nil
-				return err
+				return refused(err)
 			}
 		}
 	case e.partial:

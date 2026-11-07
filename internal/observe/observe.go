@@ -376,7 +376,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	if running {
 		base := "/proc/" + pid + "/"
 		if out, ok := r.procRead(ctx, id, "command line", []string{"cat", base + "cmdline"}); ok {
-			if parts := trace.SplitNul(out); len(parts) > 0 {
+			// a program that rewrites its command line, nginx for one, pads it with NULs
+			parts := trace.SplitNul(out)
+			for len(parts) > 0 && parts[len(parts)-1] == "" {
+				parts = parts[:len(parts)-1]
+			}
+			if len(parts) > 0 {
 				switch {
 				case len(cmdline) == 0:
 					cmdline = parts
