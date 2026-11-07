@@ -1716,3 +1716,24 @@ func TestHTTPProberReadsAtMostOneMiBOfTheBody(t *testing.T) {
 		t.Error("the whole body was read")
 	}
 }
+
+func TestObserveAliasOfAPathThatWasNotCarriedIsAWarning(t *testing.T) {
+	s := newScene(t)
+	// /aa-sock is asked for first and Docker makes nothing of it; /zz is a link to it
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/aa-sock", O_RDONLY) = 8` + "\n" + `11 openat(AT_FDCWD, "/zz", O_RDONLY) = 9` + "\n"
+	s.d.files["/aa-sock"] = entry{socket: true}
+	s.d.files["/zz"] = entry{link: "/aa-sock"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if w == "not carried /zz: it leads to /aa-sock, which was not carried" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}

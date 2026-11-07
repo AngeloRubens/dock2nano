@@ -1234,6 +1234,8 @@ func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (f
 // error.
 func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths []string) error {
 	done := map[string]bool{}
+	// the paths that are in the sysroot now; done also holds the ones that Docker could not give
+	carried := map[string]bool{}
 	// the names a path was reached by, through links
 	aliases := map[string][]string{}
 	queue := slices.Clone(paths)
@@ -1288,6 +1290,11 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 						return fmt.Errorf("observe: carrying the console link %s: %w", name, err)
 					}
 				}
+			case done[link] && !carried[link]:
+				// it was asked for and Docker could not give it
+				for _, name := range names {
+					notCarried(name, "it leads to "+link+", which was not carried")
+				}
 			case done[link]:
 				// it was carried already, under its own name
 				for _, name := range names {
@@ -1299,6 +1306,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 				queue = append(queue, link)
 			}
 		case kindDir, kindFile:
+			carried[p] = true
 			for _, name := range aliases[p] {
 				if err := trace.CopyHostFile(sysroot, p, name); err != nil {
 					return fmt.Errorf("observe: copying %s to %s: %w", p, name, err)
