@@ -167,7 +167,9 @@ func TestOrderFollowsDependsOn(t *testing.T) {
 }
 
 func TestOrderErrors(t *testing.T) {
-	dep := func(n string) []compose.Dependency { return []compose.Dependency{{Service: n, Condition: "service_started"}} }
+	dep := func(n string) []compose.Dependency {
+		return []compose.Dependency{{Service: n, Condition: "service_started"}}
+	}
 	alpha, beta, gamma, delta := svc("alpha"), svc("beta"), svc("gamma"), svc("delta")
 	alpha.DependsOn = dep("beta")
 	beta.DependsOn = dep("alpha")
