@@ -1,0 +1,100 @@
+name: petclinic-up
+# Converts examples/petclinic-glassfish, starts it with "ops compose up" and reports how far
+# it gets. No assertion on the result: the output is the finding. Runs on a push whose head
+# commit message contains [petclinic-up], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  up:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[petclinic-up]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      OPS_HOME: /home/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: machine
+        run: |
+          ls -l /dev/kvm || echo "no /dev/kvm"
+          nproc; free -m; id
+          docker version --format '{{.Server.Version}}'
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
+          cd /tmp/ops-src && git log --oneline | head -1
+          go build -o /tmp/ops .
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops version
+      - name: kernel and boot image
+        run: ops update 2>&1 | tail -5
+      - name: convert
+        run: |
+          mkdir -p /tmp/out
+          go run . convert -f examples/petclinic-glassfish/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 120 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+          find "$OPS_HOME/.ops/local_packages" -maxdepth 3 | head -20
+          for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 3000 "$m"; echo; done
+          du -sh "$OPS_HOME"/.ops/local_packages/*/*
+      - name: dns package
+        run: ops pkg get eyberg/ops-dns:0.0.1
+      - name: compose up
+        timeout-minutes: 10
+        run: |
+          cd /tmp/out
+          # a file, not a pipe: the qemu processes outlive ops and would hold a pipe open
+          # ops compose waits ten seconds for each address and panics when the dns one is late:
+          # try again, from a clean state
+          for attempt in 1 2 3; do
+            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
+              break
+            fi
+            echo "ops compose up failed (attempt $attempt)"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | tail -8 | cut -c1-200
+            sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true
+            sleep 5
+            test "$attempt" -lt 3
+          done
+          grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | cut -c1-300 | tail -40
+      - name: probe
+        if: always()
+        run: |
+          sleep 20
+          ip -br addr | head -20
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
+          ipof() { grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$1.txt 2>/dev/null | tail -1 | awk '{print $2}'; }
+          for n in db petclinic dns; do
+            echo "=== console of $n"
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $n > /tmp/out/console-$n.txt 2>&1 || true
+            tail -40 /tmp/out/console-$n.txt | cut -c1-300
+          done
+          app=$(ipof petclinic); db=$(ipof db)
+          echo "petclinic=$app db=$db"
+          # up to ten minutes for the web application, then report what answers
+          for i in $(seq 1 40); do
+            if [ -n "$app" ] && curl -s -m 5 -o /tmp/out/index.html -w '%{http_code}\n' "http://$app:8080/" | tee /tmp/out/http-code.txt | grep -q '^[23]'; then break; fi
+            sleep 15
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
+          done
+          echo "=== last answer"; cat /tmp/out/http-code.txt 2>/dev/null; head -c 600 /tmp/out/index.html 2>/dev/null
+          echo "=== console of petclinic, last 60 lines"; tail -60 /tmp/out/console-petclinic.txt | cut -c1-300
+          echo "=== console of db, last 30 lines"; sudo env OPS_HOME="$OPS_HOME" ops instance logs db 2>&1 | tail -30 | cut -c1-300
+          ps aux | grep -c '[q]emu' || true
+          free -m | head -2
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petclinic-up
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -5 || true
