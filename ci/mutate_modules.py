@@ -338,6 +338,119 @@ A("cmd-entrypoint-always-passed", "cmd", "TestObserveCommand",
 A("cmd-build-arg-unset-is-left-out", "cmd", "TestBuildCall|TestBuildArgUnresolved",
   r'''if !ok {⏎»»»»continue''', r'''if !ok && false {⏎»»»»continue''')
 
+# ----------------------------------------------- mutations for the coverage tests
+# gen
+A("gen-ports-variable-in-target", "gen", "TestPorts",
+  r'''if strings.Contains(p.Published, "$") || strings.Contains(p.Target, "$") {''', r'''if strings.Contains(p.Published, "$") {''')
+A("gen-ports-range-in-target", "gen", "TestPorts",
+  r'''if strings.Contains(p.Published, "-") || strings.Contains(p.Target, "-") {''', r'''if strings.Contains(p.Published, "-") {''')
+A("gen-volume-tmpfs", "gen", "TestVolumes",
+  r'''case v.Type == "tmpfs":''', r'''case false:''')
+A("gen-depends-empty-condition", "gen", "TestDependsOnEmptyConditionIsSilent",
+  r'''if d.Condition != "" && d.Condition != "service_started" {''', r'''if d.Condition != "service_started" {''')
+A("gen-healthcheck-dockerfile-none", "gen", "TestDockerfileHealthcheckNoneGivesNoItem",
+  r'''si.Stage.Healthcheck != nil && !si.Stage.Healthcheck.None:''', r'''si.Stage.Healthcheck != nil:''')
+A("gen-testsummary-cmd-shell", "gen", "TestTestSummary",
+  r'''} else if len(w) > 0 && w[0] == "CMD-SHELL" {''', r'''} else if false && len(w) > 0 && w[0] == "CMD-SHELL" {''')
+A("gen-testsummary-empty-text", "gen", "TestEmptyHealthcheckTestMessage|TestTestSummary",
+  r'''return "the test is empty"''', r'''return "the test is blank"''')
+A("gen-project-name-fallback", "gen", "TestProjectNameFallback",
+  r'''return "project"''', r'''return "proj"''')
+A("gen-folder-dotdot-every-run", "gen", "TestFolderNameCollapsesEveryRun",
+  r'''for strings.Contains(name, "..") {''', r'''if strings.Contains(name, "..") {''')
+A("gen-env-nil-lookup", "gen", "TestServiceEnvNilFunctions",
+  r'''if lookup == nil {''', r'''if false && lookup == nil {''')
+A("gen-env-nil-readfile", "gen", "TestServiceEnvNilFunctions",
+  r'''if readFile == nil {''', r'''if false && readFile == nil {''')
+A("gen-env-file-unset-note-text", "gen", "TestServiceEnvFileUnsetNote",
+  r'''"variables used in the file are not set on this machine and became empty: "''', r'''"variables used in the file are not set on this machine and became blank: "''')
+A("gen-env-file-unset-note-guard", "gen", "TestServiceEnvFileUnsetNote",
+  r'''if len(unset) > 0 {⏎»»»add(plan.Note, key, "variables used in the file''', r'''if len(unset) > 0 && false {⏎»»»add(plan.Note, key, "variables used in the file''')
+A("names-length-boundary", "gen", "TestPackageNameLengthBoundary",
+  r'''if len(pkg) > maxPkgLen {''', r'''if len(pkg) >= maxPkgLen {''')
+A("names-hash-of-original-name", "gen", "TestPackageNameHashIsOfTheOriginalName",
+  r'''sha1.Sum([]byte(service))''', r'''sha1.Sum([]byte(pkg))''')
+A("report-converted-last", "gen", "TestRenderPutsConvertedLast",
+  r'''[]plan.Kind{plan.Unsupported, plan.Approximated, plan.Note, plan.Observed, plan.Converted}''', r'''[]plan.Kind{plan.Converted, plan.Unsupported, plan.Approximated, plan.Note, plan.Observed}''')
+A("report-max-listed", "gen", "TestListedLimit",
+  r'''const maxListed = 20''', r'''const maxListed = 19''')
+A("report-listed-at-the-limit", "gen", "TestListedLimit",
+  r'''if len(names) <= maxListed {''', r'''if len(names) < maxListed {''')
+# interp
+A("interp-digits-in-names", "interp", "TestExpandDigitsInNames",
+  "return isNameStart(c) || c >= '0' && c <= '9'", "return isNameStart(c)")
+A("interp-double-dollar-in-braces", "interp", "TestExpandDoubleDollarInsideBraces",
+  r'''case s[i] == '$' && i+1 < len(s) && s[i+1] == '$':⏎»»»i++''', r'''case false:⏎»»»i++''')
+A("interp-invalid-body-empty", "interp", "TestExpandInvalidBodyEmpty",
+  r'''if body == "" || !isNameStart(body[0]) {''', r'''if !isNameStart(body[0]) {''')
+A("interp-invalid-body-digit", "interp", "TestExpandInvalidBodyStartsWithDigit",
+  r'''if body == "" || !isNameStart(body[0]) {''', r'''if body == "" {''')
+# output
+A("output-precheck-compose-exists", "output", "TestWritePreCheckComposeExistsTouchesNothing",
+  r'''if exists(composePath) {''', r'''if false && exists(composePath) {''')
+A("output-precheck-package-exists", "output", "TestWritePreCheckPackageFolderExistsTouchesNothing",
+  r'''if exists(final) {⏎»»»»return nil, fmt.Errorf("output: package folder''', r'''if false && exists(final) {⏎»»»»return nil, fmt.Errorf("output: package folder''')
+A("output-duplicate-package-name", "output", "TestWriteDuplicatePackageNameMessage",
+  r'''if seen[s.PackageName] {''', r'''if false && seen[s.PackageName] {''')
+A("output-sysroot-empty", "output", "TestWriteSysrootErrors",
+  r'''if s.Sysroot == "" {''', r'''if false && s.Sysroot == "" {''')
+A("output-sysroot-not-a-directory", "output", "TestWriteSysrootErrors",
+  r'''if !fi.IsDir() {⏎»»return "", fmt.Errorf("output: sysroot %s''', r'''if false && !fi.IsDir() {⏎»»return "", fmt.Errorf("output: sysroot %s''')
+A("output-sysroot-missing", "output", "TestWriteSysrootErrors",
+  r'''fi, err := os.Lstat(s.Sysroot)⏎»if err != nil {⏎»»return "", fmt.Errorf("output: sysroot of ''', r'''fi, err := os.Lstat(s.Sysroot)⏎»if err != nil {⏎»»return "", fmt.Errorf("output: sysroot for ''')
+A("output-package-folder-mode", "output", "TestWriteModes",
+  r'''os.Chmod(tmp, 0o755)''', r'''os.Chmod(tmp, 0o700)''')
+A("output-compose-mode", "output", "TestWriteModes",
+  r'''os.Chmod(tmp, 0o644)''', r'''os.Chmod(tmp, 0o600)''')
+A("output-failed-copy-removed", "output", "TestMoveTreeFailedCopyLeavesNothing",
+  r'''os.RemoveAll(dst)''', r'''_ = dst''')
+A("output-keep-setuid", "output", "TestCopyTreeKeepsSpecialBits",
+  r'''fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)''', r'''fs.ModePerm | fs.ModeSetgid | fs.ModeSticky)''')
+A("output-keep-setgid", "output", "TestCopyTreeKeepsSpecialBits",
+  r'''fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)''', r'''fs.ModePerm | fs.ModeSetuid | fs.ModeSticky)''')
+A("output-keep-sticky", "output", "TestCopyTreeKeepsSpecialBits",
+  r'''fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)''', r'''fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid)''')
+# observe
+A("observe-program-found-on-path", "observe", "TestObserveProgramWithoutASlashIsFoundOnThePath",
+  r'''if !strings.HasPrefix(program, "/") {''', r'''if false && !strings.HasPrefix(program, "/") {''')
+A("observe-program-not-opened", "observe", "TestObserveProgramNotOpenedIsAnError",
+  r'''if _, err := os.Stat(filepath.Join(sysroot, filepath.FromSlash(program))); err != nil {''', r'''if _, err := os.Stat(filepath.Join(sysroot, filepath.FromSlash(program))); err != nil && false {''')
+A("observe-ports-sorted", "observe", "TestObserveProbesInTheOrderOfThePorts",
+  r'''sort.Ints(ports)''', r'''sort.Ints(nil)''')
+A("observe-prober-other-host", "observe", "TestHTTPProberDoesNotFollowARedirectToAnotherHost",
+  r'''req.URL.Hostname() != via[0].URL.Hostname() ||''', r'''false ||''')
+A("observe-prober-ten-requests", "observe", "TestHTTPProberStopsAtTenRequests",
+  r'''len(via) >= 10''', r'''len(via) >= 11''')
+# trace
+A("trace-openat2-flags-position", "trace", "TestCreatedPathsOpenat2FlagPositions",
+  r'''s = s[at+len("flags="):]''', r'''s = s[at+len("flags=")-1:]''')
+A("trace-insysroot-forty-links", "trace", "TestInSysrootFollowsFortyLinks",
+  r'''if links > 40 {''', r'''if links >= 40 {''')
+A("trace-insysroot-forty-first-link", "trace", "TestInSysrootStopsAtTheFortyFirstLink",
+  r'''if links > 40 {''', r'''if links > 41 {''')
+# docker
+A("docker-tail-writer-keeps-whole-write", "docker", "TestTailWriterExactMax",
+  r'''t.buf = append(t.buf[:0], p[len(p)-t.max:]...)''', r'''t.buf = append(t.buf[:0], p...)''')
+A("docker-ip-address-network-order", "docker", "TestIPAddressNetworkOrder",
+  r'''sort.Strings(names)''', r'''sort.Strings(nil)''')
+# cmd
+A("cmd-remote-context-url", "cmd", "TestRemoteBuildContextIsRefused",
+  r'''strings.Contains(ctxDir, "://") ||''', r'''false ||''')
+A("cmd-remote-context-git", "cmd", "TestRemoteBuildContextIsRefused",
+  r'''|| strings.HasPrefix(ctxDir, "git@")''', r'''''')
+A("cmd-binds-only-bind-type", "cmd", "TestOnlyBindVolumesWithASourceReachTheObservation",
+  r'''v.Type != "bind" || v.Source == ""''', r'''v.Source == ""''')
+A("cmd-binds-need-a-source", "cmd", "TestOnlyBindVolumesWithASourceReachTheObservation",
+  r'''v.Type != "bind" || v.Source == "" ||''', r'''v.Type != "bind" ||''')
+A("cmd-depends-on-missing-service", "cmd", "TestDependsOnMissingServiceIsAnError",
+  r'''if p.Service(d.Service) == nil {''', r'''if false && p.Service(d.Service) == nil {''')
+A("cmd-sysroot-of-failed-observation", "cmd", "TestSysrootOfAnObservationThatFailedIsRemoved",
+  r'''if si.Observed != nil && si.Observed.Sysroot != "" {''', r'''if err == nil && si.Observed != nil && si.Observed.Sysroot != "" {''')
+A("cmd-dockerfile-default-name", "cmd", "TestDockerfileDefaultNameIsAppWhenTheFolderCleansToNothing",
+  r'''name = "app"''', r'''name = "x"''')
+A("cmd-empty-output-flag", "cmd", "TestEmptyOutputFlagIsAnError",
+  r'''if o.out == "" {''', r'''if false && o.out == "" {''')
+
 
 def main():
     if sys.argv[1] == "list":
