@@ -113,15 +113,23 @@ func Run(args []string) int {
 }
 
 // notifyContext returns a context that ends at the first SIGINT, SIGTERM or
-// SIGHUP. After that first signal the handler is removed, so that a second one
-// ends the process in the default way, even when the cleanup is stuck.
+// SIGHUP. The handler is removed BEFORE the context ends, so that a second
+// signal, which may come at once, ends the process in the default way even
+// when the cleanup is stuck.
 func notifyContext(parent context.Context) (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	ctx, cancel := context.WithCancel(parent)
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		<-ctx.Done()
-		stop()
+		select {
+		case <-ch:
+			signal.Stop(ch)
+			cancel()
+		case <-ctx.Done():
+			signal.Stop(ch)
+		}
 	}()
-	return ctx, stop
+	return ctx, cancel
 }
 
 // newApp is the App that works on this machine.

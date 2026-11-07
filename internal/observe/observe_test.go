@@ -111,8 +111,9 @@ type fakeDocker struct {
 	// notRunning makes Running answer false for every container.
 	notRunning bool
 
-	// waitCode is what the strace container exits with.
-	waitCode int
+	// waitCode is what the strace container exits with; tracedCode what the traced one exits with.
+	waitCode   int
+	tracedCode int
 
 	noLoader bool
 
@@ -211,7 +212,10 @@ func (f *fakeDocker) Running(ctx context.Context, id string) (bool, error) {
 }
 
 func (f *fakeDocker) Wait(ctx context.Context, id string) (int, error) {
-	return f.waitCode, nil
+	if id == tracerID {
+		return f.waitCode, nil
+	}
+	return f.tracedCode, nil
 }
 
 func (f *fakeDocker) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
@@ -1541,7 +1545,7 @@ func TestObserveStoppedEarlyIsReported(t *testing.T) {
 	s := newScene(t)
 	s.o.Env = []string{"PASSWORD=s3cret-pw"}
 	s.d.notRunning = true
-	s.d.waitCode = 3
+	s.d.tracedCode = 3
 	s.d.logs = "first\nsecond\nthird\nfourth s3cret-pw\n"
 	res, err := s.observe(t, context.Background())
 	if err != nil {
