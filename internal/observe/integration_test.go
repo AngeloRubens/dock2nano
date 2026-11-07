@@ -126,8 +126,15 @@ func logSysroot(t *testing.T, files map[string]int64, total int64) {
 func checkNoLeftovers(t *testing.T, before []string, tmp string) {
 	t.Helper()
 	after := containerIDs(t)
-	if !slices.Equal(before, after) {
-		t.Errorf("containers before %v, after %v: Observe left some", before, after)
+	// a container that existed before and is gone now is not ours; one that is new is
+	var added []string
+	for _, id := range after {
+		if !slices.Contains(before, id) {
+			added = append(added, id)
+		}
+	}
+	if len(added) > 0 {
+		t.Errorf("containers before %v, after %v: Observe left %v", before, after, added)
 	}
 	left, err := os.ReadDir(tmp)
 	if err != nil {
