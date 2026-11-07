@@ -5,8 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 WORKDIR /src
 RUN git clone https://github.com/Jakarta-EE-Petclinic/petclinic-jakartaee.git . \
     && git checkout 242b5d79724ba4ce51168b713a814b47c3f6675b
-# Not sure: the glassfish profile may need more than skipping tests.
-RUN chmod +x ./mvnw && ./mvnw -B -q -Pglassfish -DskipTests package
+# mvn and not ./mvnw: the maven image sets MAVEN_CONFIG=/root/.m2, which the
+# wrapper script reads as a build phase ("Unknown lifecycle phase /root/.m2").
+RUN mvn -B -q -Pglassfish -DskipTests package
 # The pom has packaging war and no finalName, so the file is
 # target/petclinic-jakartaee-<version>.war; copy it under a fixed name.
 RUN cp "$(ls target/*.war | head -n 1)" /petclinic.war
