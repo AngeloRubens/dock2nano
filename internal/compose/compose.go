@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -161,6 +162,7 @@ func Parse(data []byte) (*Project, error) {
 	if err := checkSize(&doc); err != nil {
 		return nil, err
 	}
+	applyReset(&doc, map[*yaml.Node]bool{})
 	top, err := entries(doc.Content[0])
 	if err != nil {
 		return nil, err
@@ -329,6 +331,13 @@ func parseCount(n *yaml.Node) (c int, ok bool, err error) {
 	if strings.Contains(v, "$") {
 		return 0, false, nil
 	}
+	if deref(n).Tag == "!!float" {
+		// 2.0 and 1e3 are whole numbers: Compose reads them as integers.
+		f, ferr := strconv.ParseFloat(strings.ReplaceAll(v, "_", ""), 64)
+		if ferr == nil && f == math.Trunc(f) && f >= 0 && f <= math.MaxInt32 {
+			return int(f), true, nil
+		}
+	}
 	// Base 0 as in yaml.v3: 010 is 8, 0x10 is 16 and 1_000 is 1000.
 	c64, err := strconv.ParseInt(strings.ReplaceAll(v, "_", ""), 0, 32)
 	if err != nil || c64 < 0 {
@@ -435,9 +444,6 @@ func parseEnv(n *yaml.Node, s *Service, label string) ([]EnvVar, error) {
 			return nil, err
 		}
 		for _, e := range es {
-			if isReset(e.val) {
-				continue // !reset removes the variable
-			}
 			if isExtension(e.key) {
 				s.Unknown = append(s.Unknown, label+"."+e.key+" (Compose reads it as an extension and drops it)")
 			}
@@ -472,6 +478,9 @@ func parseEnv(n *yaml.Node, s *Service, label string) ([]EnvVar, error) {
 func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 	d := deref(n)
 	if d.Kind == yaml.ScalarNode {
+		if d.Value == "" {
+			return nil, errAt(d, "env_file path is empty")
+		}
 		return stringOrList(d)
 	}
 	if d.Kind != yaml.SequenceNode {
@@ -512,6 +521,9 @@ func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 		p, err := scalar(c)
 		if err != nil {
 			return nil, err
+		}
+		if p == "" {
+			return nil, errAt(deref(c), "env_file path is empty")
 		}
 		out = append(out, p)
 	}
