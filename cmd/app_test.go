@@ -699,7 +699,12 @@ func TestOutputAndNextSteps(t *testing.T) {
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert")
 	composePath := filepath.Join(h.dir, "compose.yaml")
-	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/web\n  " + composePath + "\n\nNext steps:\n  ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  ops compose up -f " + composePath + "\n"
+	// the project is named after the folder of the compose file
+	pkg := strings.ToLower(filepath.Base(h.dir)) + "_web"
+	if got := h.wrote[0].Services[0].PackageName; got != pkg {
+		t.Fatalf("package name %q, want %q", got, pkg)
+	}
+	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/" + pkg + "\n  " + composePath + "\n\nNext steps:\n  ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  ops compose up -f " + composePath + "\n"
 	if h.stdout.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", h.stdout, want)
 	}
