@@ -100,7 +100,7 @@ func TestWrapCommand(t *testing.T) {
 	got := WrapCommand(TraceMount, "ld-musl-x86_64.so.1", argv)
 	want := []string{
 		"/.ops-trace/out/ld-musl-x86_64.so.1", "--library-path", "/.ops-trace/out", "/.ops-trace/out/strace",
-		"-f", "-q", "-s", "4096", "-e", "trace=file", "-e", "signal=none",
+		"-f", "-q", "-s", "4096", "-e", "trace=%file,fchdir,clone,clone3,fork,vfork", "-e", "signal=none",
 		"-o", "/.ops-trace/files", "--",
 		"/usr/sbin/nginx", "-g",
 	}
@@ -114,6 +114,15 @@ func TestWrapCommand(t *testing.T) {
 	other := WrapCommand("/x", "ld", nil)
 	if other[0] != "/x/out/ld" || other[len(other)-1] != "--" || len(other) != 15 {
 		t.Errorf("WrapCommand with another mount = %q", other)
+	}
+	as := WrapCommandAs(TraceMount, "ld", "nginx", []string{"/usr/sbin/nginx"})
+	wantAs := []string{
+		"/.ops-trace/out/ld", "--library-path", "/.ops-trace/out", "/.ops-trace/out/strace",
+		"-f", "-q", "-s", "4096", "-e", "trace=%file,fchdir,clone,clone3,fork,vfork", "-e", "signal=none",
+		"-o", "/.ops-trace/files", "-u", "nginx", "--", "/usr/sbin/nginx",
+	}
+	if !reflect.DeepEqual(as, wantAs) {
+		t.Errorf("WrapCommandAs = %q, want %q", as, wantAs)
 	}
 	if StraceImage != "alpine:3.20" {
 		t.Errorf("StraceImage = %q", StraceImage)
@@ -161,6 +170,7 @@ func TestResultOf(t *testing.T) {
 		{`, O_RDONLY <unfinished ...>`, "", false},
 		{`) = 0 `, "0", true},
 		{`) = ?`, "?", true},
+		{`)                    = 0`, "0", true},
 		{`, "x) = y", 1) = 7`, "7", true},
 	}
 	for _, tt := range tests {
@@ -507,6 +517,7 @@ func TestInterpreterOf(t *testing.T) {
 		"empty":        {},
 		"late-bang":    []byte("\n#!/bin/sh\n"),
 		"bang-in-text": []byte(" #!/bin/sh\n"),
+		"crlf":         []byte("#!/bin/sh\r\necho hi\r\n"),
 	}
 	for name, data := range files {
 		writeFile(t, root, name, data)
@@ -526,6 +537,7 @@ func TestInterpreterOf(t *testing.T) {
 		"empty":        "",
 		"late-bang":    "",
 		"bang-in-text": "",
+		"crlf":         "/bin/sh\r",
 		"missing":      "",
 	}
 	for name, want := range tests {
@@ -643,6 +655,8 @@ func TestWhereIs(t *testing.T) {
 		{"path of the image", "tool", []string{"HOME=/root", "PATH=/opt/bin:/usr/bin"}, "/opt/bin/tool"},
 		{"not on the default path", "tool", nil, "tool"},
 		{"last PATH wins", "tool", []string{"PATH=/opt/bin", "PATH=/usr/bin"}, "tool"},
+		{"relative with a slash is not searched", "bin/tool", []string{"PATH=/opt"}, "bin/tool"},
+		{"dot slash is not searched", "./server", []string{"PATH=/usr/bin"}, "./server"},
 		{"nowhere", "ghost", []string{"PATH=/usr/bin"}, "ghost"},
 	}
 	for _, tt := range tests {
@@ -692,12 +706,28 @@ func TestFinalProgram(t *testing.T) {
 10  execve("/usr/sbin/nginx", ["nginx", "-g", "daemon off;"], 0x55 /* 8 vars */) = 0
 10  openat(AT_FDCWD, "/etc/nginx/nginx.conf", O_RDONLY) = 4
 `, "10", "/usr/sbin/nginx", 6, true},
+		{"a helper started by the program does not beat it", `1     execve("/opt/java/bin/java", ["java", "-jar", "es.jar"], 0x7ffd /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f1) = 7
+7     execve("/opt/es/controller", ["controller"], 0x7ffd /* 5 vars */) = 0
+`, "1", "/opt/java/bin/java", 0, true},
+		{"every running process is a child: the oldest", `1     execve("/bin/a", ["a"], 0x7ffd /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=SIGCHLD, child_tidptr=0x7f1) = 7
+7     execve("/bin/b", ["b"], 0x7ffd /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=SIGCHLD, child_tidptr=0x7f1) = 1
+`, "1", "/bin/a", 0, true},
+		{"a thread that execs hands the program to its process", `7     execve("/bin/sh", ["sh"], 0x7ffd /* 5 vars */) = 0
+7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
+[pid     8] +++ superseded by execve in pid 7 +++
+[pid     7] <... execve resumed>) = 0
+`, "7", "/srv/go", 2, true},
 		{"a later tool that exited is not the program", `20  execve("/bin/sh", ["sh", "-c", "x"], 0x1 /* 1 var */) = 0
 20  clone(child_stack=NULL, flags=SIGCHLD) = 21
 [pid  21] execve("/usr/bin/server", ["server"], 0x1 /* 1 var */) = 0
 20  clone(child_stack=NULL, flags=SIGCHLD) = 22
 [pid  22] execve("/bin/true", ["true"], 0x1 /* 1 var */) = 0
 [pid  22] +++ exited with 0 +++
+20  +++ exited with 0 +++
 `, "21", "/usr/bin/server", 2, true},
 		{"nothing running: the last one started", `30  execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
 30  +++ exited with 0 +++
@@ -713,6 +743,7 @@ func TestFinalProgram(t *testing.T) {
 [pid  11] execve("/usr/bin/server", ["server"], 0x1 /* 1 var */ <unfinished ...>
 10  openat(AT_FDCWD, "/etc/x", O_RDONLY) = 3
 [pid  11] <... execve resumed>) = 0
+10  +++ exited with 0 +++
 `, "11", "/usr/bin/server", 2, true},
 		{"unfinished execve never resumed counts", `30  execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
 30  execve("/bin/b", ["b"], 0x1 /* 1 var */ <unfinished ...>
@@ -746,10 +777,11 @@ func TestSplitNul(t *testing.T) {
 		raw  string
 		want []string
 	}{
-		{"a\x00b\x00\x00c\x00", []string{"a", "b", "c"}},
+		{"a\x00\x00b\x00", []string{"a", "", "b"}},
+		{"a\x00b\x00\x00c\x00", []string{"a", "b", "", "c"}},
 		{"/usr/sbin/nginx\x00-g\x00daemon off;\x00", []string{"/usr/sbin/nginx", "-g", "daemon off;"}},
 		{"no-terminator", []string{"no-terminator"}},
-		{"\x00", nil},
+		{"\x00", []string{""}},
 		{"", nil},
 	}
 	for _, tt := range tests {
@@ -800,5 +832,181 @@ func TestConfigurationFiles(t *testing.T) {
 	}
 	if got := ConfigurationFiles(filepath.Join(root, "does-not-exist")); got != nil {
 		t.Errorf("ConfigurationFiles(missing) = %q, want nil", got)
+	}
+}
+
+func TestTouchedPathsFromLineZero(t *testing.T) {
+	trace := `1     execve("/bin/sh", ["sh"], 0x7ffd /* 5 vars */) = 0
+1     chdir("/app") = 0
+1     execve("./srv", ["./srv"], 0x7ffd /* 5 vars */) = 0
+1     openat(AT_FDCWD, "conf/a.conf", O_RDONLY) = 3
+1     chdir("/") = 0
+`
+	paths, executed := TouchedPaths([]byte(trace), "/", 2)
+	if want := []string{"/app/conf/a.conf", "/app/srv"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+	if want := []string{"/app/srv"}; !reflect.DeepEqual(executed, want) {
+		t.Errorf("executed = %q, want %q", executed, want)
+	}
+
+	// the clone before from hands the directory to the child
+	trace = `1     chdir("/app") = 0
+1     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f1) = 2
+[pid     2] fchdir(5)                    = 0
+[pid     2] chdir("/data") = 0
+[pid     2] openat(AT_FDCWD, "x", O_RDONLY) = 3
+[pid     1] openat(AT_FDCWD, "y", O_RDONLY) = 3
+`
+	paths, _ = TouchedPaths([]byte(trace), "/", 3)
+	if want := []string{"/app/y", "/data", "/data/x"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+}
+
+func TestTouchedPathsSuperseded(t *testing.T) {
+	trace := `7     chdir("/srv") = 0
+7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
+[pid     8] +++ superseded by execve in pid 7 +++
+[pid     7] <... execve resumed>) = -1 ENOENT (No such file or directory)
+[pid     7] openat(AT_FDCWD, "a.conf", O_RDONLY) = 3
+`
+	paths, executed := TouchedPaths([]byte(trace), "/", 0)
+	if want := []string{"/srv", "/srv/a.conf"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+	if executed != nil {
+		t.Errorf("executed = %q, want none (the resumed line failed)", executed)
+	}
+
+	// the thread had chdir'd on its own before it handed over
+	trace = `7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_THREAD, tls=0x7f1) = 8
+[pid     8] chdir("/other") = 0
+[pid     8] +++ superseded by execve in pid 7 +++
+[pid     7] openat(AT_FDCWD, "b.conf", O_RDONLY) = 3
+`
+	paths, _ = TouchedPaths([]byte(trace), "/", 0)
+	if want := []string{"/other", "/other/b.conf"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+}
+
+func TestCreatedPaths(t *testing.T) {
+	trace := `1     execve("/bin/sh", ["sh"], 0x7ffd /* 5 vars */) = 0
+1     openat(AT_FDCWD, "/early/log", O_WRONLY|O_CREAT|O_APPEND, 0666) = 3
+1     chdir("/run") = 0
+1     openat(AT_FDCWD, "nginx.pid", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 4
+1     openat(AT_FDCWD, "/etc/nginx.conf", O_RDONLY) = 5
+1     openat(AT_FDCWD, "/var/log/error.log", O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC, 0644) = 6
+1     open("/tmp/t", O_RDWR|O_TRUNC) = 7
+1     open("/tmp/ro", O_RDONLY|O_TRUNC) = 8
+1     openat(AT_FDCWD, "/var/log/error.log", O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC, 0644) = 6
+1     openat(AT_FDCWD, "/fail/x", O_WRONLY|O_CREAT, 0644) = -1 EACCES (Permission denied)
+[pid     2] openat(AT_FDCWD, "/slow/y", O_WRONLY|O_CREAT <unfinished ...>
+1     creat("/tmp/c", 0644) = 9
+1     openat2(AT_FDCWD, "/tmp/o2", {flags=O_RDWR|O_CREAT, mode=0644, resolve=0}, 24) = 10
+1     openat(5, "relative", O_WRONLY|O_CREAT, 0644) = 11
+`
+	got := CreatedPaths([]byte(trace), "/", 2)
+	want := []string{"/run/nginx.pid", "/slow/y", "/tmp/c", "/tmp/o2", "/tmp/t", "/var/log/error.log"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CreatedPaths = %q, want %q", got, want)
+	}
+	if got := CreatedPaths(nil, "/", 0); got != nil {
+		t.Errorf("CreatedPaths(nil) = %q, want nil", got)
+	}
+}
+
+func TestUnescapeStrace(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`/x\33y`, "/x\x1by"},
+		{`/x\1`, "/x\x01"},
+		{`/x\0001`, "/x\x001"},
+		{`/x\1234`, "/xS4"},
+		{`a\x41b`, "aAb"},
+		{`a\xfz`, "a\x0fz"},
+		{`a\xz`, `a\xz`},
+		{`a\tb\nc\\d\"e`, "a\tb\nc\\d\"e"},
+		{`a\qb`, `a\qb`},
+	}
+	for _, tt := range tests {
+		if got := unescape(tt.in); got != tt.want {
+			t.Errorf("unescape(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+	name, _, _, ok := FirstQuoted(`AT_FDCWD, "/x\33y", O_RDONLY) = 3`)
+	if !ok || name != "/x\x1by" {
+		t.Errorf("FirstQuoted with a short octal escape = %q, %v", name, ok)
+	}
+}
+
+func TestFinalExec(t *testing.T) {
+	tests := []struct {
+		name  string
+		trace string
+		want  Exec
+		found bool
+	}{
+		{"nginx", `1     execve("/usr/sbin/nginx", ["nginx", "-g", "daemon off;"], 0x7ffd1 /* 5 vars */) = 0
+1     openat(AT_FDCWD, "/etc/nginx/nginx.conf", O_RDONLY) = 3
+`, Exec{Pid: "1", Path: "/usr/sbin/nginx", Argv: []string{"nginx", "-g", "daemon off;"}, Line: 0}, true},
+		{"argv[0] differs from the path, escapes and commas", `12    execve("/bin/busybox", ["sh", "-c", "echo \"a, b\"\tx\33", ""], 0x7ffd1 /* 2 vars */) = 0
+`, Exec{Pid: "12", Path: "/bin/busybox", Argv: []string{"sh", "-c", "echo \"a, b\"\tx\x1b", ""}, Line: 0}, true},
+		{"string cut by -s and a closing bracket inside a string", `5     execve("/x", ["x", "ab]c"..., "d"], 0x7ffd1 /* 2 vars */) = 0
+`, Exec{Pid: "5", Path: "/x", Argv: []string{"x", "ab]c", "d"}, Line: 0}, true},
+		{"cut in two keeps the argv of the first half", `[pid    11] execve("/usr/bin/server", ["server", "--port", "80"], 0x7ffd1 /* 3 vars */ <unfinished ...>
+[pid    10] openat(AT_FDCWD, "/etc/x", O_RDONLY) = 3
+[pid    11] <... execve resumed>) = 0
+`, Exec{Pid: "11", Path: "/usr/bin/server", Argv: []string{"server", "--port", "80"}, Line: 0}, true},
+		{"no array printed", `5     execve("/x", 0x7ffd1, 0x7ffd2 /* 2 vars */) = 0
+`, Exec{Pid: "5", Path: "/x", Line: 0}, true},
+		{"nothing", ``, Exec{Line: -1}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := FinalExec([]byte(tt.trace))
+			if !reflect.DeepEqual(got, tt.want) || found != tt.found {
+				t.Errorf("FinalExec = %+v, %v; want %+v, %v", got, found, tt.want, tt.found)
+			}
+		})
+	}
+}
+
+func TestCopyHostFileDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "run/inner", []byte("x"))
+	if err := CopyHostFile(root, "/run", "/var/run"); err != nil {
+		t.Fatalf("CopyHostFile of a directory = %v, want nil", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "var/run"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("/var/run = %v, %v; want a directory", info, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, "var/run")); len(entries) != 0 {
+		t.Errorf("the alias of a directory is not empty: %v", entries)
+	}
+}
+
+func TestInSysrootLoopStaysInside(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "usr/bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("pong", filepath.Join(root, "usr/bin/ping")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("ping", filepath.Join(root, "usr/bin/pong")); err != nil {
+		t.Fatal(err)
+	}
+	got := InSysroot(root, "/usr/bin/ping/../../../../../../../../etc/passwd")
+	if got != "/etc/passwd" {
+		t.Errorf("InSysroot after the link limit = %q, want /etc/passwd", got)
+	}
+	if joined := filepath.Join(root, got); !strings.HasPrefix(joined, root+string(filepath.Separator)) {
+		t.Errorf("%q leaves the sysroot %q", joined, root)
 	}
 }
