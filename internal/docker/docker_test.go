@@ -1093,3 +1093,68 @@ func TestIPAddressErrors(t *testing.T) {
 		t.Errorf("runner error lost: %v", err)
 	}
 }
+
+func TestTailWriterExactMax(t *testing.T) {
+	w := &tailWriter{max: 8}
+	p := []byte("12345678")
+	if n, err := w.Write(p); n != 8 || err != nil {
+		t.Fatalf("Write = %d, %v", n, err)
+	}
+	p[0] = 'X'
+	if got := string(w.Bytes()); got != "12345678" {
+		t.Fatalf("after a write of exactly max bytes: %q, want 12345678 (a copy of the write)", got)
+	}
+	// data already there is dropped completely by a write of max bytes
+	w = &tailWriter{max: 8}
+	w.Write([]byte("abc"))
+	if n, err := w.Write([]byte("ABCDEFGH")); n != 8 || err != nil {
+		t.Fatalf("Write = %d, %v", n, err)
+	}
+	if got := string(w.Bytes()); got != "ABCDEFGH" {
+		t.Fatalf("exact max after data: %q, want ABCDEFGH", got)
+	}
+	// two writes that add up to max are kept whole, one more byte drops the first
+	w = &tailWriter{max: 8}
+	w.Write([]byte("12345"))
+	w.Write([]byte("678"))
+	if got := string(w.Bytes()); got != "12345678" {
+		t.Fatalf("filled to max: %q, want 12345678", got)
+	}
+	w.Write([]byte("9"))
+	if got := string(w.Bytes()); got != "23456789" {
+		t.Fatalf("one byte over max: %q, want 23456789", got)
+	}
+	// one byte more than max in a single write keeps the last max bytes
+	w = &tailWriter{max: 8}
+	w.Write([]byte("123456789"))
+	if got := string(w.Bytes()); got != "23456789" {
+		t.Fatalf("max+1 in one write: %q, want 23456789", got)
+	}
+}
+
+func TestIPAddressNetworkOrder(t *testing.T) {
+	// More networks than a lucky map order would hide: the first name in sort order
+	// that has an address is chosen, whatever order the map is read in.
+	tests := map[string]struct {
+		json string
+		want string
+	}{
+		"all have an address": {
+			`{"IPAddress":"","Networks":{"n2":{"IPAddress":"10.0.2.2"},"n10":{"IPAddress":"10.0.10.2"},"zeta":{"IPAddress":"10.0.99.2"},"mid":{"IPAddress":"10.0.50.2"},"alpha2":{"IPAddress":"10.0.3.2"},"alpha10":{"IPAddress":"10.0.4.2"}}}`,
+			"10.0.4.2",
+		},
+		"the first ones have none": {
+			`{"IPAddress":"","Networks":{"n2":{"IPAddress":"10.0.2.2"},"n10":{"IPAddress":"10.0.10.2"},"zeta":{"IPAddress":"10.0.99.2"},"mid":{"IPAddress":"10.0.50.2"},"alpha2":{"IPAddress":""},"alpha10":{"IPAddress":""}}}`,
+			"10.0.50.2",
+		},
+	}
+	for name, tt := range tests {
+		for i := 0; i < 30; i++ {
+			c, _ := newFake(reply{stdout: tt.json})
+			got, err := c.IPAddress(context.Background(), "c1")
+			if err != nil || got != tt.want {
+				t.Fatalf("%s (try %d): got %q, %v, want %q", name, i, got, err, tt.want)
+			}
+		}
+	}
+}

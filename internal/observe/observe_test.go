@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1203,4 +1205,79 @@ func TestObserveBindMountedFileAndDirectoryAreCarried(t *testing.T) {
 	}
 	equal(t, "stopped", s.d.tarStopped, map[string]bool{"/www/sub": true})
 	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
+func TestObserveProgramWithoutASlashIsFoundOnThePath(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"app", ["app", "--serve"]`, 1)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/opt/bin/app", O_RDONLY) = 8` + "\n"
+	s.d.files["/opt/bin/app"] = entry{data: "real", mode: 0755}
+	s.d.exec["cat /proc/11/environ"] = "A=1\x00PATH=/opt/bin:/usr/bin\x00"
+	// no answer for the executable: only the PATH of the program can tell where it is
+	delete(s.d.exec, "readlink /proc/11/exe")
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/opt/bin/app")
+	equal(t, "argv", res.Argv, []string{"app", "--serve"})
+}
+
+func TestObserveProgramNotOpenedIsAnError(t *testing.T) {
+	s := newScene(t)
+	delete(s.d.files, "/usr/bin/app")
+	_, err := s.observe(t, context.Background())
+	want := "observe: img:1 did not open /usr/bin/app: say it with --file"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+func TestObserveProbesInTheOrderOfThePorts(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"8080/tcp", "443/tcp", "80/tcp"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "urls", s.probe.urls, []string{"http://172.17.0.2:80/", "http://172.17.0.2:443/", "http://172.17.0.2:8080/"})
+	equal(t, "exposed ports", res.ExposedPorts, []int{80, 443, 8080})
+}
+
+func TestHTTPProberDoesNotFollowARedirectToAnotherHost(t *testing.T) {
+	var other atomic.Int32
+	l, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("no second loopback address: %v", err)
+	}
+	far := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other.Add(1) }))
+	far.Listener.Close()
+	far.Listener = l
+	far.Start()
+	defer far.Close()
+	var first atomic.Int32
+	near := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		first.Add(1)
+		http.Redirect(w, r, far.URL+"/", http.StatusFound)
+	}))
+	defer near.Close()
+	if err := (httpProber{}).Get(context.Background(), near.URL+"/"); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "requests to the first server", first.Load(), int32(1))
+	equal(t, "requests to the other host", other.Load(), int32(0))
+}
+
+func TestHTTPProberStopsAtTenRequests(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) < 50 {
+			http.Redirect(w, r, "/again", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/"); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "requests made to a server that always redirects to itself", hits.Load(), int32(10))
 }
