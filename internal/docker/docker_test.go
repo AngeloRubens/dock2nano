@@ -586,6 +586,53 @@ func TestExportStreams(t *testing.T) {
 	}
 }
 
+func TestCopyTarBuffered(t *testing.T) {
+	c, f := newFake(reply{stdout: "TARDATA"})
+	var buf bytes.Buffer
+	if err := c.CopyTar(context.Background(), "c1", "/usr/bin/app", &buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "TARDATA" {
+		t.Fatalf("written = %q", buf.String())
+	}
+	wantCall(t, f, "cp", "c1:/usr/bin/app", "-")
+
+	c, _ = newFake(reply{stderr: "Error: No such container:path", err: errors.New("x")})
+	err := c.CopyTar(context.Background(), "c1", "/nope", &buf)
+	if err == nil || !strings.Contains(err.Error(), "docker cp") || !strings.Contains(err.Error(), "No such container:path") {
+		t.Fatalf("err = %v", err)
+	}
+
+	c, _ = newFake(reply{stdout: "TAR"})
+	err = c.CopyTar(context.Background(), "c1", "/etc", failWriter{})
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCopyTarStreams(t *testing.T) {
+	s := &streamFake{data: "STREAMED"}
+	var buf bytes.Buffer
+	if err := New(s).CopyTar(context.Background(), "c1", "/etc", &buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "STREAMED" {
+		t.Fatalf("written = %q", buf.String())
+	}
+	if len(s.calls) != 0 {
+		t.Fatalf("Run was used instead of Stream: %v", s.calls)
+	}
+	if !reflect.DeepEqual(s.streamed, [][]string{{"cp", "c1:/etc", "-"}}) {
+		t.Fatalf("streamed = %q", s.streamed)
+	}
+
+	s = &streamFake{err: errors.New("pipe broke")}
+	err := New(s).CopyTar(context.Background(), "c1", "/etc", &buf)
+	if err == nil || !strings.Contains(err.Error(), "docker cp") || !strings.Contains(err.Error(), "pipe broke") || !strings.Contains(err.Error(), "streamerr") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestExecRunner(t *testing.T) {
 	ctx := context.Background()
 	r := NewExecRunner("sh")
@@ -879,6 +926,7 @@ func TestOptionLikeArgumentsAreRefused(t *testing.T) {
 		"execuser user": func() error { _, err := c.ExecUser(ctx, "c1", "-root", []string{"true"}); return err },
 		"ip":            func() error { _, err := c.IPAddress(ctx, "-x"); return err },
 		"cp":            func() error { return c.CopyFrom(ctx, "-x", "/etc", "out") },
+		"cptar":         func() error { return c.CopyTar(ctx, "-x", "/etc", &buf) },
 		"logs":          func() error { _, err := c.Logs(ctx, "-x"); return err },
 		"logs tail":     func() error { _, err := c.LogsTail(ctx, "-x", 5); return err },
 		"export":        func() error { return c.Export(ctx, "-x", &buf) },
@@ -911,6 +959,8 @@ func TestEmptyArgumentsAreRefused(t *testing.T) {
 		"execuser cmd":  func() error { _, err := c.ExecUser(ctx, "c1", "root", nil); return err },
 		"ip":            func() error { _, err := c.IPAddress(ctx, ""); return err },
 		"cp id":         func() error { return c.CopyFrom(ctx, "", "/etc", "out") },
+		"cptar id":      func() error { return c.CopyTar(ctx, "", "/etc", &buf) },
+		"cptar path":    func() error { return c.CopyTar(ctx, "c1", "", &buf) },
 		"logs":          func() error { _, err := c.Logs(ctx, ""); return err },
 		"logs tail":     func() error { _, err := c.LogsTail(ctx, "", 5); return err },
 		"logs neg":      func() error { _, err := c.LogsTail(ctx, "c1", -1); return err },

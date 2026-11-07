@@ -795,6 +795,38 @@ func (c *Client) CopyFrom(ctx context.Context, id, containerPath, hostDir string
 	return err
 }
 
+// CopyTar runs docker cp id:containerPath - and writes the tar stream to w.
+// The stream holds the path itself (one entry named after the last element of
+// the path, with its mode and, for a link, its target) and, for a directory,
+// everything under it; a path that docker cannot represent in a tar, such as a
+// socket, gives an empty stream. It streams when the Runner is a Streamer, so
+// a writer that returns an error stops the command: that is how a caller that
+// needs only the first header ends the copy early.
+func (c *Client) CopyTar(ctx context.Context, id, containerPath string, w io.Writer) error {
+	if err := checkArg("docker cp", "container id", id); err != nil {
+		return err
+	}
+	if containerPath == "" {
+		return errors.New("docker cp: no container path given")
+	}
+	args := []string{"cp", id + ":" + containerPath, "-"}
+	if s, ok := c.r.(Streamer); ok {
+		stderr, err := s.Stream(ctx, w, args...)
+		if err != nil {
+			return wrap("docker cp", err, stderr)
+		}
+		return nil
+	}
+	stdout, stderr, err := c.r.Run(ctx, nil, args...)
+	if err != nil {
+		return wrap("docker cp", err, stderr)
+	}
+	if _, err := w.Write(stdout); err != nil {
+		return fmt.Errorf("docker cp: %w", err)
+	}
+	return nil
+}
+
 // Logs returns the output of the container: its stdout followed by its
 // stderr, since docker logs writes each stream to the matching stream.
 func (c *Client) Logs(ctx context.Context, id string) ([]byte, error) {

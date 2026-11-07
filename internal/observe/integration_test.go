@@ -37,6 +37,20 @@ func randomSuffix(t *testing.T) string {
 	return hex.EncodeToString(b)
 }
 
+// keepTrace is where the raw strace output of a run goes when OBSERVE_TRACE_DIR is set (the
+// workflow uploads that directory), and "" otherwise.
+func keepTrace(t *testing.T, name string) string {
+	t.Helper()
+	dir := os.Getenv("OBSERVE_TRACE_DIR")
+	if dir == "" {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, name+".strace")
+}
+
 // containerIDs lists all containers, running or not.
 func containerIDs(t *testing.T) []string {
 	t.Helper()
@@ -132,10 +146,11 @@ func TestObserveNginx(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	res, err := observe.Observe(ctx, docker.Default(), observe.Options{
-		Image:   "nginx:1.27-alpine",
-		Pull:    true,
-		Seconds: 30,
-		Log:     t.Logf,
+		Image:     "nginx:1.27-alpine",
+		Pull:      true,
+		Seconds:   30,
+		Log:       t.Logf,
+		KeepTrace: keepTrace(t, "nginx"),
 	})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
@@ -227,7 +242,7 @@ func TestObserveEntrypointScript(t *testing.T) {
 
 	tmp := privateTemp(t)
 	before := containerIDs(t)
-	res, err := observe.Observe(ctx, c, observe.Options{Image: tag, Seconds: 30, Log: t.Logf})
+	res, err := observe.Observe(ctx, c, observe.Options{Image: tag, Seconds: 30, Log: t.Logf, KeepTrace: keepTrace(t, "entrypoint-script")})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
