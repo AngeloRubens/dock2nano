@@ -152,8 +152,8 @@ services:
       - db
 `
 
-const itDBDockerfile = `FROM alpine:3.20
-RUN apk add --no-cache mariadb-client
+const itDBDockerfile = `FROM mysql:8.4
+ENTRYPOINT []
 CMD ["sh","-c","mysql -h db -uroot -psecret -e 'select 1' app && echo connected && sleep 60"]
 `
 
