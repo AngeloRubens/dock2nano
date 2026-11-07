@@ -728,3 +728,10 @@ func TestResetRemovesEnvironmentVariable(t *testing.T) {
 		t.Errorf("environment %+v", got)
 	}
 }
+
+func TestMergeTagWithOtherValue(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    !!merge foo: bar\n")
+	if got := p.Services[0].Unknown; !reflect.DeepEqual(got, []string{"foo"}) {
+		t.Errorf("unknown %v", got)
+	}
+}
