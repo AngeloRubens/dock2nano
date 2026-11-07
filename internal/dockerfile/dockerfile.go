@@ -4,14 +4,17 @@
 // The parser keeps what the converter needs as typed fields and records every
 // instruction or option it does not model in Unknown, so that nothing is
 // dropped in silence. Values are taken as written: ${VAR} references are not
-// interpolated, and a value that holds a $ is listed in Unknown. Quotes and
-// backslash escapes in the words of ENV, ARG, LABEL, EXPOSE, WORKDIR, USER and
-// STOPSIGNAL are removed, as Docker does.
+// interpolated, and a value that holds a variable reference is listed in
+// Unknown. Only a $ that is not escaped and not inside single quotes is a
+// reference: ENV a=\$x and ENV a='$x' are literals. Quotes and escapes in the
+// words of ENV, ARG, LABEL, EXPOSE, VOLUME, WORKDIR, USER, STOPSIGNAL, COPY,
+// ADD and in the options of FROM, COPY, ADD, RUN and HEALTHCHECK are removed,
+// as Docker does; EnvVar.Raw and Arg.RawDefault keep the value as written.
 //
 // A stage inherits nothing in the structs: the Env, WorkDir, User and the
 // other fields of a stage are only what its own instructions say. When the
 // Base of a stage is the name of an earlier stage, the caller resolves it with
-// File.Stage and merges the settings itself.
+// File.BaseStage and merges the settings itself.
 package dockerfile
 
 import (
@@ -43,9 +46,28 @@ func (f *File) Final() *Stage {
 	return f.Stages[len(f.Stages)-1]
 }
 
+// BaseStage returns the earlier stage that s builds on, that is, the stage
+// declared before s whose AS name is the Base of s (compared without regard to
+// case). It returns nil if the Base of s is an image: a name that is the name
+// of s itself ("FROM nginx AS nginx"), the name of a later stage, or a number
+// is an image, as in Docker. It does not read stage numbers.
+func (f *File) BaseStage(s *Stage) *Stage {
+	for _, prev := range f.Stages {
+		if prev == s {
+			return nil
+		}
+		if prev.Name != "" && strings.EqualFold(prev.Name, s.Base) {
+			return prev
+		}
+	}
+	return nil
+}
+
 // Stage returns the stage with the given AS name (compared without regard to
 // case) or, if there is none, the stage at the given index written in
-// decimal, such as "0". It returns nil if neither exists.
+// decimal, such as "0". It returns nil if neither exists. It is for the value
+// of COPY --from and for build targets, where a number is a stage index; do
+// not use it for the Base of a stage, use BaseStage.
 func (f *File) Stage(nameOrIndex string) *Stage {
 	for _, s := range f.Stages {
 		if s.Name != "" && strings.EqualFold(s.Name, nameOrIndex) {
@@ -78,10 +100,19 @@ type Stage struct {
 	WorkDir string
 	// User is the last USER.
 	User string
-	// Entrypoint is the last ENTRYPOINT.
+	// Entrypoint is the last ENTRYPOINT of this stage. In an image, an
+	// ENTRYPOINT in a stage clears the CMD inherited from the base unless the
+	// same stage sets a CMD (Cmd.Set); the caller that merges stages applies
+	// that. The SHELL of the base stage applies to a shell-form Entrypoint
+	// and Cmd of this stage.
 	Entrypoint Command
-	// Cmd is the last CMD.
+	// Cmd is the last CMD of this stage; see Entrypoint for what it inherits.
 	Cmd Command
+	// CmdLine, EntrypointLine and HealthcheckLine are the lines of the last
+	// CMD, ENTRYPOINT and HEALTHCHECK, 0 if the stage has none.
+	CmdLine         int
+	EntrypointLine  int
+	HealthcheckLine int
 	// Shell is the last SHELL, nil if there is none.
 	Shell []string
 	// Expose are the EXPOSE values as written: "80", "80/tcp", "8000-8010/udp".
@@ -113,6 +144,7 @@ func (s *Stage) Environ() []EnvVar {
 	for _, e := range s.Env {
 		if i, ok := index[e.Name]; ok {
 			out[i].Value = e.Value
+			out[i].Raw = e.Raw
 			continue
 		}
 		index[e.Name] = len(out)
@@ -135,12 +167,17 @@ type Command struct {
 type EnvVar struct {
 	Name  string
 	Value string
+	// Raw is the value as written, before quotes and escapes were removed.
+	Raw string
 }
 
 // Arg is one ARG. HasDefault tells "ARG a=" (an empty default) from "ARG a".
 type Arg struct {
-	Name       string
-	Default    string
+	Name    string
+	Default string
+	// RawDefault is the default as written, before quotes and escapes were
+	// removed.
+	RawDefault string
 	HasDefault bool
 }
 
@@ -181,11 +218,12 @@ type Healthcheck struct {
 
 // ParseFile reads and parses the Dockerfile at path.
 func ParseFile(path string) (*File, error) {
-	data, err := os.ReadFile(path)
+	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := Parse(strings.NewReader(string(data)))
+	defer fh.Close()
+	f, err := Parse(fh)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

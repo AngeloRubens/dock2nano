@@ -1,2 +1,2 @@
 FROM alpine
-CMD ["a", "b"
+RUN ["a", "b"
