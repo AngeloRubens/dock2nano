@@ -615,7 +615,7 @@ networks:
 }
 
 func TestResetTagIsNull(t *testing.T) {
-	p := mustParse(t, "services:\n  a:\n    image: !reset null\n    ports: !reset []\n")
+	p := mustParse(t, "services:\n  a:\n    image: !reset null\n    ports: !reset [\"80:80\"]\n")
 	if p.Services[0].Image != "" || p.Services[0].Ports != nil {
 		t.Errorf("image %q ports %v", p.Services[0].Image, p.Services[0].Ports)
 	}
@@ -665,7 +665,7 @@ func TestRecursiveAliasIsRefused(t *testing.T) {
 	}
 }
 
-func TestCycleDoesNotHideAmplification(t *testing.T) {
+func TestCycleInsideAnchorIsRefused(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("x-a: &A\n")
 	for i := 0; i < 40000; i++ {
@@ -733,5 +733,41 @@ func TestMergeTagWithOtherValue(t *testing.T) {
 	p := mustParse(t, "services:\n  a:\n    image: x\n    !!merge foo: bar\n")
 	if got := p.Services[0].Unknown; !reflect.DeepEqual(got, []string{"foo"}) {
 		t.Errorf("unknown %v", got)
+	}
+}
+
+func TestResetRemovesEveryKey(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    entrypoint: !reset []\n    ports: !reset [\"80:80\"]\n    depends_on: {db: !reset null}\n    networks: {front: !reset null, back: null}\n    expose: [\"1\", !reset \"2\"]\n")
+	a := p.Services[0]
+	if a.Entrypoint.IsSet() || a.Ports != nil || a.DependsOn != nil || !reflect.DeepEqual(a.Networks, []string{"back"}) || !reflect.DeepEqual(a.Expose, []string{"1"}) {
+		t.Errorf("%+v", a)
+	}
+}
+
+func TestEnvFileEmptyStrings(t *testing.T) {
+	for _, src := range []string{
+		"services:\n  a:\n    image: x\n    env_file: \"\"\n",
+		"services:\n  a:\n    image: x\n    env_file: [\"\"]\n",
+	} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("accepted: %q", src)
+		}
+	}
+}
+
+func TestWholeNumberFloatsAreCounts(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    scale: 2.0\n  b:\n    image: x\n    deploy: {replicas: 1e3}\n")
+	if *p.Services[0].Replicas != 2 || *p.Services[1].Replicas != 1000 {
+		t.Errorf("replicas %d %d", *p.Services[0].Replicas, *p.Services[1].Replicas)
+	}
+	if _, err := Parse([]byte("services:\n  a:\n    image: x\n    scale: 2.5\n")); err == nil {
+		t.Error("2.5 was accepted as a count")
+	}
+}
+
+func TestMergeOfAnAliasedListIsRefused(t *testing.T) {
+	_, err := Parse([]byte("x-l: &l [{image: a}]\nservices:\n  s: {<<: *l}\n"))
+	if err == nil {
+		t.Error("an alias to a list was accepted as a merge")
 	}
 }

@@ -63,9 +63,11 @@ func expand(n *yaml.Node, steps *int) ([]entry, error) {
 				return nil, errAt(k, "key %q appears twice", k.Value)
 			}
 			hasMerge = true
-			srcs := []*yaml.Node{deref(v)}
-			if srcs[0].Kind == yaml.SequenceNode {
-				srcs = srcs[0].Content
+			// A list of mappings is allowed only when written inline; an alias
+			// to a list is not, as in yaml.v3.
+			srcs := []*yaml.Node{v}
+			if v.Kind == yaml.SequenceNode {
+				srcs = v.Content
 			}
 			for _, s := range srcs {
 				es, err := expand(s, steps)
@@ -103,16 +105,12 @@ func expand(n *yaml.Node, steps *int) ([]entry, error) {
 	return out, nil
 }
 
-// isReset reports whether a value carries the Compose "!reset" tag.
-func isReset(n *yaml.Node) bool { return deref(n).Tag == "!reset" }
-
 // isExtension reports whether a key is a Compose extension ("x-...").
 func isExtension(key string) bool { return strings.HasPrefix(key, "x-") }
 
 func isNull(n *yaml.Node) bool {
 	n = deref(n)
-	// "!reset" is the Compose tag that clears a value: it counts as null.
-	return n == nil || (n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Tag == "!reset"))
+	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
 }
 
 func scalar(n *yaml.Node) (string, error) {
@@ -174,6 +172,44 @@ func boolean(n *yaml.Node) (val, ok bool, err error) {
 		return false, true, nil
 	}
 	return false, false, errAt(deref(n), "%q is not a boolean", v)
+}
+
+// applyReset removes, at every level, the mapping pairs and the list items
+// whose value carries the Compose "!reset" tag, as Compose does when it loads
+// a file. It must run on a tree that checkSize has found acyclic.
+func applyReset(n *yaml.Node, seen map[*yaml.Node]bool) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.AliasNode {
+		applyReset(n.Alias, seen)
+		return
+	}
+	if seen[n] {
+		return
+	}
+	seen[n] = true
+	switch n.Kind {
+	case yaml.MappingNode:
+		var kept []*yaml.Node
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i+1].Tag != "!reset" {
+				kept = append(kept, n.Content[i], n.Content[i+1])
+			}
+		}
+		n.Content = kept
+	case yaml.SequenceNode:
+		var kept []*yaml.Node
+		for _, c := range n.Content {
+			if c.Tag != "!reset" {
+				kept = append(kept, c)
+			}
+		}
+		n.Content = kept
+	}
+	for _, c := range n.Content {
+		applyReset(c, seen)
+	}
 }
 
 // maxExpandedNodes bounds how large the file becomes once every alias and

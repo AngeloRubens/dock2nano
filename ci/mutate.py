@@ -18,7 +18,6 @@ M = {
  "volume-modes": ("return out, fmt.Errorf(\"volume %q has the mode %q\", v, m)", "opts = append(opts, m)", "TestShortVolumes"),
  "null-values": ("if modeled[e.key] && isNull(e.val) {", "if false {", "TestNullValuesAreEmpty"),
  "multi-document": ("if err := dec.Decode(&next); err != io.EOF {", "if err := dec.Decode(&next); false && err != io.EOF {", "TestErrors"),
- "reset-tag": (" || n.Tag == \"!reset\"", "", "TestResetTagIsNull"),
  "port-protocol": ("return p == \"tcp\" || p == \"udp\" || p == \"sctp\"", "return true", "TestShortPorts|TestLongPortProtocolIsChecked"),
  "port-double-slash": ("if strings.Contains(rest, \"/\") {", "if false {", "TestShortPorts"),
  "ipv6-colon": ("!strings.HasPrefix(rest[j+1:], \":\")", "false", "TestShortPorts"),
@@ -48,7 +47,7 @@ M = {
  "healthcheck-none": ("h.Test.Exec[0] == \"NONE\"", "h.Test.Exec[0] == \"NONEX\"", "TestHealthcheckNone"),
  "windows-slash-drive": ("strings.HasPrefix(more[1], \"/\")", "false", "TestShortVolumes"),
  "bind-before-variable": ("\tcase strings.ContainsAny(out.Source[:1], \"./~\") || drive != \"\":\n\t\tout.Type = \"bind\"\n\tcase strings.Contains(out.Source, \"$\"):\n\t\tout.Type = \"unresolved\"", "\tcase strings.Contains(out.Source, \"$\"):\n\t\tout.Type = \"unresolved\"\n\tcase strings.ContainsAny(out.Source[:1], \"./~\") || drive != \"\":\n\t\tout.Type = \"bind\"", "TestShortVolumes"),
- "cycle-refused": ("\t\t\tif cycleAt == nil {\n\t\t\t\tcycleAt = n\n\t\t\t}\n", "", "TestRecursiveAliasIsRefused|TestCycleDoesNotHideAmplification"),
+ "cycle-refused": ("\t\t\tif cycleAt == nil {\n\t\t\t\tcycleAt = n\n\t\t\t}\n", "", "TestRecursiveAliasIsRefused|TestCycleInsideAnchorIsRefused"),
  "merge-twice": ("\t\t\tif hasMerge {", "\t\t\tif hasMerge && false {", "TestTwoMergeKeysAreRefused"),
  "merge-tag-value": (" && k.Value == \"<<\"", "", "TestMergeTagWithOtherValue"),
  "env-file-null-item": ("if isNull(c) {\n\t\t\treturn nil, errAt(deref(c), \"empty entry in env_file\")", "if false {\n\t\t\treturn nil, errAt(deref(c), \"empty entry in env_file\")", "TestEnvFileNullEntries"),
@@ -56,7 +55,13 @@ M = {
  "count-base0": ("ParseInt(strings.ReplaceAll(v, \"_\", \"\"), 0, 32)", "ParseInt(v, 10, 32)", "TestCountBases"),
  "unclosed-port-var": ("if openVar(v) {\n\t\treturn p, fmt.Errorf(\"port", "if false {\n\t\treturn p, fmt.Errorf(\"port", "TestUnclosedVariableInShortSyntax"),
  "unclosed-volume-var": ("if openVar(v) {\n\t\treturn Volume{}", "if false {\n\t\treturn Volume{}", "TestUnclosedVariableInShortSyntax"),
- "reset-env": ("\t\t\tif isReset(e.val) {\n\t\t\t\tcontinue // !reset removes the variable\n\t\t\t}\n", "", "TestResetRemovesEnvironmentVariable"),
+ "reset-map": ("if n.Content[i+1].Tag != \"!reset\" {", "if true {", "TestResetRemovesEveryKey|TestResetTagIsNull|TestResetRemovesEnvironmentVariable"),
+ "reset-seq": ("if c.Tag != \"!reset\" {", "if true {", "TestResetRemovesEveryKey"),
+ "reset-call": ("\tapplyReset(&doc, map[*yaml.Node]bool{})\n", "", "TestResetRemovesEveryKey|TestResetTagIsNull|TestResetRemovesEnvironmentVariable"),
+ "float-count": ("if deref(n).Tag == \"!!float\" {", "if false {", "TestWholeNumberFloatsAreCounts"),
+ "env-file-empty-scalar": ("if d.Value == \"\" {\n\t\t\treturn nil, errAt(d, \"env_file path is empty\")", "if false {\n\t\t\treturn nil, errAt(d, \"env_file path is empty\")", "TestEnvFileEmptyStrings"),
+ "env-file-empty-item": ("if p == \"\" {\n\t\t\treturn nil, errAt(deref(c), \"env_file path is empty\")", "if false {\n\t\t\treturn nil, errAt(deref(c), \"env_file path is empty\")", "TestEnvFileEmptyStrings"),
+ "merge-alias-list": ("if v.Kind == yaml.SequenceNode {\n\t\t\t\tsrcs = v.Content", "if deref(v).Kind == yaml.SequenceNode {\n\t\t\t\tsrcs = deref(v).Content", "TestMergeOfAnAliasedListIsRefused"),
 }
 
 def main():
