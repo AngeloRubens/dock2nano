@@ -52,12 +52,18 @@ jobs:
           sleep 15
           ip -br addr | head -20
           sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
-          for n in web app dns; do echo "=== console of $n"; sudo env OPS_HOME="$OPS_HOME" ops instance logs $n 2>&1 | tail -25; done
-          web=$(awk -F'|' '$3 ~ /web/ {gsub(/ /,"",$7); print $7}' /tmp/out/instances.txt | head -1)
-          app=$(awk -F'|' '$3 ~ /app/ {gsub(/ /,"",$7); print $7}' /tmp/out/instances.txt | head -1)
+          for n in web app dns; do
+            echo "=== console of $n"
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $n 2>&1 | tail -25 | tee /tmp/out/console-$n.txt
+          done
+          ipof() { grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$1.txt | tail -1 | awk '{print $2}'; }
+          web=$(ipof web); app=$(ipof app)
           echo "web=$web app=$app"
-          [ -n "$web" ] && curl -sS -m 5 "http://$web:8080/" || echo "web: no answer"
-          [ -n "$app" ] && curl -sS -m 5 "http://$app:8081/" || echo "app: no answer"
+          ip neigh show dev ops0
+          for h in $web $app; do ping -c2 -W2 $h || echo "no ping to $h"; done
+          curl -sS -m 10 -v "http://$web:8080/" 2>&1 | tail -15 || echo "web: no answer"
+          curl -sS -m 10 -v "http://$app:8081/" 2>&1 | tail -15 || echo "app: no answer"
+          dig +short @192.168.33.216 web.service app.service || true
       - name: down
         if: always()
         run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -5 || true
