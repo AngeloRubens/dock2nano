@@ -329,11 +329,12 @@ func parseCount(n *yaml.Node) (c int, ok bool, err error) {
 	if strings.Contains(v, "$") {
 		return 0, false, nil
 	}
-	c, err = strconv.Atoi(v)
-	if err != nil || c < 0 {
+	// Base 0 as in yaml.v3: 010 is 8, 0x10 is 16 and 1_000 is 1000.
+	c64, err := strconv.ParseInt(strings.ReplaceAll(v, "_", ""), 0, 32)
+	if err != nil || c64 < 0 {
 		return 0, false, errAt(deref(n), "%q is not a count", v)
 	}
-	return c, true, nil
+	return int(c64), true, nil
 }
 
 // setReplicas stores deploy.replicas or scale; the two must agree if both are
@@ -434,6 +435,9 @@ func parseEnv(n *yaml.Node, s *Service, label string) ([]EnvVar, error) {
 			return nil, err
 		}
 		for _, e := range es {
+			if isReset(e.val) {
+				continue // !reset removes the variable
+			}
 			if isExtension(e.key) {
 				s.Unknown = append(s.Unknown, label+"."+e.key+" (Compose reads it as an extension and drops it)")
 			}
@@ -475,6 +479,9 @@ func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 	}
 	var out []string
 	for i, c := range d.Content {
+		if isNull(c) {
+			return nil, errAt(deref(c), "empty entry in env_file")
+		}
 		if deref(c).Kind == yaml.MappingNode {
 			es, err := entries(c)
 			if err != nil {
@@ -487,6 +494,9 @@ func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 					p, err := scalar(e.val)
 					if err != nil {
 						return nil, err
+					}
+					if p == "" {
+						return nil, errAt(deref(e.val), "env_file path is empty")
 					}
 					out = append(out, p)
 					found = true
@@ -565,6 +575,21 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 	return out, nil
 }
 
+// openVar reports whether s has a ${ with no closing brace.
+func openVar(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '{':
+			depth++
+			i++
+		case s[i] == '}' && depth > 0:
+			depth--
+		}
+	}
+	return depth > 0
+}
+
 func validProtocol(p string) bool { return p == "tcp" || p == "udp" || p == "sctp" }
 
 // splitOutsideVars splits s at sep, except inside a ${...} reference, so that
@@ -591,6 +616,9 @@ func splitOutsideVars(s string, sep byte) []string {
 // address must be in brackets and be followed by PUBLISHED:TARGET.
 func parseShortPort(v string) (Port, error) {
 	p := Port{Protocol: "tcp"}
+	if openVar(v) {
+		return p, fmt.Errorf("port %q has a ${ that is not closed", v)
+	}
 	rest := v
 	if i := strings.LastIndex(rest, "/"); i >= 0 && !strings.Contains(rest[i:], "}") {
 		p.Protocol = rest[i+1:]
@@ -700,6 +728,9 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 // followed by a backslash at the start of SOURCE is kept in it; "a:/b" is a
 // volume called a, as on Linux.
 func parseShortVolume(v string) (Volume, error) {
+	if openVar(v) {
+		return Volume{}, fmt.Errorf("volume %q has a ${ that is not closed", v)
+	}
 	drive := ""
 	rest := v
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

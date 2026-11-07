@@ -657,3 +657,74 @@ func TestBuildUnknownAndEmptyVarName(t *testing.T) {
 		t.Error("an empty variable name was accepted")
 	}
 }
+
+func TestRecursiveAliasIsRefused(t *testing.T) {
+	_, err := Parse([]byte("x-a: &a {b: *a}\nservices: {s: {image: x}}\n"))
+	if err == nil || !strings.Contains(err.Error(), "contains it") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestCycleDoesNotHideAmplification(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("x-a: &A\n")
+	for i := 0; i < 40000; i++ {
+		fmt.Fprintf(&b, "  k%d: v\n", i)
+	}
+	b.WriteString("  inner: &B\n    <<: *A\nservices:\n")
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&b, "  s%d: {<<: *B, image: x}\n", i)
+	}
+	if err := parseWithin(t, b.String(), 20*time.Second); err == nil {
+		t.Error("accepted")
+	}
+}
+
+func TestEnvFileNullEntries(t *testing.T) {
+	for _, src := range []string{
+		"services:\n  a:\n    image: x\n    env_file: [~]\n",
+		"services:\n  a:\n    image: x\n    env_file: [{path: ~}]\n",
+	} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("accepted: %q", src)
+		}
+	}
+}
+
+func TestTwoMergeKeysAreRefused(t *testing.T) {
+	_, err := Parse([]byte("x-a: &a {image: a}\nx-b: &b {image: b}\nservices:\n  s: {<<: *a, <<: *b}\n"))
+	if err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestExplicitKeyBeforeMergeWins(t *testing.T) {
+	p := mustParse(t, "x-a: &a {image: other, user: ua}\nservices:\n  s: {image: mine, <<: *a}\n")
+	if s := p.Services[0]; s.Image != "mine" || s.User != "ua" {
+		t.Errorf("service %+v", s)
+	}
+}
+
+func TestCountBases(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    scale: 010\n  b:\n    image: x\n    scale: 0x10\n  c:\n    image: x\n    scale: 1_000\n")
+	a, b, c := p.Services[0], p.Services[1], p.Services[2]
+	if *a.Replicas != 8 || *b.Replicas != 16 || *c.Replicas != 1000 {
+		t.Errorf("replicas %d %d %d", *a.Replicas, *b.Replicas, *c.Replicas)
+	}
+}
+
+func TestUnclosedVariableInShortSyntax(t *testing.T) {
+	if _, err := parseShortPort("${X:80"); err == nil {
+		t.Error("port accepted")
+	}
+	if _, err := parseShortVolume("${X:/data"); err == nil {
+		t.Error("volume accepted")
+	}
+}
+
+func TestResetRemovesEnvironmentVariable(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    environment:\n      A: !reset null\n      B: x\n")
+	if got := p.Services[0].Environment; !reflect.DeepEqual(got, []EnvVar{{"B", "x", true}}) {
+		t.Errorf("environment %+v", got)
+	}
+}

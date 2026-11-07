@@ -33,13 +33,14 @@ const maxMergeSteps = 100000
 // entries lists the keys of a mapping in file order. Aliases are followed and
 // merge keys ("<<") are expanded: an explicit key wins over a merged one, and
 // among merged mappings the first wins. A repeated key is an error, and so is
-// a merge that leads back to the mapping being expanded.
+// a second merge key. Parse has already refused any alias that leads back to
+// the node containing it (checkSize), so the expansion always ends.
 func entries(n *yaml.Node) ([]entry, error) {
 	steps := 0
-	return expand(n, map[*yaml.Node]bool{}, &steps)
+	return expand(n, &steps)
 }
 
-func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, error) {
+func expand(n *yaml.Node, steps *int) ([]entry, error) {
 	n = deref(n)
 	if n == nil {
 		return nil, fmt.Errorf("expected a mapping")
@@ -47,11 +48,6 @@ func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, erro
 	if n.Kind != yaml.MappingNode {
 		return nil, errAt(n, "expected a mapping")
 	}
-	if active[n] {
-		return nil, errAt(n, "a merge refers to the mapping that contains it")
-	}
-	active[n] = true
-	defer delete(active, n)
 	*steps++
 	if *steps > maxMergeSteps {
 		return nil, errAt(n, "too many merged mappings")
@@ -59,15 +55,20 @@ func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, erro
 	var out, merged []entry
 	seen := map[string]bool{}
 	mergedSeen := map[string]bool{}
+	hasMerge := false
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
-		if k.Kind == yaml.ScalarNode && k.Tag == "!!merge" {
+		if k.Kind == yaml.ScalarNode && k.Tag == "!!merge" && k.Value == "<<" {
+			if hasMerge {
+				return nil, errAt(k, "key %q appears twice", k.Value)
+			}
+			hasMerge = true
 			srcs := []*yaml.Node{deref(v)}
 			if srcs[0].Kind == yaml.SequenceNode {
 				srcs = srcs[0].Content
 			}
 			for _, s := range srcs {
-				es, err := expand(s, active, steps)
+				es, err := expand(s, steps)
 				if err != nil {
 					return nil, err
 				}
@@ -101,6 +102,9 @@ func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, erro
 	}
 	return out, nil
 }
+
+// isReset reports whether a value carries the Compose "!reset" tag.
+func isReset(n *yaml.Node) bool { return deref(n).Tag == "!reset" }
 
 // isExtension reports whether a key is a Compose extension ("x-...").
 func isExtension(key string) bool { return strings.HasPrefix(key, "x-") }
@@ -178,11 +182,12 @@ func boolean(n *yaml.Node) (val, ok bool, err error) {
 const maxExpandedNodes = 1000000
 
 // checkSize fails when following the aliases of the document gives more than
-// maxExpandedNodes nodes. A reference that leads back to a node being counted
-// adds one and stops; expand reports such cycles where they matter.
+// maxExpandedNodes nodes, or when an alias leads back to a node that contains
+// it (Compose refuses those too). With no cycle the counts in memo are exact.
 func checkSize(root *yaml.Node) error {
 	memo := map[*yaml.Node]int{}
 	active := map[*yaml.Node]bool{}
+	var cycleAt *yaml.Node
 	var size func(n *yaml.Node) int
 	size = func(n *yaml.Node) int {
 		if n == nil {
@@ -195,6 +200,9 @@ func checkSize(root *yaml.Node) error {
 			return v
 		}
 		if active[n] {
+			if cycleAt == nil {
+				cycleAt = n
+			}
 			return 1
 		}
 		active[n] = true
@@ -210,7 +218,11 @@ func checkSize(root *yaml.Node) error {
 		memo[n] = total
 		return total
 	}
-	if size(root) > maxExpandedNodes {
+	total := size(root)
+	if cycleAt != nil {
+		return errAt(cycleAt, "an alias refers to the node that contains it")
+	}
+	if total > maxExpandedNodes {
 		return fmt.Errorf("the file expands to more than %d nodes through aliases and merges", maxExpandedNodes)
 	}
 	return nil
