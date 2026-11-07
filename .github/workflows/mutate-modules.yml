@@ -2,22 +2,44 @@ name: mutate-modules
 on:
   push:
     branches: ['check/mutate-modules']
+permissions:
+  contents: read
 jobs:
   list:
     runs-on: ubuntu-24.04
     outputs:
-      names: ${{ steps.l.outputs.names }}
+      first: ${{ steps.l.outputs.first }}
+      second: ${{ steps.l.outputs.second }}
     steps:
       - uses: actions/checkout@v4
       - id: l
-        run: echo "names=$(python3 ci/mutate_modules.py list | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().split()))')" >> "$GITHUB_OUTPUT"
-  mutate:
+        run: |
+          python3 ci/mutate_modules.py list | python3 -c '
+          import sys, json
+          names = sys.stdin.read().split()
+          half = (len(names) + 1) // 2
+          print("first=" + json.dumps(names[:half]))
+          print("second=" + json.dumps(names[half:]))' >> "$GITHUB_OUTPUT"
+  first:
     needs: list
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        name: ${{ fromJson(needs.list.outputs.names) }}
+        name: ${{ fromJson(needs.list.outputs.first) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: python3 ci/mutate_modules.py ${{ matrix.name }}
+  second:
+    needs: list
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJson(needs.list.outputs.second) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
