@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -556,6 +558,8 @@ func TestPorts(t *testing.T) {
 		{"not published", compose.Port{Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Note: "only from other services"}},
 		{"sctp", compose.Port{Published: "80", Target: "80", Protocol: "sctp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "sctp"}},
 		{"variable", compose.Port{Published: "${P}", Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "variable"}},
+		{"variable in the target only", compose.Port{Published: "80", Target: "${P}", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "the port holds a variable, which is not interpolated; it is not published"}},
+		{"range on the target side only", compose.Port{Published: "80", Target: "8000-8010", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "the port range 80:8000-8010 is not supported"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -621,7 +625,7 @@ func TestVolumes(t *testing.T) {
 		{"colon in the source", compose.Volume{Type: "bind", Source: "/data:x", Target: "/x"}, plan.Unsupported, "holds ':'"},
 		{"named", compose.Volume{Type: "volume", Source: "db", Target: "/var/lib/db"}, plan.Unsupported, "named volume db"},
 		{"anonymous", compose.Volume{Type: "volume", Target: "/cache"}, plan.Unsupported, "anonymous volume"},
-		{"tmpfs", compose.Volume{Type: "tmpfs", Target: "/run"}, plan.Unsupported, "tmpfs"},
+		{"tmpfs", compose.Volume{Type: "tmpfs", Target: "/run"}, plan.Unsupported, "tmpfs at /run is not supported"},
 		{"unresolved", compose.Volume{Type: "unresolved", Source: "${D}/x", Target: "/x"}, plan.Unsupported, "variable"},
 		{"variable in a bind", compose.Volume{Type: "bind", Source: "${D}/x", Target: "/x"}, plan.Unsupported, "variable"},
 		{"other type", compose.Volume{Type: "npipe", Source: "p", Target: "/p"}, plan.Unsupported, "npipe"},
@@ -996,5 +1000,205 @@ func TestRender(t *testing.T) {
 	empty := Render(nil)
 	if strings.Count(empty, "\n") != 1 || !strings.Contains(empty, "review") {
 		t.Errorf("Render(nil) = %q, want only the first line", empty)
+	}
+}
+
+func TestDependsOnEmptyConditionIsSilent(t *testing.T) {
+	db, web := svc("db"), svc("web")
+	web.DependsOn = []compose.Dependency{{Service: "db", Condition: ""}}
+	p := mustGen(t, newInput(&fake{}, db, web))
+	wantNone(t, p, "web", plan.Approximated, "depends_on.db")
+}
+
+func TestDockerfileHealthcheckNoneGivesNoItem(t *testing.T) {
+	in := newInput(&fake{}, svc("web"))
+	in.Services["web"] = ServiceInput{Observed: observed("web"), Stage: &dockerfile.Stage{Healthcheck: &dockerfile.Healthcheck{None: true}}}
+	p := mustGen(t, in)
+	wantNone(t, p, "web", plan.Unsupported, "healthcheck")
+}
+
+func TestTestSummary(t *testing.T) {
+	tests := []struct {
+		name  string
+		shell string
+		exec  []string
+		want  string
+	}{
+		{"cmd shell", "", []string{"CMD-SHELL", "curl -f http://localhost"}, "the test starts with curl and has 3 words (it is in the file)"},
+		{"cmd shell with several words", "", []string{"CMD-SHELL", "pg_isready", "-U", "x"}, "the test starts with pg_isready and has 3 words (it is in the file)"},
+		{"cmd", "", []string{"CMD", "curl", "-f"}, "the test starts with curl and has 2 words (it is in the file)"},
+		{"shell form", "wget -q localhost", nil, "the test starts with wget and has 3 words (it is in the file)"},
+		{"none", "", []string{"NONE"}, "the test is empty"},
+		{"cmd without words", "", []string{"CMD"}, "the test is empty"},
+		{"cmd shell without words", "", []string{"CMD-SHELL"}, "the test is empty"},
+		{"nothing", "", nil, "the test is empty"},
+		{"blank shell", "   ", nil, "the test is empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := testSummary(tt.shell, tt.exec); got != tt.want {
+				t.Errorf("testSummary(%q, %q) = %q, want %q", tt.shell, tt.exec, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEmptyHealthcheckTestMessage(t *testing.T) {
+	s := svc("web")
+	s.Healthcheck = &compose.Healthcheck{Test: compose.Command{Exec: []string{"CMD"}, Set: true}}
+	p, _ := one(t, &fake{}, s)
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "ops compose runs no healthchecks; the test is empty")
+	s.Healthcheck = &compose.Healthcheck{Test: compose.Command{Exec: []string{"CMD-SHELL", "curl -f http://localhost"}, Set: true}}
+	p, _ = one(t, &fake{}, s)
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "ops compose runs no healthchecks; the test starts with curl and has 3 words (it is in the file)")
+}
+
+func TestProjectNameFallback(t *testing.T) {
+	if got := projectName(Input{Project: &compose.Project{}, Dir: "/"}); got != "project" {
+		t.Errorf("projectName for the root directory = %q, want project", got)
+	}
+	in := newInput(&fake{}, svc("web"))
+	in.Project.Name = ""
+	in.Dir = "/"
+	p := mustGen(t, in)
+	if got := p.Services[0].PackageName; got != "project_web" {
+		t.Errorf("package name = %q, want project_web", got)
+	}
+}
+
+func TestFolderNameCollapsesEveryRun(t *testing.T) {
+	tests := []struct{ project, service, want string }{
+		{"...", "web", "._web"},
+		{"....", "web", "._web"},
+		{"a......b", "web", "a.b_web"},
+		{"p", "..", "p_."},
+	}
+	for _, tt := range tests {
+		if got := folderName(tt.project, tt.service); got != tt.want {
+			t.Errorf("folderName(%q, %q) = %q, want %q", tt.project, tt.service, got, tt.want)
+		}
+	}
+}
+
+func TestServiceEnvNilFunctions(t *testing.T) {
+	t.Setenv("D2N_NILFN_VAR", "real")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "e.env"), []byte("FROMFILE=1\nUSES=${D2N_NILFN_VAR}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := svc("web")
+	s.EnvFile = []string{"e.env"}
+	s.Environment = []compose.EnvVar{{Name: "D2N_NILFN_VAR"}}
+	got, items := ServiceEnv(s, dir, nil, nil)
+	want := map[string]string{"FROMFILE": "1", "USES": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("env = %v, want %v (a nil lookup finds nothing, a nil readFile reads the disk)", got, want)
+	}
+	wantItems := []plan.Item{
+		{Service: "web", Kind: plan.Note, Key: "env_file[0]", Message: "variables used in the file are not set on this machine and became empty: D2N_NILFN_VAR"},
+		{Service: "web", Kind: plan.Note, Key: "environment.D2N_NILFN_VAR", Message: "the variable has no value in the file and is not set on this machine; it is not set in the package"},
+	}
+	if !reflect.DeepEqual(items, wantItems) {
+		t.Errorf("items = %+v, want %+v", items, wantItems)
+	}
+}
+
+func TestServiceEnvFileUnsetNote(t *testing.T) {
+	f := &fake{files: map[string]string{"/d/a.env": "A=$ONE-${TWO}\nB=${ONE}\nBARE\n"}}
+	s := svc("web")
+	s.EnvFile = []string{"a.env"}
+	got, items := ServiceEnv(s, "/d", f.lookup, f.read)
+	if want := map[string]string{"A": "-", "B": ""}; !reflect.DeepEqual(got, want) {
+		t.Errorf("env = %v, want %v", got, want)
+	}
+	wantItems := []plan.Item{
+		{Service: "web", Kind: plan.Note, Key: "env_file[0]", Message: "variables used in the file are not set on this machine and became empty: ONE, TWO"},
+		{Service: "web", Kind: plan.Note, Key: "env_file[0]", Message: "variables named without a value are not set on this machine and are not set in the package: BARE"},
+	}
+	if !reflect.DeepEqual(items, wantItems) {
+		t.Errorf("items = %+v, want %+v", items, wantItems)
+	}
+}
+
+func TestPackageNameLengthBoundary(t *testing.T) {
+	keep := "abcdefghijklmno"
+	cut := "abcdefghijklmnop"
+	if len(keep) != 15 || len(cut) != 16 {
+		t.Fatalf("test data: %d and %d characters", len(keep), len(cut))
+	}
+	sum := sha1.Sum([]byte(cut))
+	wantCut := "abcdefgh-" + hex.EncodeToString(sum[:])[:6]
+	m, items, err := PackageNames(&compose.Project{}, []string{keep, cut})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m[keep] != keep || m[cut] != wantCut {
+		t.Errorf("names = %v, want %q kept and %q shortened", m, keep, wantCut)
+	}
+	if len(items) != 1 || items[0].Service != cut {
+		t.Errorf("items = %+v, want one note for %q only", items, cut)
+	}
+}
+
+func TestPackageNameHashIsOfTheOriginalName(t *testing.T) {
+	a, b := "Long-Service-Name-X", "long-service-name-x"
+	m, _, err := PackageNames(&compose.Project{}, []string{a, b})
+	if err != nil {
+		t.Fatalf("two names that differ only in case must get different hashes: %v", err)
+	}
+	sa, sb := sha1.Sum([]byte(a)), sha1.Sum([]byte(b))
+	wantA := "long-ser-" + hex.EncodeToString(sa[:])[:6]
+	wantB := "long-ser-" + hex.EncodeToString(sb[:])[:6]
+	if wantA == wantB {
+		t.Fatal("test data: the hashes are equal")
+	}
+	if m[a] != wantA || m[b] != wantB {
+		t.Errorf("names = %v, want %q and %q", m, wantA, wantB)
+	}
+}
+
+func TestRenderPutsConvertedLast(t *testing.T) {
+	items := []plan.Item{
+		{Service: "a", Kind: plan.Converted, Key: "k1", Message: "m1"},
+		{Service: "a", Kind: plan.Observed, Key: "k2", Message: "m2"},
+		{Service: "a", Kind: plan.Note, Key: "k3", Message: "m3"},
+		{Service: "a", Kind: plan.Approximated, Key: "k4", Message: "m4"},
+		{Service: "a", Kind: plan.Unsupported, Key: "k5", Message: "m5"},
+		{Service: "a", Kind: plan.Converted, Key: "k6", Message: "m6"},
+	}
+	got := Render(items)
+	want := reviewLine + "\n\nservice a:\n  unsupported k5: m5\n  approximated k4: m4\n  note k3: m3\n  observed k2: m2\n  converted k1: m1\n  converted k6: m6\n"
+	if got != want {
+		t.Errorf("Render =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestListedLimit(t *testing.T) {
+	var names []string
+	for i := 1; i <= 21; i++ {
+		names = append(names, fmt.Sprintf("n%d", i))
+	}
+	if got, want := listed(names[:20]), strings.Join(names[:20], ", "); got != want {
+		t.Errorf("listed(20 names) = %q, want %q", got, want)
+	}
+	if got, want := listed(names), strings.Join(names[:20], ", ")+" and 1 more"; got != want {
+		t.Errorf("listed(21 names) = %q, want %q", got, want)
+	}
+	if got := listed(names[:1]); got != "n1" {
+		t.Errorf("listed(1 name) = %q", got)
+	}
+}
+
+func TestArgv0StaysAsTheProgramSawIt(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"] = ServiceInput{Observed: &observe.Result{Sysroot: "/tmp/sys-web", Program: "/bin/busybox-extras", Argv: []string{"httpd", "-f", "-p", "8081"}, WorkingDir: "/"}}
+	p, err := Generate(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := p.Services[0].Manifest
+	if m.Program != "/bin/busybox-extras" || !reflect.DeepEqual(m.Args, []string{"httpd", "-f", "-p", "8081"}) {
+		t.Errorf("manifest = %+v", m)
 	}
 }

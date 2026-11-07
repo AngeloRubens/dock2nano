@@ -650,3 +650,205 @@ func TestWriteCrossDeviceKeepsSourceOnFailure(t *testing.T) {
 		t.Fatal("home left behind")
 	}
 }
+
+// countRename wraps rename and counts the calls.
+func countRename(t *testing.T) *int {
+	t.Helper()
+	old := rename
+	n := 0
+	rename = func(a, b string) error {
+		n++
+		return old(a, b)
+	}
+	t.Cleanup(func() { rename = old })
+	return &n
+}
+
+func TestWritePreCheckComposeExistsTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composePath := filepath.Join(dir, "compose.yaml")
+	put(t, composePath, "old\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	renames := countRename(t)
+
+	_, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err == nil || !strings.Contains(err.Error(), composePath+" exists; use force to replace it") {
+		t.Fatalf("error = %v", err)
+	}
+	if *renames != 0 {
+		t.Errorf("rename was called %d times before the refusal, want 0", *renames)
+	}
+	if got := names(t, base); len(got) != 0 {
+		t.Errorf("arch folder holds %v, want nothing (no package folder, no temporary folder)", got)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"compose.yaml", "home", "src"}) {
+		t.Errorf("folder holds %v", got)
+	}
+	if got := names(t, src); !reflect.DeepEqual(got, []string{"web"}) {
+		t.Errorf("source sysroot holds %v", got)
+	}
+}
+
+func TestWritePreCheckPackageFolderExistsTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
+	put(t, filepath.Join(base, "app", "marker"), "old", 0o644)
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	renames := countRename(t)
+
+	_, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "compose.yaml")})
+	if err == nil || !strings.Contains(err.Error(), "package folder "+filepath.Join(base, "app")+" exists; use force to replace it") {
+		t.Fatalf("error = %v", err)
+	}
+	if *renames != 0 {
+		t.Errorf("rename was called %d times before the refusal, want 0", *renames)
+	}
+	if got := names(t, base); !reflect.DeepEqual(got, []string{"app"}) {
+		t.Errorf("arch folder holds %v, want only app", got)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"home", "src1", "src2"}) {
+		t.Errorf("folder holds %v", got)
+	}
+}
+
+func TestWriteDuplicatePackageNameMessage(t *testing.T) {
+	dir := t.TempDir()
+	src1 := filepath.Join(dir, "src1")
+	src2 := filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "f"), "b", 0o644)
+	put(t, filepath.Join(src2, "f"), "b", 0o644)
+	p := &plan.Plan{Arch: "amd64", Services: []plan.Service{svc("web", src1), svc("web", src2)}}
+	_, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "c.yaml")})
+	if want := `output: package name "web" used twice`; err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+func TestWriteSysrootErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "afile")
+	put(t, file, "x", 0o644)
+	tests := []struct {
+		name, sysroot, want string
+	}{
+		{"empty", "", `output: service "web" has no sysroot`},
+		{"not a directory", file, "output: sysroot " + file + ` of "web" is not a directory`},
+		{"missing", filepath.Join(dir, "missing"), `output: sysroot of "web": `},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := filepath.Join(t.TempDir(), "home")
+			composePath := filepath.Join(t.TempDir(), "compose.yaml")
+			_, err := Write(onePlan(tt.sysroot), Options{OpsHome: home, ComposePath: composePath})
+			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want one that starts with %q", err, tt.want)
+			}
+			if exists(home) || exists(composePath) {
+				t.Error("something was left behind")
+			}
+			if got := read(t, file); got != "x" {
+				t.Errorf("the file was changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestWriteModes(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	if _, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: composePath}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(home, ".ops", "local_packages", "amd64", "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("package folder mode = %v, want 0755", fi.Mode().Perm())
+	}
+	fi, err = os.Stat(composePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Errorf("compose.yaml mode = %v, want 0644", fi.Mode().Perm())
+	}
+}
+
+func TestMoveTreeFailedCopyLeavesNothing(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	put(t, filepath.Join(src, "a"), "a", 0o644)
+	put(t, filepath.Join(src, "sub", "b"), "b", 0o644)
+	if err := syscall.Mkfifo(filepath.Join(src, "z-fifo"), 0o644); err != nil {
+		t.Skipf("no fifo: %v", err)
+	}
+	failRename(t, syscall.EXDEV)
+
+	copied, err := moveTree(src, dst)
+	if err == nil || !strings.Contains(err.Error(), "unsupported file type") {
+		t.Fatalf("copied = %v, error = %v, want an unsupported file type error", copied, err)
+	}
+	if copied {
+		t.Error("copied = true after a failure")
+	}
+	if exists(dst) {
+		t.Errorf("the half copied folder is left: %v", names(t, dst))
+	}
+	if got := read(t, filepath.Join(src, "a")); got != "a" {
+		t.Errorf("source changed: %q", got)
+	}
+}
+
+func TestCopyTreeKeepsSpecialBits(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	put(t, filepath.Join(src, "suid"), "x", 0o755)
+	put(t, filepath.Join(src, "sgid"), "x", 0o755)
+	put(t, filepath.Join(src, "shared", "f"), "x", 0o644)
+	put(t, filepath.Join(src, "tmp", "f"), "x", 0o644)
+	chmods := map[string]os.FileMode{
+		"suid":   0o755 | os.ModeSetuid,
+		"sgid":   0o755 | os.ModeSetgid,
+		"shared": 0o775 | os.ModeSetgid,
+		"tmp":    0o777 | os.ModeSticky,
+	}
+	for rel, m := range chmods {
+		if err := os.Chmod(filepath.Join(src, rel), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range chmods {
+		fi, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		const bits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+		if got := fi.Mode() & bits; got != want {
+			t.Errorf("%s mode = %v, want %v", rel, got, want)
+		}
+	}
+}

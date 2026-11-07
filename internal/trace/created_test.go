@@ -14,3 +14,16 @@ func TestCreatedPathsLeavesOutWhatIsNeverCarried(t *testing.T) {
 		t.Errorf("created %q", got)
 	}
 }
+
+func TestCreatedPathsOpenat2FlagPositions(t *testing.T) {
+	raw := []byte("1     openat2(AT_FDCWD, \"/tmp/first\", {flags=O_CREAT|O_WRONLY, mode=0644, resolve=0}, 24) = 3\n" +
+		"1     openat2(AT_FDCWD, \"/tmp/alone\", {flags=O_CREAT}, 24) = 4\n" +
+		"1     openat2(AT_FDCWD, \"/tmp/last\", {flags=O_WRONLY|O_CREAT, mode=0644}, 24) = 5\n" +
+		"1     openat2(AT_FDCWD, \"/tmp/read\", {flags=O_RDONLY, resolve=0}, 24) = 6\n" +
+		"1     openat2(AT_FDCWD, \"/tmp/noflags\", {mode=0644}, 24) = 7\n")
+	got := CreatedPaths(raw, "/", 0)
+	want := []string{"/tmp/alone", "/tmp/first", "/tmp/last"}
+	if !slices.Equal(got, want) {
+		t.Errorf("created %q, want %q", got, want)
+	}
+}

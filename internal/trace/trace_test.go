@@ -1010,3 +1010,34 @@ func TestInSysrootLoopStaysInside(t *testing.T) {
 		t.Errorf("%q leaves the sysroot %q", joined, root)
 	}
 }
+
+// chain makes l1 -> l2 -> ... -> l<n> -> real in a sysroot and returns it.
+func chain(t *testing.T, n int) string {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, root, "real", []byte("x"))
+	for i := 1; i <= n; i++ {
+		target := fmt.Sprintf("l%d", i+1)
+		if i == n {
+			target = "real"
+		}
+		if err := os.Symlink(target, filepath.Join(root, fmt.Sprintf("l%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestInSysrootFollowsFortyLinks(t *testing.T) {
+	root := chain(t, 40)
+	if got := InSysroot(root, "/l1"); got != "/real" {
+		t.Errorf("InSysroot through 40 links = %q, want /real", got)
+	}
+}
+
+func TestInSysrootStopsAtTheFortyFirstLink(t *testing.T) {
+	root := chain(t, 41)
+	if got := InSysroot(root, "/l1"); got != "/l41" {
+		t.Errorf("InSysroot through 41 links = %q, want /l41 (the link it was about to follow)", got)
+	}
+}

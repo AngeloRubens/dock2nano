@@ -9,6 +9,7 @@
 package gen
 
 import (
+	"slices"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -318,9 +319,11 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 		return nil, fmt.Errorf("service %q: the observation found no program to run", s.Name)
 	}
 	m := plan.Manifest{Program: obs.Program}
-	m.Args = []string{obs.Program}
-	if len(obs.Argv) > 1 {
-		m.Args = append(m.Args, obs.Argv[1:]...)
+	// argv[0] stays as the program saw it: a multi-call binary such as busybox
+	// picks what to do from it ("httpd" is a link to /bin/busybox-extras).
+	m.Args = slices.Clone(obs.Argv)
+	if len(m.Args) == 0 {
+		m.Args = []string{obs.Program}
 	}
 	// nanos starts the program in "/"; ops would look for a host file named
 	// like Args[1] in its own working directory and copy it into the image.
