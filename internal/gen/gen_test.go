@@ -866,6 +866,28 @@ func TestObservedItems(t *testing.T) {
 	wantNone(t, p, "web", plan.Observed, "created at runtime")
 }
 
+func TestChildProcessesAreUnsupported(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.Children = 3
+	in.Services["web"].Observed.ChildCalls = []string{"fork", "clone"}
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "processes")
+	if len(got) != 1 {
+		t.Fatalf("got %d items, want 1; report: %+v", len(got), p.Report)
+	}
+	const prefix = "the program started 3 child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine."
+	if !strings.HasPrefix(got[0].Message, prefix) {
+		t.Errorf("message %q does not start with %q", got[0].Message, prefix)
+	}
+	if !strings.Contains(got[0].Message, "run in one process") {
+		t.Errorf("message %q does not point to the one-process option", got[0].Message)
+	}
+
+	p, _ = one(t, &fake{}, web)
+	wantNone(t, p, "web", plan.Unsupported, "processes")
+}
+
 func TestEffectiveCommand(t *testing.T) {
 	exec := func(w ...string) compose.Command { return compose.Command{Exec: w, Set: true} }
 	shell := func(s string) compose.Command { return compose.Command{Shell: s, Set: true} }

@@ -149,6 +149,15 @@ type Result struct {
 	// were at the end of the observation; Warnings lists them too.
 	CreatedAtRuntime []string
 
+	// Children is the number of child processes (fork, vfork, clone or clone3 without
+	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
+	// one process, so the caller reports a program that has any.
+	Children int
+
+	// ChildCalls are the distinct calls that started those processes, in the order they were first
+	// seen.
+	ChildCalls []string
+
 	// ConfigurationFiles are the carried files a user is likely to replace.
 	ConfigurationFiles []string
 
@@ -511,6 +520,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(created, ", "))
 	}
 
+	children := trace.ChildProcesses(raw, from)
+	var childCalls []string
+	for _, c := range children {
+		if !slices.Contains(childCalls, c.Call) {
+			childCalls = append(childCalls, c.Call)
+		}
+	}
+
 	if err := r.copyTouched(ctx, id, sysroot, touched); err != nil {
 		return nil, err
 	}
@@ -547,6 +564,8 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		WorkingDir:         cwd,
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
+		Children:           len(children),
+		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),
 		Image:              cfg,
 		Warnings:           r.warn,
