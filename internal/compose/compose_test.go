@@ -1,9 +1,11 @@
 package compose
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustParse(t *testing.T, src string) *Project {
@@ -54,7 +56,7 @@ func TestParseTwoServices(t *testing.T) {
 	if app.Healthcheck == nil || len(app.Healthcheck.Test.Exec) != 5 {
 		t.Errorf("healthcheck %+v", app.Healthcheck)
 	}
-	if !reflect.DeepEqual(app.Unknown, []string{"privileged"}) {
+	if !reflect.DeepEqual(app.Unknown, []string{"healthcheck.interval", "privileged"}) {
 		t.Errorf("unknown %v", app.Unknown)
 	}
 	if p.Service("app") != app || p.Service("nope") != nil {
@@ -73,7 +75,6 @@ func TestShortPorts(t *testing.T) {
 		{"53:53/udp", Port{Published: "53", Target: "53", Protocol: "udp"}},
 		{"8000-8010:80", Port{Published: "8000-8010", Target: "80", Protocol: "tcp"}},
 		{"[::1]:8080:80", Port{HostIP: "::1", Published: "8080", Target: "80", Protocol: "tcp"}},
-		{"[::1]:80", Port{HostIP: "::1", Target: "80", Protocol: "tcp"}},
 	}
 	for _, c := range cases {
 		got, err := parseShortPort(c.in)
@@ -81,7 +82,7 @@ func TestShortPorts(t *testing.T) {
 			t.Errorf("%q: got %+v, %v; want %+v", c.in, got, err, c.want)
 		}
 	}
-	for _, bad := range []string{"", "a:b:c:d", "80/", "[::1:80", "8080:"} {
+	for _, bad := range []string{"", "a:b:c:d", "80/", "[::1:80", "8080:", "[::1]:80", "[::1]8080:80", "80/tcp/udp", "80/foo"} {
 		if _, err := parseShortPort(bad); err == nil {
 			t.Errorf("%q: expected an error", bad)
 		}
@@ -129,8 +130,13 @@ func TestShortVolumes(t *testing.T) {
 		{"db:/var/lib/db", Volume{Type: "volume", Source: "db", Target: "/var/lib/db"}},
 		{"./src:/app", Volume{Type: "bind", Source: "./src", Target: "/app"}},
 		{"/etc/x:/x:ro", Volume{Type: "bind", Source: "/etc/x", Target: "/x", ReadOnly: true}},
-		{"db:/d:rw,z", Volume{Type: "volume", Source: "db", Target: "/d"}},
-		{"~/cfg:/cfg:ro,z", Volume{Type: "bind", Source: "~/cfg", Target: "/cfg", ReadOnly: true}},
+		{"db:/d:rw,z", Volume{Type: "volume", Source: "db", Target: "/d", Options: "z"}},
+		{"~/cfg:/cfg:ro,z", Volume{Type: "bind", Source: "~/cfg", Target: "/cfg", ReadOnly: true, Options: "z"}},
+		{"${PWD}:/app", Volume{Type: "unresolved", Source: "${PWD}", Target: "/app"}},
+		{".data:/data", Volume{Type: "bind", Source: ".data", Target: "/data"}},
+		{"C:\\data:/data", Volume{Type: "bind", Source: "C:\\data", Target: "/data"}},
+		{"a:/b", Volume{Type: "volume", Source: "a", Target: "/b"}},
+		{"db:/d:nocopy", Volume{Type: "volume", Source: "db", Target: "/d", Options: "nocopy"}},
 	}
 	for _, c := range cases {
 		got, err := parseShortVolume(c.in)
@@ -138,8 +144,10 @@ func TestShortVolumes(t *testing.T) {
 			t.Errorf("%q: got %+v, %v; want %+v", c.in, got, err, c.want)
 		}
 	}
-	if _, err := parseShortVolume("a:b:c:d"); err == nil {
-		t.Error("expected an error for four parts")
+	for _, bad := range []string{"a:b:c:d", "/a:/b:/c", "a:/b:", ""} {
+		if _, err := parseShortVolume(bad); err == nil {
+			t.Errorf("%q: expected an error", bad)
+		}
 	}
 }
 
@@ -234,8 +242,8 @@ services:
     scale: 2
 `)
 	a, b := p.Services[0], p.Services[1]
-	if a.Replicas != 3 || b.Replicas != 2 {
-		t.Errorf("replicas %d %d", a.Replicas, b.Replicas)
+	if a.Replicas == nil || *a.Replicas != 3 || b.Replicas == nil || *b.Replicas != 2 {
+		t.Errorf("replicas %v %v", a.Replicas, b.Replicas)
 	}
 	if !reflect.DeepEqual(a.Unknown, []string{"deploy.resources"}) {
 		t.Errorf("unknown %v", a.Unknown)
@@ -295,6 +303,10 @@ func TestErrors(t *testing.T) {
 		{"bad port", "services:\n  a:\n    image: x\n    ports: ['a:b:c:d']\n", "not valid"},
 		{"ports string", "services:\n  a:\n    image: x\n    ports: 80\n", "expected a list"},
 		{"bad yaml", "services: [\n", "yaml"},
+		{"two documents", "services:\n  a:\n    image: x\n---\nservices:\n  b:\n    image: y\n", "more than one"},
+		{"scale disagrees", "services:\n  a:\n    image: x\n    scale: 2\n    deploy:\n      replicas: 3\n", "disagree"},
+		{"self merge", "services:\n  a: &a\n    image: x\n    <<: *a\n", "contains it"},
+		{"bad boolean", "services:\n  a:\n    image: x\n    volumes:\n      - {type: bind, source: ., target: /t, read_only: maybe}\n", "not a boolean"},
 	}
 	for _, c := range cases {
 		_, err := Parse([]byte(c.src))
@@ -308,5 +320,197 @@ func TestErrorNamesServiceAndLine(t *testing.T) {
 	_, err := Parse([]byte("services:\n  web:\n    image: x\n    ports: 80\n"))
 	if err == nil || !strings.Contains(err.Error(), `service "web"`) || !strings.Contains(err.Error(), "line 4") {
 		t.Errorf("error %v", err)
+	}
+}
+
+func TestMergeBombIsBounded(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("x-l0: &l0 {k: v}\n")
+	for i := 1; i <= 9; i++ {
+		fmt.Fprintf(&b, "x-l%d: &l%d {<<: [", i, i)
+		for j := 0; j < 10; j++ {
+			if j > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "*l%d", i-1)
+		}
+		b.WriteString("]}\n")
+	}
+	b.WriteString("services: {s: {<<: *l9, image: x}}\n")
+	done := make(chan error, 1)
+	go func() {
+		_, err := Parse([]byte(b.String()))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "too many merged") {
+			t.Errorf("error %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("merge expansion is not bounded")
+	}
+}
+
+func TestMergeSequenceFirstWins(t *testing.T) {
+	p := mustParse(t, `
+x-a: &a
+  image: from-a
+  user: ua
+x-b: &b
+  image: from-b
+  user: ub
+  restart: always
+services:
+  s:
+    <<: [*a, *b]
+`)
+	s := p.Services[0]
+	if s.Image != "from-a" || s.User != "ua" || s.Restart != "always" {
+		t.Errorf("service %+v", s)
+	}
+}
+
+func TestHealthcheckUnknownKeys(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 10s\n      disable: yes\n")
+	a := p.Services[0]
+	if !reflect.DeepEqual(a.Unknown, []string{"healthcheck.interval"}) || !a.Healthcheck.Disable {
+		t.Errorf("unknown %v, healthcheck %+v", a.Unknown, a.Healthcheck)
+	}
+}
+
+func TestEnvFileLongForm(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    env_file:\n      - path: ./a.env\n        required: false\n      - b.env\n  b:\n    image: x\n    env_file: one.env\n")
+	a, b := p.Services[0], p.Services[1]
+	if !reflect.DeepEqual(a.EnvFile, []string{"./a.env", "b.env"}) || !reflect.DeepEqual(a.Unknown, []string{"env_file[0].required"}) {
+		t.Errorf("%v %v", a.EnvFile, a.Unknown)
+	}
+	if !reflect.DeepEqual(b.EnvFile, []string{"one.env"}) {
+		t.Errorf("%v", b.EnvFile)
+	}
+}
+
+func TestBooleanForms(t *testing.T) {
+	for _, v := range []string{"true", "True", "TRUE", "yes", "on", `"true"`} {
+		p := mustParse(t, "services:\n  a:\n    image: x\n    volumes:\n      - type: bind\n        source: ./s\n        target: /t\n        read_only: "+v+"\n")
+		if !p.Services[0].Volumes[0].ReadOnly {
+			t.Errorf("read_only: %s gave false", v)
+		}
+	}
+	p := mustParse(t, "services:\n  a:\n    image: x\n    volumes:\n      - {type: bind, source: ./s, target: /t, read_only: no}\n")
+	if p.Services[0].Volumes[0].ReadOnly {
+		t.Error("read_only: no gave true")
+	}
+}
+
+func TestEmptyCommandIsSetAndNullIsNot(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    entrypoint: \"\"\n    command: null\n")
+	a := p.Services[0]
+	if !a.Entrypoint.IsSet() || a.Command.IsSet() {
+		t.Errorf("%+v %+v", a.Entrypoint, a.Command)
+	}
+}
+
+func TestReplicasZeroIsKept(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    deploy:\n      replicas: 0\n  b:\n    image: x\n  c:\n    image: x\n    scale: 0\n")
+	a, b, c := p.Services[0], p.Services[1], p.Services[2]
+	if a.Replicas == nil || *a.Replicas != 0 || b.Replicas != nil || c.Replicas == nil || *c.Replicas != 0 {
+		t.Errorf("replicas %v %v %v", a.Replicas, b.Replicas, c.Replicas)
+	}
+}
+
+func TestTopLevelNetworkVolumeConfigListed(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\nvolumes:\n  data:\n    external: true\nnetworks:\n  front:\n    driver: bridge\n")
+	if !reflect.DeepEqual(p.Unknown, []string{"volumes.data.external", "networks.front.driver"}) {
+		t.Errorf("unknown %v", p.Unknown)
+	}
+}
+
+func TestUnresolvedVolumeIsListed(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    volumes:\n      - ${PWD}:/app\n")
+	a := p.Services[0]
+	if a.Volumes[0].Type != "unresolved" || len(a.Unknown) != 1 || !strings.HasPrefix(a.Unknown[0], "volumes[0].source") {
+		t.Errorf("%+v %v", a.Volumes, a.Unknown)
+	}
+}
+
+func TestNamesStartingWithX(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: x\n    environment:\n      x-token: s\n    build:\n      context: .\n      args:\n        x-arg: v\n    depends_on:\n      x-db:\n    networks:\n      x-net:\n  x-db:\n    image: y\n")
+	a := p.Services[0]
+	if !reflect.DeepEqual(a.Environment, []EnvVar{{"x-token", "s", true}}) || !reflect.DeepEqual(a.Build.Args, []EnvVar{{"x-arg", "v", true}}) {
+		t.Errorf("env %+v args %+v", a.Environment, a.Build.Args)
+	}
+	if len(a.DependsOn) != 1 || a.DependsOn[0].Service != "x-db" || !reflect.DeepEqual(a.Networks, []string{"x-net"}) {
+		t.Errorf("depends_on %+v networks %v", a.DependsOn, a.Networks)
+	}
+}
+
+func TestNullValuesAreEmpty(t *testing.T) {
+	p := mustParse(t, `
+services:
+  a:
+    image: x
+    build:
+    ports:
+    volumes:
+    environment:
+    env_file:
+    depends_on:
+    networks:
+    expose:
+    profiles:
+    healthcheck:
+    deploy:
+volumes:
+networks:
+`)
+	a := p.Services[0]
+	if a.Build != nil || a.Ports != nil || a.Volumes != nil || a.Environment != nil || a.EnvFile != nil ||
+		a.DependsOn != nil || a.Networks != nil || a.Expose != nil || a.Profiles != nil || a.Healthcheck != nil || len(a.Unknown) != 0 {
+		t.Errorf("service %+v", a)
+	}
+}
+
+func TestResetTagIsNull(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    image: !reset null\n    ports: !reset []\n")
+	if p.Services[0].Image != "" {
+		t.Errorf("image %q", p.Services[0].Image)
+	}
+}
+
+func TestPlainFields(t *testing.T) {
+	p := mustParse(t, `
+services:
+  a:
+    image: x
+    working_dir: /srv
+    user: "1000:1000"
+    network_mode: host
+    expose: ["80", 443]
+    profiles: [debug]
+    ports:
+      - target: 53
+        host_ip: 127.0.0.1
+        protocol: udp
+`)
+	a := p.Services[0]
+	if a.WorkingDir != "/srv" || a.User != "1000:1000" || a.NetworkMode != "host" {
+		t.Errorf("service %+v", a)
+	}
+	if !reflect.DeepEqual(a.Expose, []string{"80", "443"}) || !reflect.DeepEqual(a.Profiles, []string{"debug"}) {
+		t.Errorf("expose %v profiles %v", a.Expose, a.Profiles)
+	}
+	if a.Ports[0] != (Port{HostIP: "127.0.0.1", Target: "53", Protocol: "udp"}) {
+		t.Errorf("port %+v", a.Ports[0])
+	}
+}
+
+func TestBuildUnknownAndEmptyVarName(t *testing.T) {
+	p := mustParse(t, "services:\n  a:\n    build:\n      context: .\n      network: host\n")
+	if !reflect.DeepEqual(p.Services[0].Unknown, []string{"build.network"}) {
+		t.Errorf("unknown %v", p.Services[0].Unknown)
+	}
+	if _, err := Parse([]byte("services:\n  a:\n    image: x\n    environment:\n      - =x\n")); err == nil {
+		t.Error("an empty variable name was accepted")
 	}
 }

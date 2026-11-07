@@ -2,11 +2,14 @@
 //
 // The parser keeps what the converter needs as typed fields and records every
 // key it does not model in Unknown, so that nothing is dropped in silence.
-// Values are taken as written: ${VAR} references are not interpolated.
+// Values are taken as written: ${VAR} references are not interpolated, and
+// numbers keep their spelling ("1.10" stays "1.10").
 package compose
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -53,8 +56,8 @@ type Service struct {
 	Networks    []string
 	NetworkMode string
 	Healthcheck *Healthcheck
-	// Replicas is deploy.replicas or scale; 0 means not set.
-	Replicas int
+	// Replicas is deploy.replicas or scale; nil means not set, 0 is a real value.
+	Replicas *int
 	Profiles []string
 	// Unknown lists keys that are not modelled, as dotted paths such as
 	// "privileged" or "deploy.resources". Extension keys (x-...) are not listed.
@@ -70,13 +73,17 @@ type Build struct {
 }
 
 // Command is a command or entrypoint, either as a shell string or as a list.
+// Set is true when the file gives the key with a value, even an empty one: an
+// empty string or list means "ignore the default of the image", while an
+// absent or null key means "keep it".
 type Command struct {
 	Shell string
 	Exec  []string
+	Set   bool
 }
 
 // IsSet reports whether the command was given.
-func (c Command) IsSet() bool { return c.Shell != "" || c.Exec != nil }
+func (c Command) IsSet() bool { return c.Set }
 
 // EnvVar is one variable. Set is false when the file gives a name with no
 // value, which means "take it from the environment of the caller".
@@ -94,12 +101,16 @@ type Port struct {
 	Protocol  string
 }
 
-// Volume is a volume entry of a service.
+// Volume is a volume entry of a service. Type is "unresolved" when the source
+// holds a ${VAR}, which decides between a bind mount and a named volume.
+// Options holds the modes other than ro and rw, such as z or nocopy, comma
+// separated.
 type Volume struct {
 	Type     string // "bind", "volume" or "tmpfs"
 	Source   string // empty for an anonymous volume or tmpfs
 	Target   string
 	ReadOnly bool
+	Options  string
 }
 
 // Dependency is one depends_on entry.
@@ -129,8 +140,19 @@ func ParseFile(path string) (*Project, error) {
 
 // Parse parses the content of a compose file.
 func Parse(data []byte) (*Project, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
+		if err == io.EOF {
+			return nil, fmt.Errorf("the file is empty")
+		}
+		return nil, err
+	}
+	var next yaml.Node
+	if err := dec.Decode(&next); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("the file has more than one YAML document")
+		}
 		return nil, err
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
@@ -156,11 +178,11 @@ func Parse(data []byte) (*Project, error) {
 				return nil, err
 			}
 		case e.key == "networks":
-			if p.Networks, err = keyNames(e.val); err != nil {
+			if p.Networks, err = keyNames(e.val, "networks", &p.Unknown); err != nil {
 				return nil, err
 			}
 		case e.key == "volumes":
-			if p.Volumes, err = keyNames(e.val); err != nil {
+			if p.Volumes, err = keyNames(e.val, "volumes", &p.Unknown); err != nil {
 				return nil, err
 			}
 		case isExtension(e.key):
@@ -174,8 +196,10 @@ func Parse(data []byte) (*Project, error) {
 	return p, nil
 }
 
-// keyNames returns the keys of a mapping; a null value gives no names.
-func keyNames(n *yaml.Node) ([]string, error) {
+// keyNames returns the keys of a mapping; a null value gives no names. The
+// settings of each entry (driver, external...) are listed in unknown as
+// prefix.name.key, because they change what a converter must do.
+func keyNames(n *yaml.Node, prefix string, unknown *[]string) ([]string, error) {
 	if isNull(n) {
 		return nil, nil
 	}
@@ -185,8 +209,21 @@ func keyNames(n *yaml.Node) ([]string, error) {
 	}
 	var out []string
 	for _, e := range es {
-		if !isExtension(e.key) {
-			out = append(out, e.key)
+		if isExtension(e.key) {
+			continue
+		}
+		out = append(out, e.key)
+		if isNull(e.val) {
+			continue
+		}
+		sub, err := entries(e.val)
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", prefix, e.key, err)
+		}
+		for _, se := range sub {
+			if !isExtension(se.key) {
+				*unknown = append(*unknown, prefix+"."+e.key+"."+se.key)
+			}
 		}
 	}
 	return out, nil
@@ -224,7 +261,20 @@ func parseService(name string, n *yaml.Node) (*Service, error) {
 	return s, nil
 }
 
+// modeled lists the service keys that set understands. A null value for one
+// of them means the same as leaving it out.
+var modeled = map[string]bool{
+	"image": true, "build": true, "command": true, "entrypoint": true,
+	"working_dir": true, "user": true, "restart": true, "network_mode": true,
+	"environment": true, "env_file": true, "ports": true, "expose": true,
+	"volumes": true, "depends_on": true, "networks": true, "healthcheck": true,
+	"profiles": true, "scale": true, "deploy": true,
+}
+
 func (s *Service) set(e entry) (err error) {
+	if modeled[e.key] && isNull(e.val) {
+		return nil
+	}
 	switch e.key {
 	case "image":
 		s.Image, err = scalar(e.val)
@@ -245,7 +295,7 @@ func (s *Service) set(e entry) (err error) {
 	case "environment":
 		s.Environment, err = parseEnv(e.val)
 	case "env_file":
-		s.EnvFile, err = parseEnvFile(e.val)
+		s.EnvFile, err = parseEnvFile(e.val, s)
 	case "ports":
 		s.Ports, err = parsePorts(e.val, s)
 	case "expose":
@@ -257,11 +307,11 @@ func (s *Service) set(e entry) (err error) {
 	case "networks":
 		s.Networks, err = parseServiceNetworks(e.val, s)
 	case "healthcheck":
-		s.Healthcheck, err = parseHealthcheck(e.val)
+		s.Healthcheck, err = parseHealthcheck(e.val, s)
 	case "profiles":
 		s.Profiles, err = stringList(e.val)
 	case "scale":
-		s.Replicas, err = parseCount(e.val)
+		err = s.setReplicas(e.val)
 	case "deploy":
 		err = s.parseDeploy(e.val)
 	default:
@@ -284,10 +334,21 @@ func parseCount(n *yaml.Node) (int, error) {
 	return c, nil
 }
 
-func (s *Service) parseDeploy(n *yaml.Node) error {
-	if isNull(n) {
-		return nil
+// setReplicas stores deploy.replicas or scale; the two must agree if both are
+// given.
+func (s *Service) setReplicas(n *yaml.Node) error {
+	c, err := parseCount(n)
+	if err != nil {
+		return err
 	}
+	if s.Replicas != nil && *s.Replicas != c {
+		return errAt(deref(n), "scale and deploy.replicas disagree")
+	}
+	s.Replicas = &c
+	return nil
+}
+
+func (s *Service) parseDeploy(n *yaml.Node) error {
 	es, err := entries(n)
 	if err != nil {
 		return err
@@ -295,7 +356,7 @@ func (s *Service) parseDeploy(n *yaml.Node) error {
 	for _, e := range es {
 		switch {
 		case e.key == "replicas":
-			if s.Replicas, err = parseCount(e.val); err != nil {
+			if err = s.setReplicas(e.val); err != nil {
 				return fmt.Errorf("replicas: %w", err)
 			}
 		case isExtension(e.key):
@@ -341,12 +402,15 @@ func parseBuild(n *yaml.Node, s *Service) (*Build, error) {
 
 func parseCommand(n *yaml.Node) (Command, error) {
 	d := deref(n)
+	if isNull(d) {
+		return Command{}, nil
+	}
 	if d.Kind == yaml.SequenceNode {
 		l, err := stringList(d)
-		return Command{Exec: l}, err
+		return Command{Exec: l, Set: true}, err
 	}
 	s, err := scalar(d)
-	return Command{Shell: s}, err
+	return Command{Shell: s, Set: true}, err
 }
 
 // parseEnv reads a mapping or a list of NAME=value, for environment and for
@@ -361,9 +425,6 @@ func parseEnv(n *yaml.Node) ([]EnvVar, error) {
 			return nil, err
 		}
 		for _, e := range es {
-			if isExtension(e.key) {
-				continue
-			}
 			v := EnvVar{Name: e.key}
 			if !isNull(e.val) {
 				val, err := scalar(e.val)
@@ -392,7 +453,7 @@ func parseEnv(n *yaml.Node) ([]EnvVar, error) {
 	return out, nil
 }
 
-func parseEnvFile(n *yaml.Node) ([]string, error) {
+func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 	d := deref(n)
 	if d.Kind == yaml.ScalarNode {
 		return stringOrList(d)
@@ -401,7 +462,7 @@ func parseEnvFile(n *yaml.Node) ([]string, error) {
 		return nil, errAt(d, "expected a path or a list")
 	}
 	var out []string
-	for _, c := range d.Content {
+	for i, c := range d.Content {
 		if deref(c).Kind == yaml.MappingNode {
 			es, err := entries(c)
 			if err != nil {
@@ -409,13 +470,16 @@ func parseEnvFile(n *yaml.Node) ([]string, error) {
 			}
 			found := false
 			for _, e := range es {
-				if e.key == "path" {
+				switch {
+				case e.key == "path":
 					p, err := scalar(e.val)
 					if err != nil {
 						return nil, err
 					}
 					out = append(out, p)
 					found = true
+				case !isExtension(e.key):
+					s.Unknown = append(s.Unknown, fmt.Sprintf("env_file[%d].%s", i, e.key))
 				}
 			}
 			if !found {
@@ -480,33 +544,34 @@ func parsePorts(n *yaml.Node, s *Service) ([]Port, error) {
 	return out, nil
 }
 
-// parseShortPort reads [HOST_IP:][PUBLISHED:]TARGET[/PROTOCOL].
+// parseShortPort reads [HOST_IP:][PUBLISHED:]TARGET[/PROTOCOL]. An IPv6
+// address must be in brackets and be followed by PUBLISHED:TARGET.
 func parseShortPort(v string) (Port, error) {
 	p := Port{Protocol: "tcp"}
 	rest := v
 	if i := strings.LastIndex(rest, "/"); i >= 0 {
 		p.Protocol = rest[i+1:]
 		rest = rest[:i]
-		if p.Protocol == "" {
-			return p, fmt.Errorf("port %q has an empty protocol", v)
+		switch p.Protocol {
+		case "tcp", "udp", "sctp":
+		default:
+			return p, fmt.Errorf("port %q has the protocol %q", v, p.Protocol)
+		}
+		if strings.Contains(rest, "/") {
+			return p, fmt.Errorf("port %q is not valid", v)
 		}
 	}
 	if strings.HasPrefix(rest, "[") {
 		j := strings.Index(rest, "]")
-		if j < 0 {
-			return p, fmt.Errorf("port %q has an unclosed address", v)
-		}
-		p.HostIP = rest[1:j]
-		rest = strings.TrimPrefix(rest[j+1:], ":")
-		parts := strings.Split(rest, ":")
-		switch len(parts) {
-		case 1:
-			p.Target = parts[0]
-		case 2:
-			p.Published, p.Target = parts[0], parts[1]
-		default:
+		if j < 0 || !strings.HasPrefix(rest[j+1:], ":") {
 			return p, fmt.Errorf("port %q is not valid", v)
 		}
+		p.HostIP = rest[1:j]
+		parts := strings.Split(rest[j+2:], ":")
+		if len(parts) != 2 {
+			return p, fmt.Errorf("port %q is not valid", v)
+		}
+		p.Published, p.Target = parts[0], parts[1]
 	} else {
 		parts := strings.Split(rest, ":")
 		switch len(parts) {
@@ -539,6 +604,9 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 			if err != nil {
 				return nil, errAt(c, "%v", err)
 			}
+			if v.Type == "unresolved" {
+				s.Unknown = append(s.Unknown, fmt.Sprintf("volumes[%d].source (holds a variable, bind or named volume not decided)", i))
+			}
 			out = append(out, v)
 			continue
 		}
@@ -556,10 +624,7 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 			case "target":
 				v.Target, err = scalar(e.val)
 			case "read_only":
-				var b string
-				if b, err = scalar(e.val); err == nil {
-					v.ReadOnly = b == "true"
-				}
+				v.ReadOnly, err = boolean(e.val)
 			default:
 				if !isExtension(e.key) {
 					s.Unknown = append(s.Unknown, fmt.Sprintf("volumes[%d].%s", i, e.key))
@@ -580,9 +645,18 @@ func parseVolumes(n *yaml.Node, s *Service) ([]Volume, error) {
 	return out, nil
 }
 
-// parseShortVolume reads [SOURCE:]TARGET[:MODE].
+// parseShortVolume reads [SOURCE:]TARGET[:MODE]. A Windows drive letter
+// followed by a backslash at the start of SOURCE is kept in it; "a:/b" is a
+// volume called a, as on Linux.
 func parseShortVolume(v string) (Volume, error) {
-	parts := strings.Split(v, ":")
+	drive := ""
+	rest := v
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	if len(v) >= 3 && v[1] == ':' && v[2] == '\\' && strings.ContainsAny(v[:1], letters) {
+		drive, rest = v[:2], v[2:]
+	}
+	parts := strings.Split(rest, ":")
+	parts[0] = drive + parts[0]
 	var out Volume
 	switch len(parts) {
 	case 1:
@@ -591,11 +665,20 @@ func parseShortVolume(v string) (Volume, error) {
 		out.Source, out.Target = parts[0], parts[1]
 	case 3:
 		out.Source, out.Target = parts[0], parts[1]
+		var opts []string
 		for _, m := range strings.Split(parts[2], ",") {
-			if m == "ro" {
+			switch m {
+			case "ro":
 				out.ReadOnly = true
+			case "rw":
+			case "z", "Z", "nocopy", "consistent", "cached", "delegated",
+				"private", "rprivate", "shared", "rshared", "slave", "rslave":
+				opts = append(opts, m)
+			default:
+				return out, fmt.Errorf("volume %q has the mode %q", v, m)
 			}
 		}
+		out.Options = strings.Join(opts, ",")
 	default:
 		return out, fmt.Errorf("volume %q is not valid", v)
 	}
@@ -605,9 +688,9 @@ func parseShortVolume(v string) (Volume, error) {
 	switch {
 	case out.Source == "":
 		out.Type = "volume"
-	case out.Source == "." || out.Source == ".." || strings.HasPrefix(out.Source, "/") ||
-		strings.HasPrefix(out.Source, "./") || strings.HasPrefix(out.Source, "../") ||
-		strings.HasPrefix(out.Source, "~"):
+	case strings.Contains(out.Source, "$"):
+		out.Type = "unresolved"
+	case strings.ContainsAny(out.Source[:1], "./~") || drive != "":
 		out.Type = "bind"
 	default:
 		out.Type = "volume"
@@ -634,9 +717,6 @@ func parseDependsOn(n *yaml.Node, s *Service) ([]Dependency, error) {
 	}
 	var out []Dependency
 	for _, e := range es {
-		if isExtension(e.key) {
-			continue
-		}
 		dep := Dependency{Service: e.key, Condition: "service_started"}
 		if !isNull(e.val) {
 			sub, err := entries(e.val)
@@ -672,9 +752,6 @@ func parseServiceNetworks(n *yaml.Node, s *Service) ([]string, error) {
 	}
 	var out []string
 	for _, e := range es {
-		if isExtension(e.key) {
-			continue
-		}
 		out = append(out, e.key)
 		if !isNull(e.val) {
 			sub, err := entries(e.val)
@@ -691,11 +768,8 @@ func parseServiceNetworks(n *yaml.Node, s *Service) ([]string, error) {
 	return out, nil
 }
 
-func parseHealthcheck(n *yaml.Node) (*Healthcheck, error) {
+func parseHealthcheck(n *yaml.Node, s *Service) (*Healthcheck, error) {
 	h := &Healthcheck{}
-	if isNull(n) {
-		return h, nil
-	}
 	es, err := entries(n)
 	if err != nil {
 		return nil, err
@@ -705,9 +779,10 @@ func parseHealthcheck(n *yaml.Node) (*Healthcheck, error) {
 		case "test":
 			h.Test, err = parseCommand(e.val)
 		case "disable":
-			var b string
-			if b, err = scalar(e.val); err == nil {
-				h.Disable = b == "true"
+			h.Disable, err = boolean(e.val)
+		default:
+			if !isExtension(e.key) {
+				s.Unknown = append(s.Unknown, "healthcheck."+e.key)
 			}
 		}
 		if err != nil {

@@ -25,16 +25,35 @@ func errAt(n *yaml.Node, format string, args ...any) error {
 	return fmt.Errorf("line %d: %s", n.Line, fmt.Sprintf(format, args...))
 }
 
+// maxMergeSteps bounds how many mappings one call of entries may expand, so
+// that a file with deeply repeated merges ends in an error and not in a hang.
+const maxMergeSteps = 10000
+
 // entries lists the keys of a mapping in file order. Aliases are followed and
 // merge keys ("<<") are expanded: an explicit key wins over a merged one, and
-// among merged mappings the first wins. A repeated key is an error.
+// among merged mappings the first wins. A repeated key is an error, and so is
+// a merge that leads back to the mapping being expanded.
 func entries(n *yaml.Node) ([]entry, error) {
+	steps := 0
+	return expand(n, map[*yaml.Node]bool{}, &steps)
+}
+
+func expand(n *yaml.Node, active map[*yaml.Node]bool, steps *int) ([]entry, error) {
 	n = deref(n)
-	if n == nil || n.Kind != yaml.MappingNode {
-		if n == nil {
-			return nil, fmt.Errorf("expected a mapping")
-		}
+	if n == nil {
+		return nil, fmt.Errorf("expected a mapping")
+	}
+	if n.Kind != yaml.MappingNode {
 		return nil, errAt(n, "expected a mapping")
+	}
+	if active[n] {
+		return nil, errAt(n, "a merge refers to the mapping that contains it")
+	}
+	active[n] = true
+	defer delete(active, n)
+	*steps++
+	if *steps > maxMergeSteps {
+		return nil, errAt(n, "too many merged mappings")
 	}
 	var out, merged []entry
 	seen := map[string]bool{}
@@ -46,7 +65,7 @@ func entries(n *yaml.Node) ([]entry, error) {
 				srcs = srcs[0].Content
 			}
 			for _, s := range srcs {
-				es, err := entries(s)
+				es, err := expand(s, active, steps)
 				if err != nil {
 					return nil, err
 				}
@@ -77,7 +96,8 @@ func isExtension(key string) bool { return strings.HasPrefix(key, "x-") }
 
 func isNull(n *yaml.Node) bool {
 	n = deref(n)
-	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
+	// "!reset" is the Compose tag that clears a value: it counts as null.
+	return n == nil || (n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Tag == "!reset"))
 }
 
 func scalar(n *yaml.Node) (string, error) {
@@ -85,7 +105,7 @@ func scalar(n *yaml.Node) (string, error) {
 	if n.Kind != yaml.ScalarNode {
 		return "", errAt(n, "expected a single value")
 	}
-	if n.Tag == "!!null" {
+	if isNull(n) {
 		return "", nil
 	}
 	return n.Value, nil
@@ -116,4 +136,20 @@ func stringOrList(n *yaml.Node) ([]string, error) {
 		return []string{s}, nil
 	}
 	return stringList(n)
+}
+
+// boolean reads a YAML boolean, including the yes/no and on/off spellings
+// that Compose accepts.
+func boolean(n *yaml.Node) (bool, error) {
+	v, err := scalar(n)
+	if err != nil {
+		return false, err
+	}
+	switch strings.ToLower(v) {
+	case "true", "yes", "on":
+		return true, nil
+	case "false", "no", "off":
+		return false, nil
+	}
+	return false, errAt(deref(n), "%q is not a boolean", v)
 }
