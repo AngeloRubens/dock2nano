@@ -488,9 +488,6 @@ func parseEnvFile(n *yaml.Node, s *Service) ([]string, error) {
 	}
 	var out []string
 	for i, c := range d.Content {
-		if isNull(c) {
-			return nil, errAt(deref(c), "empty entry in env_file")
-		}
 		if deref(c).Kind == yaml.MappingNode {
 			es, err := entries(c)
 			if err != nil {
