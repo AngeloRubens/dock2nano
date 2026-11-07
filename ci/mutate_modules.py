@@ -99,7 +99,9 @@ A("gen-user-root-zero", "gen", "TestUserAndWorkingDir",
 A("gen-workdir-observed", "gen", "TestUserAndWorkingDir|TestWorkingDirIsInTheManifest|TestEveryServiceHasACwd",
   r'''m.ManifestPassthrough = map[string]any{"cwd": cwd}''', r'''m.ManifestPassthrough = map[string]any{"cwd": "/"}''')
 A("gen-workdir-file-only", "gen", "TestUserAndWorkingDir|TestWorkingDirIsInTheManifest",
-  r'''case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):''', r'''case s.WorkingDir != "" && s.WorkingDir != cwd:''')
+  r'''case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):''', r'''case s.WorkingDir != "" && s.WorkingDir != path.Clean(cwd):''')
+A("gen-workdir-observed-clean", "gen", "TestWorkingDirIsInTheManifest",
+  r'''case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):''', r'''case s.WorkingDir != "" && path.Clean(s.WorkingDir) != cwd:''')
 # names.go
 A("names-clean-lowercase", "gen", "TestPackageNames|TestNames",
   r'''for _, r := range strings.ToLower(s) {''', r'''for _, r := range s {''')
@@ -460,7 +462,7 @@ A("observe-start-dir-empty-is-root", "observe", "TestObserveRelativePathWithoutA
 A("observe-user-option-replaces-image", "observe", "TestObserveUserIsResolvedThroughPasswd",
   r'''imageUser = r.o.User''', r'''_ = r.o.User''')
 A("observe-passwd-name-by-uid", "observe", "TestObserveUserIsResolvedThroughPasswd",
-  r'''err == nil && n == uid {''', r'''err == nil {''')
+  r'''err == nil && n == uid {''', r'''err == nil && n >= 0 {''')
 A("observe-stopped-is-noted", "observe", "TestObserveStoppedEarlyIsReported|TestObserveRunningUntilTheEndIsNotStoppedEarly",
   r'''if stopped {⏎»»if err := r.noteStopped(ctx, id); err != nil {''', r'''if stopped && false {⏎»»if err := r.noteStopped(ctx, id); err != nil {''')
 A("observe-stopped-exit-code", "observe", "TestObserveStoppedEarlyIsReported",
@@ -479,9 +481,9 @@ A("observe-stopped-in-result", "observe", "TestObserveRunningUntilTheEndIsNotSto
 A("observe-probe-failure-is-warned", "observe", "TestObserveProbeFailureWarnsOncePerPort",
   r'''r.warnOnce(r.redact(fmt.Sprintf("port %d could not be asked for /: %s", port, failed[port])))''', r'''_, _ = port, failed[port]''')
 A("observe-redact-short-values", "observe", "TestObserveRedactLeavesShortAndImageValuesAlone",
-  r'''ok && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && !r.imageValues[v] {''')
+  r'''ok && secretName(k) && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && secretName(k) && !r.imageValues[v] {''')
 A("observe-redact-image-values", "observe", "TestObserveRedactLeavesShortAndImageValuesAlone",
-  r'''ok && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && len(v) >= minSecret {''')
+  r'''ok && secretName(k) && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && secretName(k) && len(v) >= minSecret {''')
 A("observe-failed-create-removed", "observe", "TestObserveFailedCreateIsRemovedByName",
   r'''_ = r.d.Remove(cctx, o.Name, true)''', r'''_ = cctx''')
 A("observe-container-name", "observe", "TestObserveSuccess|TestObserveFailedCreateIsRemovedByName|TestStartCreateOptions",
@@ -512,9 +514,9 @@ A("observe-created-more-count", "observe", "TestObserveCreatedWarningListsTenPat
   r'''len(list)-maxWarnedPaths)''', r'''len(list))''')
 A("observe-alias-not-carried-warned", "observe", "TestObserveAliasOfAPathThatWasNotCarriedIsAWarning",
   r'''case done[link] && !carried[link]:''', r'''case false:''')
-A("observe-carried-is-recorded", "observe", "TestObserveAliasOfAPathThatWasNotCarriedIsAWarning|TestObserveSuccess",
+A("observe-carried-is-recorded", "observe", "TestObserveAliasOfAPathThatWasNotCarriedIsAWarning|TestObserveAliasOfACarriedPathIsACopy",
   r'''carried[p] = true''', r'''_ = carried''')
-A("observe-children-from-the-program", "observe", "TestObserveCountsChildProcesses",
+A("observe-children-from-the-program", "observe", "TestObserveCountsChildProcesses|TestObserveForksBeforeTheProgramStartedAreNotChildren",
   r'''children := trace.ChildProcesses(raw, from)''', r'''children := trace.ChildProcesses(raw, 0)''')
 A("observe-child-calls-distinct", "observe", "TestObserveCountsChildProcesses",
   r'''if !slices.Contains(childCalls, c.Call) {''', r'''if true {''')
@@ -667,7 +669,7 @@ A("docker-build-error-stderr-redacted", "docker", "TestBuildErrorHidesArgumentVa
 A("docker-redact-short-values-kept", "docker", "TestBuildErrorHidesArgumentValues",
   r'''if len(v) >= minSecret {''', r'''if len(v) >= 0 {''')
 A("docker-exec-runner-env-added-to-environment", "docker", "TestExecRunnerRunEnv",
-  r'''cmd.Env = append(os.Environ(), env...)''', r'''cmd.Env = env''')
+  r'''cmd.Env = append(os.Environ(), env...)''', r'''cmd.Env = append(os.Environ()[:0], env...)''')
 A("docker-exec-runner-env-set", "docker", "TestExecRunnerRunEnv",
   r'''if len(env) > 0 {⏎»»cmd.Env''', r'''if false {⏎»»cmd.Env''')
 A("docker-network-aliases-need-network", "docker", "TestCreateArgsNetworkGuards",
@@ -781,6 +783,95 @@ A("cmd-dependency-not-converted-reason", "cmd", "TestDependencyNotConvertedIsANo
   r'''if reason, no := rs.skipped[name]; no {''', r'''if reason, no := rs.skipped[name]; no && false {''')
 A("cmd-dependency-cancel-is-an-error", "cmd", "TestCancelWhileStartingADependency",
   r'''if cerr := ctx.Err(); cerr != nil {⏎»»»»»return nil, cerr''', r'''if cerr := ctx.Err(); cerr != nil && false {⏎»»»»»return nil, cerr''')
+
+# ---------------------------------------------------------------- rules that had no test
+# observe
+A("observe-redact-only-secret-names", "observe", "TestObserveRedactOnlyValuesOfSecretNames",
+  r"""ok && secretName(k) && len(v)""", r"""ok && len(v)""")
+A("observe-redact-boundary-is-six", "observe", "TestObserveRedactHidesValuesFromSixBytes",
+  r"""secretName(k) && len(v) >= minSecret &&""", r"""secretName(k) && len(v) > minSecret &&""")
+A("observe-redact-min-secret-five", "observe", "TestObserveRedactHidesValuesFromSixBytes",
+  r"""const minSecret = 6""", r"""const minSecret = 5""")
+A("observe-passwd-skips-comment-lines", "observe", "TestPasswdNameSkipsCommentLines",
+  r"""f[0] == "" || strings.HasPrefix(f[0], "#") {""", r"""f[0] == "" {""")
+A("observe-user-too-many-digits", "observe", "TestResolveUserWithTooManyDigitsIsObservedAsRoot",
+  r"""if strings.Trim(who, "0123456789") == "" {""", r"""if false {""")
+A("observe-create-without-an-id", "observe", "TestCreateWithoutAnIDIsAnErrorAndIsRemovedByName",
+  r"""if err != nil || id == "" {""", r"""if err != nil {""")
+A("observe-stopped-log-whole-line", "observe", "TestObserveStoppedLogIsCutAtAWholeLine",
+  r"""if i := strings.Index(text, "\n"); i >= 0 && i < len(text)-1 {""", r"""if i := strings.Index(text, "\n"); false && i >= 0 && i < len(text)-1 {""")
+A("observe-stopped-log-valid-utf8", "observe", "TestObserveStoppedLogDropsABrokenCharacter",
+  r"""text = strings.ToValidUTF8(text, "")""", r"""_ = text""")
+A("observe-start-log-valid-utf8", "observe", "TestStartLogTailDropsABrokenCharacter",
+  r"""text = strings.ToValidUTF8(text[len(text)-startLogBytes:], "")""", r"""text = text[len(text)-startLogBytes:]""")
+A("observe-port-asked-later-does-not-warn", "observe", "TestObserveAPortThatFailedAndWasAskedLaterDoesNotWarn",
+  r"""if !asked[port] {""", r"""if true {""")
+A("observe-warn-once", "observe", "TestObserveARepeatedWarningIsGivenOnce",
+  r"""if r.once[text] {""", r"""if false && r.once[text] {""")
+A("observe-running-stop-own-context", "observe", "TestRunningStopRemovesEvenWhenStopFails",
+  r"""cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)⏎»defer cancel()⏎»var errs []error""",
+  r"""cctx, cancel := context.WithTimeout(ctx, cleanupTimeout)⏎»defer cancel()⏎»var errs []error""")
+A("observe-start-call-failure-removes-the-container", "observe", "TestStartFailureOfTheContainerRemovesIt",
+  r"""return fail(fmt.Errorf("observe: start: starting the container: %w", err))""",
+  r"""return nil, fmt.Errorf("observe: start: starting the container: %w", err)""")
+A("observe-ports-open-needs-an-addresser", "observe", "TestStartWithoutAnAddresserIsNeverReady",
+  r"""a, ok := r.d.(Addresser)⏎»if !ok {⏎»»return false""", r"""a, ok := r.d.(Addresser)⏎»if !ok && false {⏎»»return false""")
+A("observe-ports-open-needs-an-address", "observe", "TestStartWithAnEmptyAddressIsNeverReady",
+  r"""if err != nil || host == "" {⏎»»return false""", r"""if err != nil {⏎»»return false""")
+A("observe-start-needs-an-image", "observe", "TestStartWithoutAnImageIsAnError",
+  r"""if o.Image == "" {⏎»»return nil, errors.New("observe: start: no image given")""", r"""if false {⏎»»return nil, errors.New("observe: start: no image given")""")
+# trace
+A("trace-child-result-zero", "trace", "TestChildProcessesAResultOfZeroIsNotAChild",
+  r"""if err != nil || pid <= 0 {""", r"""if err != nil || pid < 0 {""")
+A("trace-child-thread-flag-word-end", "trace", "TestChildProcessesThreadFlagIsAWholeWord",
+  r"""regexp.MustCompile(`\bCLONE_THREAD\b`)""", r"""regexp.MustCompile(`\bCLONE_THREAD`)""")
+A("trace-child-thread-flag-word-start", "trace", "TestChildProcessesThreadFlagIsAWholeWord",
+  r"""regexp.MustCompile(`\bCLONE_THREAD\b`)""", r"""regexp.MustCompile(`CLONE_THREAD\b`)""")
+# without the guard the walk never ends: the run is cut by the timeout of go test, which is a failure
+A("trace-reaches-pid-reuse-guard", "trace", "TestChildProcessesPidReuseDoesNotLoop",
+  r"""for !seen[pid] {""", r"""for {""")
+A("trace-child-resumed-forgets-its-start", "trace", "TestChildProcessesResumedLineWithoutItsStartIsNotJoinedToAnOldOne",
+  r"""delete(pending, caller)""", r"""_ = pending""")
+A("trace-child-unfinished-with-pid-prefix", "trace", "TestChildProcessesUnfinishedAndResumedWithPidPrefix",
+  r"""pending[caller] = text""", r"""pending[m[2]] = text""")
+# gen
+A("gen-ports-unsupported-protocol-target", "gen", "TestPortMessagesNameTheContainerPortAndTheProtocol",
+  r"""is not supported by ops; the port %s is not published", proto, p.Target))""", r"""is not supported by ops; the port %s is not published", proto, p.Published))""")
+A("gen-ports-unsupported-protocol-name", "gen", "TestPortMessagesNameTheContainerPortAndTheProtocol",
+  r"""is not supported by ops; the port %s is not published", proto, p.Target))""", r"""is not supported by ops; the port %s is not published", "tcp", p.Target))""")
+A("gen-ports-not-published-target", "gen", "TestPortMessagesNameTheContainerPortAndTheProtocol",
+  r"""is not published; it is reachable only from other services", p.Target, proto))""", r"""is not published; it is reachable only from other services", p.Published, proto))""")
+A("gen-ports-not-published-protocol", "gen", "TestPortMessagesNameTheContainerPortAndTheProtocol",
+  r"""is not published; it is reachable only from other services", p.Target, proto))""", r"""is not published; it is reachable only from other services", p.Target, "tcp"))""")
+A("gen-stopped-early-empty-log", "gen", "TestStoppedEarlyWithoutALogHasNoLogSuffix",
+  r"""head != "" {""", r"""true {""")
+# docker
+A("docker-redact-longer-first", "docker", "TestRedactSecretsHidesTheLongerValueWhole|TestBuildErrorHidesArgumentValues",
+  r"""return len(long[i]) > len(long[j])""", r"""return len(long[i]) < len(long[j])""")
+A("docker-passenv-valueless-entry", "docker", "TestEnvEntryWithoutAValueIsPassedByName",
+  r"""args = append(args, flag, name)⏎»»if !has {""", r"""args = append(args, flag, name)⏎»»if !has && false {""")
+A("docker-network-remove-failure-is-wrapped", "docker", "TestNetworkRemoveFailureIsWrapped",
+  r"""_, err := c.do(ctx, "docker network rm", []string{"network", "rm", name})""", r"""_, _, err := c.r.Run(ctx, nil, "network", "rm", name)""")
+# output
+A("output-manifest-chmod", "output", "TestManifestModeIsSetWhateverTheUmask",
+  r"""if err := os.Chmod(mpath, mode); err != nil {""", r"""if err := error(nil); err != nil {""")
+# cmd
+A("cmd-shell-quote-embedded-quote", "cmd", "TestShellQuote",
+  r"""strings.ReplaceAll(s, "'", `'\''`)""", r"""strings.ReplaceAll(s, "'", "")""")
+A("cmd-shell-quote-empty", "cmd", "TestShellQuote",
+  r"""if s != "" && strings.Trim(""", r"""if strings.Trim(""")
+A("cmd-shell-quote-safe-punctuation", "cmd", "TestShellQuote",
+  r"""0123456789_-./:=+,@%""", r"""0123456789_-./""")
+A("cmd-shell-quote-dollar-is-unsafe", "cmd", "TestShellQuote",
+  r"""+,@%")""", r"""+,@%$")""")
+A("cmd-closure-is-transitive", "cmd", "TestClosureHoldsTheDependenciesOfTheDependencies",
+  r"""need[d.Service] = true⏎»»»»visit(d.Service)""", r"""need[d.Service] = true""")
+A("cmd-network-not-removed-warning", "cmd", "TestNetworkRemoveFailureIsAWarning",
+  r"""fmt.Fprintf(a.Stderr, "%s: warning: the docker network %s is not removed: %v\n", ToolName, name, err)""", r"""_ = err""")
+A("cmd-stop-failure-warning", "cmd", "TestStopFailureOfADependencyIsAWarning",
+  r"""fmt.Fprintf(a.Stderr, "%s: warning: stopping %s: %v\n", ToolName, name, err)""", r"""_ = err""")
+A("cmd-starting-is-announced", "cmd", "TestStartingADependencyIsAnnounced",
+  r"""fmt.Fprintf(a.Stderr, "%s: starting %s for %s\n", name, so.Image, s.Name)""", r"""_ = so.Image""")
 
 
 def main():
