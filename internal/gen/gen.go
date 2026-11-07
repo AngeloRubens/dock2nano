@@ -466,7 +466,7 @@ func (g *generator) volumes(s *compose.Service, si ServiceInput, m *plan.Manifes
 		case strings.Contains(v.Source, "$") || v.Type == "unresolved":
 			g.add(s.Name, plan.Unsupported, key, "the source holds a variable, so it is not known whether it is a bind mount or a named volume; it is not converted")
 		case v.Type == "bind":
-			g.bind(s.Name, key, v, m)
+			g.bind(s.Name, key, v)
 		case v.Type == "volume" && v.Source == "":
 			g.add(s.Name, plan.Unsupported, key, "anonymous volume at "+v.Target+": nanos has no volumes; the data is not kept")
 		case v.Type == "volume":
@@ -482,7 +482,7 @@ func (g *generator) volumes(s *compose.Service, si ServiceInput, m *plan.Manifes
 	}
 }
 
-func (g *generator) bind(service, key string, v compose.Volume, m *plan.Manifest) {
+func (g *generator) bind(service, key string, v compose.Volume) {
 	if strings.HasPrefix(v.Source, "~") {
 		g.add(service, plan.Unsupported, key, "the source "+v.Source+" starts with ~, which is not expanded; it is not converted")
 		return
@@ -495,17 +495,9 @@ func (g *generator) bind(service, key string, v compose.Volume, m *plan.Manifest
 		g.add(service, plan.Unsupported, key, "the host path "+host+" cannot be read ("+err.Error()+"); it is not converted")
 		return
 	}
-	if prev, ok := m.MapDirs[host]; ok && prev != v.Target {
-		g.add(service, plan.Unsupported, key, "the host path "+host+" is already copied to "+prev+"; a second target ("+v.Target+") is not supported")
-		return
-	}
-	if m.MapDirs == nil {
-		m.MapDirs = map[string]string{}
-	}
-	m.MapDirs[host] = v.Target
-	msg := "bind mount: " + host + " is copied into the image at build time as " + v.Target + "; changes the program makes are not written back to the host"
+	msg := "bind mount " + host + " at " + v.Target + ": only the files the program opened while it was observed are carried; the rest of the directory is not; changes made while running are not written back"
 	if v.ReadOnly {
-		msg += "; read_only is not enforced"
+		msg += "; it was read-only, which is not enforced"
 	}
 	if v.Options != "" {
 		msg += "; the options " + v.Options + " are ignored"

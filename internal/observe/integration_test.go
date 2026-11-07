@@ -328,3 +328,50 @@ func TestObserveEntrypointScript(t *testing.T) {
 	removeSysroot()
 	checkNoLeftovers(t, before, tmp)
 }
+
+func TestObserveNginxWithABoundConfig(t *testing.T) {
+	needDocker(t)
+	// made before TMPDIR is pointed at the private directory, so that it is not a leftover
+	dir := t.TempDir()
+	tmp := privateTemp(t)
+	before := containerIDs(t)
+
+	const conf = "pid /tmp/nginx.pid;\nevents {}\nhttp { server { listen 8080; location / { return 200 \"mine\\n\"; } } }\n"
+	confPath := filepath.Join(dir, "nginx.conf")
+	if err := os.WriteFile(confPath, []byte(conf), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	res, err := observe.Observe(ctx, docker.Default(), observe.Options{
+		Image:     "nginx:1.27-alpine",
+		Pull:      true,
+		Seconds:   30,
+		Binds:     []string{confPath + ":/etc/nginx/nginx.conf:ro"},
+		Log:       t.Logf,
+		KeepTrace: keepTrace(t, "nginx-bind"),
+	})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	removed := false
+	removeSysroot := func() {
+		if !removed {
+			removed = true
+			os.RemoveAll(res.Sysroot)
+		}
+	}
+	t.Cleanup(removeSysroot)
+
+	got, err := os.ReadFile(filepath.Join(res.Sysroot, "etc/nginx/nginx.conf"))
+	if err != nil {
+		t.Fatalf("the sysroot has no nginx.conf: %v", err)
+	}
+	if string(got) != conf {
+		t.Errorf("the carried nginx.conf is not the bound one:\n got %q\nwant %q", got, conf)
+	}
+
+	removeSysroot()
+	checkNoLeftovers(t, before, tmp)
+}

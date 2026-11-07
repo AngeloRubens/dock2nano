@@ -435,47 +435,45 @@ func TestVolumes(t *testing.T) {
 	tests := []struct {
 		name   string
 		vol    compose.Volume
-		mapDir map[string]string
 		kind   plan.Kind
 		substr string
 	}{
-		{"relative directory", compose.Volume{Type: "bind", Source: "./data", Target: "/data"}, map[string]string{"/work/app/data": "/data"}, plan.Approximated, "copied into the image at build time"},
-		{"absolute file read only", compose.Volume{Type: "bind", Source: "/etc/app.conf", Target: "/app.conf", ReadOnly: true}, map[string]string{"/etc/app.conf": "/app.conf"}, plan.Approximated, "read_only is not enforced"},
-		{"bind options", compose.Volume{Type: "bind", Source: "./data", Target: "/data", Options: "z"}, map[string]string{"/work/app/data": "/data"}, plan.Approximated, "options z are ignored"},
-		{"missing path", compose.Volume{Type: "bind", Source: "./nope", Target: "/n"}, nil, plan.Unsupported, "/work/app/nope"},
-		{"home directory", compose.Volume{Type: "bind", Source: "~/x", Target: "/x"}, nil, plan.Unsupported, "starts with ~"},
-		{"named", compose.Volume{Type: "volume", Source: "db", Target: "/var/lib/db"}, nil, plan.Unsupported, "named volume db"},
-		{"anonymous", compose.Volume{Type: "volume", Target: "/cache"}, nil, plan.Unsupported, "anonymous volume"},
-		{"tmpfs", compose.Volume{Type: "tmpfs", Target: "/run"}, nil, plan.Unsupported, "tmpfs"},
-		{"unresolved", compose.Volume{Type: "unresolved", Source: "${D}/x", Target: "/x"}, nil, plan.Unsupported, "variable"},
-		{"variable in a bind", compose.Volume{Type: "bind", Source: "${D}/x", Target: "/x"}, nil, plan.Unsupported, "variable"},
-		{"other type", compose.Volume{Type: "npipe", Source: "p", Target: "/p"}, nil, plan.Unsupported, "npipe"},
+		{"relative directory", compose.Volume{Type: "bind", Source: "./data", Target: "/data"}, plan.Approximated, "only the files the program opened"},
+		{"absolute file read only", compose.Volume{Type: "bind", Source: "/etc/app.conf", Target: "/app.conf", ReadOnly: true}, plan.Approximated, "read-only"},
+		{"bind options", compose.Volume{Type: "bind", Source: "./data", Target: "/data", Options: "z"}, plan.Approximated, "options z are ignored"},
+		{"missing path", compose.Volume{Type: "bind", Source: "./nope", Target: "/n"}, plan.Unsupported, "/work/app/nope"},
+		{"home directory", compose.Volume{Type: "bind", Source: "~/x", Target: "/x"}, plan.Unsupported, "starts with ~"},
+		{"named", compose.Volume{Type: "volume", Source: "db", Target: "/var/lib/db"}, plan.Unsupported, "named volume db"},
+		{"anonymous", compose.Volume{Type: "volume", Target: "/cache"}, plan.Unsupported, "anonymous volume"},
+		{"tmpfs", compose.Volume{Type: "tmpfs", Target: "/run"}, plan.Unsupported, "tmpfs"},
+		{"unresolved", compose.Volume{Type: "unresolved", Source: "${D}/x", Target: "/x"}, plan.Unsupported, "variable"},
+		{"variable in a bind", compose.Volume{Type: "bind", Source: "${D}/x", Target: "/x"}, plan.Unsupported, "variable"},
+		{"other type", compose.Volume{Type: "npipe", Source: "p", Target: "/p"}, plan.Unsupported, "npipe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := svc("web")
 			s.Volumes = []compose.Volume{tt.vol}
 			p, got := one(t, f, s)
-			if !reflect.DeepEqual(got.Manifest.MapDirs, tt.mapDir) {
-				t.Errorf("MapDirs = %v, want %v", got.Manifest.MapDirs, tt.mapDir)
+			if got.Manifest.MapDirs != nil {
+				t.Errorf("MapDirs = %v, want none", got.Manifest.MapDirs)
 			}
 			want1(t, p, "web", tt.kind, "volumes[0]", tt.substr)
 		})
 	}
 }
 
-func TestVolumeTargetConflictAndImageVolumes(t *testing.T) {
+func TestVolumesAndImageVolumes(t *testing.T) {
 	f := &fake{dirs: map[string]bool{"/work/app/data": true}}
 	s := svc("web")
-	s.Volumes = []compose.Volume{{Type: "bind", Source: "./data", Target: "/a"}, {Type: "bind", Source: "./data", Target: "/b"}}
+	s.Volumes = []compose.Volume{{Type: "bind", Source: "./data", Target: "/a"}}
 	in := newInput(f, s)
 	in.Services["web"] = ServiceInput{Observed: observed("web"), Image: &docker.ImageConfig{Volumes: []string{"/var/lib/x"}}}
 	p := mustGen(t, in)
-	if got := p.Services[0].Manifest.MapDirs; !reflect.DeepEqual(got, map[string]string{"/work/app/data": "/a"}) {
-		t.Errorf("MapDirs = %v", got)
+	if got := p.Services[0].Manifest.MapDirs; got != nil {
+		t.Errorf("MapDirs = %v, want none", got)
 	}
 	want1(t, p, "web", plan.Approximated, "volumes[0]", "/a")
-	want1(t, p, "web", plan.Unsupported, "volumes[1]", "second target")
 	want1(t, p, "web", plan.Note, "volumes (image)", "/var/lib/x")
 }
 

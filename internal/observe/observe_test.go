@@ -1150,3 +1150,57 @@ func TestHTTPProberFollowsARedirectToHTTPSOnTheSameHost(t *testing.T) {
 		t.Error("a closed port was not an error")
 	}
 }
+
+func TestObserveBindsFollowTheTracerBinds(t *testing.T) {
+	s := newScene(t)
+	s.o.Binds = []string{"/srv/site/app.conf:/etc/app.conf:ro", "/srv/site/www:/www"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "binds", s.d.creates[1].Binds, []string{
+		s.d.bindDir + ":/.ops-trace", s.d.bindDir + "/out:/.ops-trace/out:ro",
+		"/srv/site/app.conf:/etc/app.conf:ro", "/srv/site/www:/www",
+	})
+}
+
+func TestObserveBindUnderTheTracerIsAnError(t *testing.T) {
+	for _, b := range []string{
+		"/h:/.ops-trace", "/h:/.ops-trace/out", "/h:/.ops-trace/../.ops-trace/x:ro",
+		"h:/x", "/h:x", "/h", "/h:/x:zz", "/h:/x:ro:more",
+	} {
+		s := newScene(t)
+		s.o.Binds = []string{b}
+		if _, err := s.observe(t, context.Background()); err == nil {
+			t.Errorf("bind %q: no error", b)
+		}
+		equal(t, "created for "+b, len(s.d.creates), 0)
+		equal(t, "pulled for "+b, s.d.pulled, []string(nil))
+	}
+}
+
+func TestObserveBindMountedFileAndDirectoryAreCarried(t *testing.T) {
+	s := newScene(t)
+	s.o.Binds = []string{"/srv/site/app.conf:/etc/mine.conf:ro", "/srv/site/www:/www"}
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/etc/mine.conf", O_RDONLY) = 8` + "\n" +
+		`11 openat(AT_FDCWD, "/www/index.html", O_RDONLY) = 9` + "\n" +
+		`11 openat(AT_FDCWD, "/www/sub", O_RDONLY|O_DIRECTORY) = 10` + "\n"
+	// docker cp reads through a bind mount like any other path
+	s.d.files["/etc/mine.conf"] = entry{data: "mine\n"}
+	s.d.files["/www/index.html"] = entry{data: "<p>hi</p>"}
+	s.d.files["/www/sub"] = entry{dir: true}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"etc/mine.conf": "mine\n", "www/index.html": "<p>hi</p>"} {
+		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
+		if err != nil || string(b) != want {
+			t.Errorf("%s = %q, %v; want %q", name, b, err, want)
+		}
+	}
+	if st, err := os.Stat(filepath.Join(res.Sysroot, "www/sub")); err != nil || !st.IsDir() {
+		t.Errorf("the bind-mounted directory is not in the sysroot: %v", err)
+	}
+	equal(t, "stopped", s.d.tarStopped, map[string]bool{"/www/sub": true})
+	equal(t, "warnings", res.Warnings, []string(nil))
+}

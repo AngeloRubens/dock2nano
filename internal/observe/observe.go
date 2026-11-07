@@ -102,6 +102,11 @@ type Options struct {
 	Env []string
 	// WorkingDir replaces the working directory of the image when not empty.
 	WorkingDir string
+	// Binds are bind mounts in docker syntax, "host:container" or "host:container:ro", with
+	// absolute paths. The traced container gets them in addition to its own, so that the program
+	// sees the files the user mounts; the files it opens under them are carried like any other.
+	// A container path under the directory of the tracer is an error.
+	Binds []string
 	// Seconds is how long the program is watched. The default is 30.
 	Seconds int
 	// Verbose logs what is found and decided, through Log.
@@ -246,6 +251,9 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 	if o.Probe == nil {
 		o.Probe = httpProber{}
 	}
+	if err := checkBinds(o.Binds); err != nil {
+		return nil, err
+	}
 	r := &run{d: d, o: o, once: map[string]bool{}}
 
 	sysroot, err := os.MkdirTemp("", "dock2nano-sysroot-")
@@ -274,6 +282,32 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 // effectiveArgv is the command line Docker would run: the entrypoint (the one in the options, or
 // the image's) followed by the cmd (the one in the options; the image's only when the options do
 // not set an entrypoint, because Docker drops the image cmd then), followed by o.Args.
+// checkBinds refuses a bind that is not "host:container[:ro]" with absolute paths, or whose
+// container path is the directory of the tracer or under it.
+func checkBinds(binds []string) error {
+	for _, b := range binds {
+		parts := strings.Split(b, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return fmt.Errorf("observe: the bind %q is not host:container[:ro]", b)
+		}
+		host, target := parts[0], parts[1]
+		if len(parts) == 3 && parts[2] != "ro" && parts[2] != "rw" {
+			return fmt.Errorf("observe: the bind %q has the option %q; only ro and rw are known", b, parts[2])
+		}
+		if !filepath.IsAbs(host) {
+			return fmt.Errorf("observe: the host path of the bind %q is not absolute", b)
+		}
+		if !path.IsAbs(target) {
+			return fmt.Errorf("observe: the container path of the bind %q is not absolute", b)
+		}
+		t := path.Clean(target)
+		if t == trace.TraceMount || strings.HasPrefix(t, trace.TraceMount+"/") {
+			return fmt.Errorf("observe: the bind %q is under %s, which the tracer uses", b, trace.TraceMount)
+		}
+	}
+	return nil
+}
+
 func effectiveArgv(imageEntrypoint, imageCmd []string, o Options) []string {
 	entrypoint := imageEntrypoint
 	cmd := imageCmd
@@ -372,6 +406,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// read it; strace then runs the program as the user of the image.
 	// the second bind makes strace and its libraries read-only to everything in the container
 	binds := []string{tracerDir + ":" + trace.TraceMount, filepath.Join(tracerDir, "out") + ":" + trace.TraceMount + "/out:ro"}
+	binds = append(binds, r.o.Binds...)
 	wrapped := trace.WrapCommandAs(trace.TraceMount, loader, straceUser(cfg.User), argv)
 	id, err := r.d.Create(ctx, docker.CreateOptions{
 		Image:       image,
