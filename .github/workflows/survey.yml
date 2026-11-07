@@ -21,7 +21,6 @@ jobs:
           - haproxy:3.0-alpine
           - redis:7-alpine
           - memcached:1.6-alpine
-          - postgres:16-alpine
           - mariadb:11
           - rabbitmq:4-alpine
           - registry:2
