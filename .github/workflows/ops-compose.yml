@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      OPS_HOME: /home/runner/.ops
+      OPS_HOME: /home/runner
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -20,7 +20,7 @@ jobs:
           nproc; free -m; id
           docker version --format '{{.Server.Version}}'
       - name: qemu
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils >/dev/null
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source
         run: |
           git clone --depth 1 https://github.com/nanovms/ops /tmp/ops-src
@@ -28,13 +28,15 @@ jobs:
           go build -o /tmp/ops .
           sudo install /tmp/ops /usr/local/bin/ops
           ops version
+      - name: kernel and boot image
+        run: ops update 2>&1 | tail -5
       - name: convert
         run: |
           mkdir -p /tmp/out
           go run . convert -f examples/two-services/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 20 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
-          find "$OPS_HOME/local_packages" -maxdepth 3 | head -20
-          cat "$OPS_HOME"/local_packages/*/demo_web/package.manifest
+          find "$OPS_HOME/.ops/local_packages" -maxdepth 3 | head -20
+          cat "$OPS_HOME"/.ops/local_packages/*/demo_web/package.manifest
       - name: dns package
         run: ops pkg get eyberg/ops-dns:0.0.1
       - name: compose up
