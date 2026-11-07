@@ -172,7 +172,7 @@ A("output-mkdir-rolled-back", "output", "TestWriteRollbackWhenSecondPackageFails
 A("output-force-replaces-package", "output", "TestWriteForceReplaces|TestWriteRollbackKeepsWhatExisted",
   r'''if exists(final) {⏎»»if !force {''', r'''if false {⏎»»if !force {''')
 A("output-exdev-only", "output", "TestMoveTreeOtherErrorsDoNotCopy",
-  r'''if !errors.Is(err, syscall.EXDEV) {''', r'''if false {''')
+  r'''if !errors.Is(err, syscall.EXDEV) {''', r'''if !errors.Is(err, syscall.EXDEV) && false {''')
 A("output-exdev-removes-source", "output", "TestWriteCrossDeviceRemovesSourceAfterSuccess",
   r'''j.onOK(func() { os.RemoveAll(src) })''', r'''_ = src''')
 A("output-copy-keeps-modes", "output", "TestCopyTreeKeepsModesAndLinks",
@@ -222,7 +222,7 @@ A("observe-half-written-file-removed", "observe", "TestObserveHalfWrittenFileIsR
 A("trace-wrap-user", "trace", "TestWrapCommand",
   r'''if user != "" {''', r'''if false {''')
 A("trace-lines-before-from", "trace", "TestTouchedPaths|TestTouchedPathsFromLineZero",
-  r'''collect := i >= from''', r'''collect := true''')
+  r'''collect := i >= from''', r'''collect := i >= from || i >= 0''')
 A("trace-chdir-sets-cwd", "trace", "TestTouchedPathsChdir",
   r'''»»»»cwd[pid] = name⏎»»»}''', r'''»»»»_ = name⏎»»»}''')
 A("trace-fchdir-makes-cwd-unknown", "trace", "TestTouchedPathsChdir|TestTouchedPathsFromLineZero",
@@ -310,7 +310,7 @@ A("dockerfile-base-stage-earlier-only", "dockerfile", "TestBaseStage",
 
 # ------------------------------------------------------------------------- cmd
 A("cmd-image-tag-separators-collapse", "cmd", "TestImageTag",
-  r'''if sep && b.Len() > 0 {''', r'''if false {''')
+  r'''if sep && b.Len() > 0 {''', r'''if sep && b.Len() > 0 && false {''')
 A("cmd-image-tag-ends-alphanumeric", "cmd", "TestImageTag",
   r'''out := strings.Trim(b.String(), "-_.")''', r'''out := b.String()''')
 A("cmd-image-tag-empty-component", "cmd", "TestImageTag",
