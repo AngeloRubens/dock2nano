@@ -169,7 +169,9 @@ func boolean(n *yaml.Node) (val, ok bool, err error) {
 // applyReset removes, at every level, the mapping pairs and the list items
 // whose value carries the Compose "!reset" tag, as Compose does when it loads
 // a file, also when the value is reached through an alias. A key that appears
-// twice in a mapping is an error even if one of its values is reset. The seen
+// twice in a mapping is an error even if one of its values is reset: compose-go
+// (loader/reset.go) records each key before it resolves the reset, so it refuses
+// the file too. The seen
 // set makes it end on any graph, cyclic ones included, so it runs before
 // checkSize: a cycle that only exists under a reset node is gone by then.
 func applyReset(n *yaml.Node, seen map[*yaml.Node]bool) error {

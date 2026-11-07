@@ -62,7 +62,7 @@ M = {
  "reset-call": ("\tif err := applyReset(&doc, map[*yaml.Node]bool{}); err != nil {\n\t\treturn nil, err\n\t}\n", "", "TestResetRemovesEveryKey|TestResetRemovesScalarAndList|TestResetRemovesEnvironmentVariable"),
  "reset-through-alias": ("if deref(v).Tag != \"!reset\" {", "if v.Tag != \"!reset\" {", "TestResetThroughAlias"),
  "reset-alias-branch": ("if n.Kind == yaml.AliasNode {\n\t\treturn applyReset(n.Alias, seen)", "if false {\n\t\treturn applyReset(n.Alias, seen)", "TestResetInsideRemovedSubtreeStillAppliesThroughAlias"),
- "reset-duplicate-key": ("if keys[k.Value] {", "if false {", "TestTwoMergeKeysAreRefused|TestDuplicateKeyNextToReset"),
+ "reset-duplicate-key": ("if keys[k.Value] {", "if false {", "TestTwoMergeKeysAreRefused|TestDuplicateKeyNextToReset|TestDuplicateKeysInOtherPlaces"),
  "top-level-reset": ("if doc.Content[0].Tag == \"!reset\" {", "if false {", "TestTopLevelCannotBeReset"),
  "reset-before-size": ("\tif err := applyReset(&doc, map[*yaml.Node]bool{}); err != nil {\n\t\treturn nil, err\n\t}\n\tif err := checkSize(&doc); err != nil {\n\t\treturn nil, err\n\t}\n", "\tif err := checkSize(&doc); err != nil {\n\t\treturn nil, err\n\t}\n\tif err := applyReset(&doc, map[*yaml.Node]bool{}); err != nil {\n\t\treturn nil, err\n\t}\n", "TestCycleUnderResetIsGone"),
 }

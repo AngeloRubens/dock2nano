@@ -803,3 +803,16 @@ func TestTopLevelCannotBeReset(t *testing.T) {
 		t.Error("a reset top level was accepted")
 	}
 }
+
+func TestDuplicateKeysInOtherPlaces(t *testing.T) {
+	for _, src := range []string{
+		"x-b: &b {image: a, image: b}\nservices: {s: {<<: *b}}\n",
+		"services: {s: {image: x, environment: {1: a, \"1\": b}}}\n",
+		"x-b: &b {image: a}\nservices: {s: {\"<<\": z, <<: *b}}\n",
+	} {
+		_, err := Parse([]byte(src))
+		if err == nil || !strings.Contains(err.Error(), "twice") {
+			t.Errorf("%q: error %v", src, err)
+		}
+	}
+}
