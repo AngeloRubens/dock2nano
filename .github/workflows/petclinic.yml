@@ -19,6 +19,10 @@ jobs:
           go-version-file: go.mod
       - name: Build the tool
         run: go build -o /tmp/d2n .
+      - name: Diagnosis, the Maven build of the project alone
+        continue-on-error: true
+        run: |
+          docker build --target build --progress=plain -t d2n-mvn-check examples/petclinic-glassfish/petclinic 2>&1 | grep -v "^#[0-9]* \(DONE\|CACHED\)" | tail -80 | cut -c1-300
       - name: Convert petclinic
         run: |
           mkdir -p /tmp/out /tmp/home
