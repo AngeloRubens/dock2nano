@@ -919,8 +919,8 @@ func TestObserveOtherCopyErrorOfCreatedFileStillWarns(t *testing.T) {
 	}
 	equal(t, "vanished", res.Vanished, 0)
 	equal(t, "warnings", res.Warnings, []string{
-		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: /tmp/z.log",
 		"not carried /tmp/z.log: docker cp: exit status 1: permission denied",
+		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: /tmp/z.log",
 	})
 }
 
