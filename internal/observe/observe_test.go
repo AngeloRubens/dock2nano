@@ -480,6 +480,8 @@ func TestObserveSuccess(t *testing.T) {
 	equal(t, "argv", res.Argv, []string{"app", "--serve"})
 	equal(t, "env", res.Env, []string{"A=1", "PATH=/usr/bin"})
 	equal(t, "created at run time", res.CreatedAtRuntime, []string(nil))
+	equal(t, "children", res.Children, 0)
+	equal(t, "child calls", res.ChildCalls, []string(nil))
 	// every read of /proc and of the tables is made as root
 	for _, u := range s.d.users {
 		if u != "root" {
@@ -872,6 +874,28 @@ func TestObserveCreatedAtRuntimeIsReported(t *testing.T) {
 		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: /etc/generated.conf",
 	})
 	equal(t, "carried", slices.Contains(tree(t, res.Sysroot), "etc/generated.conf"), true)
+}
+
+func TestObserveCountsChildProcesses(t *testing.T) {
+	s := newScene(t)
+	// two forks, a vfork and a clone3 that makes a process, one that makes a thread and a fork that
+	// failed; a fork of the entrypoint script (process 10) comes before the program and is not
+	// the program's
+	s.d.traceTxt = strings.Replace(sceneTrace, "11 execve(", "10 fork() = 20\n11 execve(", 1) +
+		"11 fork() = 12\n" +
+		"11 fork( <unfinished ...>\n" +
+		"11 <... fork resumed>) = 13\n" +
+		"11 clone3({flags=CLONE_VM|CLONE_THREAD, exit_signal=0}, 88) = 14\n" +
+		"11 fork() = -1 EAGAIN (Resource temporarily unavailable)\n" +
+		"12 vfork() = 15\n" +
+		"11 clone3({flags=CLONE_VM|CLONE_VFORK, exit_signal=SIGCHLD}, 88) = 16\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "children", res.Children, 4)
+	equal(t, "child calls", res.ChildCalls, []string{"fork", "vfork", "clone3"})
+	equal(t, "warnings", res.Warnings, []string(nil))
 }
 
 func TestObserveKeepTrace(t *testing.T) {
