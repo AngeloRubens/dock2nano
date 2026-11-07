@@ -145,9 +145,15 @@ type Result struct {
 	ExposedPorts []int
 
 	// CreatedAtRuntime are the files the program created while it ran (pid files, logs, a config
-	// an entrypoint script generated). They are carried when the program opened them, as they
-	// were at the end of the observation; Warnings lists them too.
+	// an entrypoint script generated) and that were still there at the end. They are carried when
+	// the program opened them, as they were at the end of the observation; Warnings lists the
+	// first ten. A created file that was gone at the end is not in it: see Vanished.
 	CreatedAtRuntime []string
+
+	// Vanished is how many files the program created while it ran that docker cp could not find at
+	// the end (temporary files that were renamed or deleted). They are not carried and not warned
+	// about one by one.
+	Vanished int
 
 	// Children is the number of child processes (fork, vfork, clone or clone3 without
 	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
@@ -193,6 +199,22 @@ type run struct {
 	warn    []string
 	cleanup []error
 	once    map[string]bool
+
+	// created are the paths the program created while it ran.
+	created map[string]bool
+	// gone are the created paths that docker cp could not find.
+	gone map[string]bool
+	// notCarried counts the paths that could not be carried and are warned about.
+	notCarried int
+}
+
+// maxWarnedPaths is how many paths of one kind are named in the warnings; the rest is counted.
+const maxWarnedPaths = 10
+
+// isNotFound tells a path that docker cp could not find from another failure of docker cp.
+func isNotFound(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "Could not find the file") || strings.Contains(text, "No such container:path")
 }
 
 func (r *run) logf(format string, args ...any) {
@@ -263,7 +285,7 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 	if err := checkBinds(o.Binds); err != nil {
 		return nil, err
 	}
-	r := &run{d: d, o: o, once: map[string]bool{}}
+	r := &run{d: d, o: o, once: map[string]bool{}, created: map[string]bool{}, gone: map[string]bool{}}
 
 	sysroot, err := os.MkdirTemp("", "dock2nano-sysroot-")
 	if err != nil {
@@ -516,8 +538,8 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	touched, executed := trace.TouchedPaths(raw, cwd, from)
 	r.vlogf("the program opened %d files\n", len(touched))
 	created := trace.CreatedPaths(raw, cwd, from)
-	if len(created) > 0 {
-		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(created, ", "))
+	for _, c := range created {
+		r.created[c] = true
 	}
 
 	children := trace.ChildProcesses(raw, from)
@@ -542,6 +564,27 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: carrying interpreters: %w", err)
 	}
 
+	// the created files that were gone at the end are counted, not listed
+	var stillThere []string
+	for _, c := range created {
+		if !r.gone[c] {
+			stillThere = append(stillThere, c)
+		}
+	}
+	created = stillThere
+	if len(created) > 0 {
+		list := created
+		more := ""
+		if len(list) > maxWarnedPaths {
+			more = fmt.Sprintf(" and %d more", len(list)-maxWarnedPaths)
+			list = list[:maxWarnedPaths]
+		}
+		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(list, ", ") + more)
+	}
+	if r.notCarried > maxWarnedPaths {
+		r.warn = append(r.warn, fmt.Sprintf("and %d more paths were not carried", r.notCarried-maxWarnedPaths))
+	}
+
 	if !strings.HasPrefix(program, "/") {
 		program = trace.WhereIs(sysroot, program, env)
 	}
@@ -564,6 +607,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		WorkingDir:         cwd,
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
+		Vanished:           len(r.gone),
 		Children:           len(children),
 		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),
@@ -919,7 +963,10 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 
 	notCarried := func(p string, why string) {
 		text := r.redact(fmt.Sprintf("not carried %s: %s", p, why))
-		r.warn = append(r.warn, text)
+		r.notCarried++
+		if r.notCarried <= maxWarnedPaths {
+			r.warn = append(r.warn, text)
+		}
 		r.vlogf("%s\n", text)
 	}
 
@@ -939,6 +986,12 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 			}
 			if ctx.Err() != nil {
 				return fmt.Errorf("observe: copying %s out of the container: %w", p, ctx.Err())
+			}
+			if r.created[p] && isNotFound(err) {
+				// a temporary file the program made and removed again
+				r.gone[p] = true
+				r.vlogf("gone at the end: %s\n", p)
+				continue
 			}
 			notCarried(p, err.Error())
 			continue

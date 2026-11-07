@@ -866,6 +866,17 @@ func TestObservedItems(t *testing.T) {
 	wantNone(t, p, "web", plan.Observed, "created at runtime")
 }
 
+func TestVanishedFilesAreANote(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.Vanished = 3
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "vanished", "3 files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package")
+
+	p, _ = one(t, &fake{}, web)
+	wantNone(t, p, "web", plan.Note, "vanished")
+}
+
 func TestChildProcessesAreUnsupported(t *testing.T) {
 	web := svc("web")
 	in := newInput(&fake{}, web)

@@ -118,6 +118,9 @@ type fakeDocker struct {
 
 	users []string
 
+	// cpErr makes docker cp of a path fail with this error.
+	cpErr map[string]error
+
 	// onTar runs at the start of every CopyTar, with the path.
 	onTar func(p string)
 
@@ -234,9 +237,12 @@ func (f *fakeDocker) CopyTar(ctx context.Context, id, containerPath string, w io
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := f.cpErr[containerPath]; err != nil {
+		return err
+	}
 	e, ok := f.files[containerPath]
 	if !ok {
-		return errors.New("no such file or directory: " + containerPath)
+		return errors.New("docker cp: exit status 1: Error response from daemon: Could not find the file " + containerPath + " in container " + id)
 	}
 	name := path.Base(containerPath)
 	tw := tar.NewWriter(w)
@@ -874,6 +880,87 @@ func TestObserveCreatedAtRuntimeIsReported(t *testing.T) {
 		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: /etc/generated.conf",
 	})
 	equal(t, "carried", slices.Contains(tree(t, res.Sysroot), "etc/generated.conf"), true)
+}
+
+func TestObserveCreatedAndGoneIsCountedNotWarned(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/tmp/x.pyc.123", O_WRONLY|O_CREAT|O_EXCL, 0644) = 8` + "\n" +
+		`11 openat(AT_FDCWD, "/tmp/y.pyc.456", O_WRONLY|O_CREAT|O_EXCL, 0644) = 9` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "vanished", res.Vanished, 2)
+	equal(t, "created", res.CreatedAtRuntime, []string(nil))
+	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
+func TestObserveGoneButNotCreatedStillWarns(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/tmp/read.txt", O_RDONLY) = 8` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "vanished", res.Vanished, 0)
+	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], "not carried /tmp/read.txt") {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
+func TestObserveOtherCopyErrorOfCreatedFileStillWarns(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/tmp/z.log", O_WRONLY|O_CREAT, 0644) = 8` + "\n"
+	s.d.files["/tmp/z.log"] = entry{data: "x"}
+	s.d.cpErr = map[string]error{"/tmp/z.log": errors.New("docker cp: exit status 1: permission denied")}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "vanished", res.Vanished, 0)
+	equal(t, "warnings", res.Warnings, []string{
+		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: /tmp/z.log",
+		"not carried /tmp/z.log: docker cp: exit status 1: permission denied",
+	})
+}
+
+func TestObserveNotCarriedWarningsAreAggregated(t *testing.T) {
+	s := newScene(t)
+	for i := 0; i < 25; i++ {
+		s.d.traceTxt += fmt.Sprintf(`11 openat(AT_FDCWD, "/gone/f%02d", O_RDONLY) = 8`+"\n", i)
+	}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 11 {
+		t.Fatalf("got %d warnings: %q", len(res.Warnings), res.Warnings)
+	}
+	for i := 0; i < 10; i++ {
+		if !strings.HasPrefix(res.Warnings[i], fmt.Sprintf("not carried /gone/f%02d: ", i)) {
+			t.Errorf("warning %d = %q", i, res.Warnings[i])
+		}
+	}
+	equal(t, "last", res.Warnings[10], "and 15 more paths were not carried")
+}
+
+func TestObserveCreatedWarningListsTenPaths(t *testing.T) {
+	s := newScene(t)
+	var want []string
+	for i := 0; i < 12; i++ {
+		p := fmt.Sprintf("/var/c%02d", i)
+		want = append(want, p)
+		s.d.traceTxt += fmt.Sprintf(`11 openat(AT_FDCWD, "%s", O_WRONLY|O_CREAT, 0644) = 8`+"\n", p)
+		s.d.files[p] = entry{data: "x"}
+	}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "created", res.CreatedAtRuntime, want)
+	equal(t, "warnings", res.Warnings, []string{
+		"the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(want[:10], ", ") + " and 2 more",
+	})
 }
 
 func TestObserveCountsChildProcesses(t *testing.T) {

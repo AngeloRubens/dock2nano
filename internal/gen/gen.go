@@ -579,6 +579,9 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if len(obs.CreatedAtRuntime) > 0 {
 		g.add(s.Name, plan.Observed, "created at runtime", "files the program created while it ran: "+listed(obs.CreatedAtRuntime))
 	}
+	if obs.Vanished > 0 {
+		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
+	}
 	if obs.Children > 0 {
 		g.add(s.Name, plan.Unsupported, "processes", fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children))
 	}
