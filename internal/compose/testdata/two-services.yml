@@ -1,0 +1,26 @@
+name: demo
+services:
+  web:
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: "1.22"
+    environment:
+      PORT: 9000
+      DEBUG:
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9000/"]
+      interval: 10s
+    privileged: true
