@@ -246,7 +246,14 @@ func TouchedPaths(trace []byte, workingDir string, from int) (paths []string, ex
 // (same working directory rules). A file opened with O_CREAT that already existed is in the list
 // too: the trace does not say which it was.
 func CreatedPaths(trace []byte, workingDir string, from int) []string {
-	return scan(trace, workingDir, from).created
+	var out []string
+	for _, p := range scan(trace, workingDir, from).created {
+		// what is never carried (the console, /proc) is not worth a warning either
+		if !NotCarried(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 type scanned struct {

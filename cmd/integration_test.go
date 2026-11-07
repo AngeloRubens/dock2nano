@@ -103,7 +103,7 @@ func TestConvertTwoServices(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cf); err != nil {
 		t.Fatal(err)
 	}
-	if len(cf.Packages) != 2 || cf.Packages[0].Name != "app" || cf.Packages[1].Name != "nginx" {
+	if len(cf.Packages) != 2 || cf.Packages[0].Pkg != "app" || cf.Packages[1].Pkg != "nginx" || cf.Packages[0].Name != "it_app" || cf.Packages[1].Name != "it_nginx" {
 		t.Fatalf("compose.yaml:\n%s", data)
 	}
 
@@ -114,7 +114,7 @@ func TestConvertTwoServices(t *testing.T) {
 		}
 		return m[0]
 	}
-	for _, name := range []string{"app", "nginx"} {
+	for _, name := range []string{"it_app", "it_nginx"} {
 		mf, err := os.ReadFile(filepath.Join(pkg(name), "package.manifest"))
 		if err != nil {
 			t.Fatal(err)
@@ -123,14 +123,14 @@ func TestConvertTwoServices(t *testing.T) {
 			t.Errorf("%s: %v\n%s", name, err, mf)
 		}
 	}
-	got, err := os.ReadFile(filepath.Join(pkg("nginx"), "sysroot", "etc", "nginx", "nginx.conf"))
+	got, err := os.ReadFile(filepath.Join(pkg("it_nginx"), "sysroot", "etc", "nginx", "nginx.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != itNginxConf {
 		t.Errorf("the nginx sysroot does not hold the configuration of the user:\n%s", got)
 	}
-	if _, err := os.Stat(filepath.Join(pkg("app"), "sysroot", "www", "index.html")); err != nil {
+	if _, err := os.Stat(filepath.Join(pkg("it_app"), "sysroot", "www", "index.html")); err != nil {
 		t.Errorf("the app sysroot has no /www/index.html: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "a service reaches another as <pkg>.service") {
