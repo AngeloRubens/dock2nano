@@ -1283,3 +1283,70 @@ func TestIPAddressNetworkOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateArgsNetworkAliases(t *testing.T) {
+	got, _, err := createArgs(CreateOptions{Image: "img", Network: "net1", NetworkAliases: []string{"db", "mysql"}, Cmd: []string{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"create", "--network", "net1", "--network-alias", "db", "--network-alias", "mysql", "img", "x"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
+
+func TestCreateArgsNetworkGuards(t *testing.T) {
+	tests := []struct {
+		name string
+		o    CreateOptions
+	}{
+		{"aliases without network", CreateOptions{Image: "img", NetworkAliases: []string{"db"}}},
+		{"option-like network", CreateOptions{Image: "img", Network: "--privileged"}},
+		{"option-like alias", CreateOptions{Image: "img", Network: "n", NetworkAliases: []string{"-x"}}},
+		{"empty alias", CreateOptions{Image: "img", Network: "n", NetworkAliases: []string{""}}},
+	}
+	for _, tt := range tests {
+		if _, _, err := createArgs(tt.o); err == nil {
+			t.Errorf("%s: accepted", tt.name)
+		}
+	}
+}
+
+func TestNetworkCommands(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake()
+	if err := c.NetworkCreate(ctx, "dock2nano-0a1b2c3d"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "network", "create", "dock2nano-0a1b2c3d")
+	c, f = newFake()
+	if err := c.NetworkRemove(ctx, "dock2nano-0a1b2c3d"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "network", "rm", "dock2nano-0a1b2c3d")
+}
+
+func TestNetworkCommandsRefuseBadNames(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake()
+	for _, n := range []string{"", "-x", "--driver=bridge"} {
+		if err := c.NetworkCreate(ctx, n); err == nil {
+			t.Errorf("create %q accepted", n)
+		}
+		if err := c.NetworkRemove(ctx, n); err == nil {
+			t.Errorf("rm %q accepted", n)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("docker was called: %v", f.calls)
+	}
+}
+
+func TestNetworkCreateFailureIsWrapped(t *testing.T) {
+	cause := errors.New("exists")
+	c, _ := newFake(reply{err: cause, stderr: "network with name n already exists"})
+	err := c.NetworkCreate(context.Background(), "n")
+	if !errors.Is(err, cause) || !strings.HasPrefix(err.Error(), "docker network create: ") {
+		t.Fatalf("err = %v", err)
+	}
+}

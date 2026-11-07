@@ -117,6 +117,11 @@ type Options struct {
 	// sees the files the user mounts; the files it opens under them are carried like any other.
 	// A container path under the directory of the tracer is an error.
 	Binds []string
+	// Network, when not empty, is the docker network the traced container joins, and
+	// NetworkAliases are its names on it. Other containers of the network (see Start) reach the
+	// program by them.
+	Network        string
+	NetworkAliases []string
 	// Seconds is how long the program is watched. The default is 30.
 	Seconds int
 	// Verbose logs what is found and decided, through Log.
@@ -544,6 +549,9 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		Binds:       binds,
 		CapAdd:      []string{"SYS_PTRACE"},
 		SecurityOpt: []string{"seccomp=unconfined"},
+
+		Network:        r.o.Network,
+		NetworkAliases: r.o.NetworkAliases,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("observe: creating the traced container: %w", err)

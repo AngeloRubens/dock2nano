@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
 	"github.com/AngeloRubens/dock2nano/internal/docker"
@@ -63,6 +66,30 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}
 
+	// One network for the whole run: the service under observation and the
+	// services it depends on reach each other by the names of the file, as they
+	// do with docker compose. It is removed however the run ends.
+	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, failed: map[string]string{}}
+	if len(converted) > 0 {
+		name, err := networkName()
+		if err != nil {
+			return 0, err
+		}
+		if err := a.Docker.NetworkCreate(ctx, name); err != nil {
+			return 0, fmt.Errorf("creating the docker network %s: %w", name, err)
+		}
+		rs.network = name
+		defer func() {
+			cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if err := a.Docker.NetworkRemove(cctx, name); err != nil {
+				fmt.Fprintf(a.Stderr, "%s: warning: the docker network %s is not removed: %v\n", ToolName, name, err)
+			}
+		}()
+		// registered after the removal of the network, so it runs before it
+		defer rs.stopAll(a)
+	}
+
 	inputs := map[string]gen.ServiceInput{}
 	var sysroots []string
 	defer func() {
@@ -75,7 +102,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		if _, no := skipped[s.Name]; no {
 			continue
 		}
-		si, err := a.prepare(ctx, o, project, dir, s)
+		si, err := a.prepare(ctx, o, project, dir, s, rs)
 		if si.Observed != nil && si.Observed.Sysroot != "" {
 			sysroots = append(sysroots, si.Observed.Sysroot)
 		}
@@ -358,7 +385,7 @@ func dependencyOrder(p *compose.Project) ([]*compose.Service, error) {
 // prepare gets the image of one service, inspects it and observes it. The
 // returned input holds the observation even when the error is not nil, so that
 // the caller can remove its sysroot.
-func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir string, s *compose.Service) (gen.ServiceInput, error) {
+func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir string, s *compose.Service, rs *runState) (gen.ServiceInput, error) {
 	var si gen.ServiceInput
 	image := s.Image
 	dfPath := ""
@@ -401,13 +428,143 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		msg := fmt.Sprintf(format, args...)
 		fmt.Fprintf(a.Stderr, "%s: %s\n", s.Name, strings.TrimRight(msg, "\n"))
 	}
+	// The same command, environment and binds start the service when another
+	// one needs it.
+	rs.starts[s.Name] = observe.StartOptions{Image: image, Entrypoint: ep, Cmd: cmd, Env: oo.Env, WorkingDir: oo.WorkingDir, User: oo.User, Binds: oo.Binds}
+
+	notes, err := rs.startDependencies(ctx, a, s)
+	if err != nil {
+		return si, err
+	}
+	oo.Network = rs.network
+	oo.NetworkAliases = []string{s.Name}
 	fmt.Fprintf(a.Stderr, "%s: observing %s for %d seconds\n", s.Name, image, o.seconds)
 	res, err := a.Observe(ctx, oo)
 	si.Observed = res
 	if err != nil {
 		return si, err
 	}
+	if res != nil {
+		res.Warnings = append(res.Warnings, notes...)
+	}
 	return si, nil
+}
+
+// cleanupTimeout bounds the removal of the network and of the containers at
+// the end of a run.
+const cleanupTimeout = 2 * time.Minute
+
+// networkName is a name for the network of one run: dock2nano- and 8 random
+// hex digits.
+func networkName() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("making a network name: %w", err)
+	}
+	return "dock2nano-" + hex.EncodeToString(b), nil
+}
+
+// runState is what the services of one run share: the network, how to start
+// each prepared service and the ones that are running for the observation of
+// others.
+type runState struct {
+	network string
+	ordered []*compose.Service
+	skipped map[string]string
+	// starts holds, by service name, how to start a service that was prepared.
+	starts map[string]observe.StartOptions
+	// running holds the services started for the observation of others; order
+	// is the order they were started in.
+	running map[string]Stopper
+	order   []string
+	// failed holds why a service could not be started, so that it is not tried
+	// again for the next service that needs it.
+	failed map[string]string
+}
+
+// closure returns the services that s depends on, directly or not, in
+// dependency order.
+func (rs *runState) closure(s *compose.Service) []string {
+	deps := map[string][]compose.Dependency{}
+	for _, x := range rs.ordered {
+		deps[x.Name] = x.DependsOn
+	}
+	need := map[string]bool{}
+	var visit func(name string)
+	visit = func(name string) {
+		for _, d := range deps[name] {
+			if !need[d.Service] {
+				need[d.Service] = true
+				visit(d.Service)
+			}
+		}
+	}
+	visit(s.Name)
+	var out []string
+	for _, x := range rs.ordered {
+		if need[x.Name] {
+			out = append(out, x.Name)
+		}
+	}
+	return out
+}
+
+// startDependencies starts, in dependency order, the services that s needs and
+// that are not running yet. A service that cannot be started is not an error:
+// it gives a note for the report, and s is observed without it. The error is
+// the one of a context that has ended.
+func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Service) ([]string, error) {
+	var notes []string
+	for _, name := range rs.closure(s) {
+		if rs.running[name] != nil {
+			continue
+		}
+		why := rs.failed[name]
+		if why == "" {
+			if reason, no := rs.skipped[name]; no {
+				why = reason
+			} else if _, ok := rs.starts[name]; !ok {
+				why = "it was not prepared"
+			}
+		}
+		if why == "" {
+			so := rs.starts[name]
+			so.Network = rs.network
+			so.NetworkAliases = []string{name}
+			so.Log = func(format string, args ...any) {
+				fmt.Fprintf(a.Stderr, "%s: %s\n", name, strings.TrimRight(fmt.Sprintf(format, args...), "\n"))
+			}
+			fmt.Fprintf(a.Stderr, "%s: starting %s for %s\n", name, so.Image, s.Name)
+			st, err := a.Start(ctx, so)
+			if err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return nil, cerr
+				}
+				why = "it did not start: " + err.Error()
+				rs.failed[name] = why
+			} else {
+				rs.running[name] = st
+				rs.order = append(rs.order, name)
+			}
+		}
+		if why != "" {
+			msg := fmt.Sprintf("the service %s was not started for the observation (%s); %s was observed without it", name, why, s.Name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+			notes = append(notes, msg)
+		}
+	}
+	return notes, nil
+}
+
+// stopAll stops the services started for the observations, the last one
+// first.
+func (rs *runState) stopAll(a *App) {
+	for i := len(rs.order) - 1; i >= 0; i-- {
+		name := rs.order[i]
+		if err := rs.running[name].Stop(context.Background()); err != nil {
+			fmt.Fprintf(a.Stderr, "%s: warning: stopping %s: %v\n", ToolName, name, err)
+		}
+	}
 }
 
 // imageTag is the tag of the image built for a service: the tool, the project

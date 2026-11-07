@@ -1737,3 +1737,272 @@ func TestObserveAliasOfAPathThatWasNotCarriedIsAWarning(t *testing.T) {
 		t.Errorf("warnings = %q", res.Warnings)
 	}
 }
+
+// startFake is the part of Docker that Start uses; the other methods panic.
+type startFake struct {
+	Docker
+	cfg     *docker.ImageConfig
+	have    bool
+	ip      string
+	logs    string
+	creates []docker.CreateOptions
+	started []string
+	stopped []string
+	removed []string
+	pulled  []string
+	// exitAt, when not zero, is the time from which Running answers false.
+	exitAt time.Time
+	clock  *fakeClock
+}
+
+func (f *startFake) HasImage(ctx context.Context, image string) (bool, error) { return f.have, nil }
+
+func (f *startFake) Pull(ctx context.Context, image string) error {
+	f.pulled = append(f.pulled, image)
+	return nil
+}
+
+func (f *startFake) Inspect(ctx context.Context, image string) (*docker.ImageConfig, error) {
+	return f.cfg, nil
+}
+
+func (f *startFake) Create(ctx context.Context, o docker.CreateOptions) (string, error) {
+	f.creates = append(f.creates, o)
+	return "dep-1", nil
+}
+
+func (f *startFake) Start(ctx context.Context, id string) error {
+	f.started = append(f.started, id)
+	return nil
+}
+
+func (f *startFake) Stop(ctx context.Context, id string, seconds int) error {
+	f.stopped = append(f.stopped, id)
+	return errors.New("stop failed")
+}
+
+func (f *startFake) Remove(ctx context.Context, id string, force bool) error {
+	f.removed = append(f.removed, id)
+	return nil
+}
+
+func (f *startFake) Running(ctx context.Context, id string) (bool, error) {
+	return f.exitAt.IsZero() || f.clock.now().Before(f.exitAt), nil
+}
+
+func (f *startFake) LogsTail(ctx context.Context, id string, lines int) ([]byte, error) {
+	return []byte(f.logs), nil
+}
+
+func (f *startFake) IPAddress(ctx context.Context, id string) (string, error) { return f.ip, nil }
+
+type startScene struct {
+	d     *startFake
+	clock *fakeClock
+	dials []string
+	// open reports whether a dial succeeds
+	open func(address string) bool
+	o    StartOptions
+}
+
+func newStartScene() *startScene {
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	s := &startScene{clock: clock}
+	s.d = &startFake{clock: clock, have: true, ip: "172.18.0.2", cfg: &docker.ImageConfig{OS: "linux", ExposedPorts: []string{"3306/tcp", "33060/tcp", "53/udp"}}}
+	s.open = func(string) bool { return true }
+	s.o = StartOptions{Image: "db:1", now: clock.now, sleep: clock.sleep, dial: func(ctx context.Context, address string) error {
+		s.dials = append(s.dials, address)
+		if !s.open(address) {
+			return errors.New("connection refused")
+		}
+		return nil
+	}}
+	return s
+}
+
+func TestStartCreateOptions(t *testing.T) {
+	s := newStartScene()
+	ep := []string{"/entry.sh"}
+	s.o.Entrypoint = &ep
+	s.o.Cmd = []string{"mysqld"}
+	s.o.Env = []string{"A=1"}
+	s.o.WorkingDir = "/srv"
+	s.o.User = "999"
+	s.o.Binds = []string{"/h:/c:ro"}
+	s.o.Network = "dock2nano-0a0a0a0a"
+	s.o.NetworkAliases = []string{"db"}
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.d.creates) != 1 {
+		t.Fatalf("%d creates", len(s.d.creates))
+	}
+	got := s.d.creates[0]
+	if !containerName.MatchString(got.Name) {
+		t.Errorf("name %q", got.Name)
+	}
+	got.Name = ""
+	want := docker.CreateOptions{
+		Image: "db:1", Entrypoint: &ep, Cmd: []string{"mysqld"}, Env: []string{"A=1"}, WorkingDir: "/srv", User: "999",
+		Labels: []string{"dock2nano=1"}, Binds: []string{"/h:/c:ro"}, Network: "dock2nano-0a0a0a0a", NetworkAliases: []string{"db"},
+	}
+	equal(t, "create options", got, want)
+	equal(t, "started", s.d.started, []string{"dep-1"})
+}
+
+func TestStartReadyWhenEveryPortAccepts(t *testing.T) {
+	s := newStartScene()
+	// 3306 opens at once, 33060 only after 3 seconds
+	s.open = func(address string) bool {
+		return address == "172.18.0.2:3306" || s.clock.now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) >= 3*time.Second
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.clock.sleeps != 3 {
+		t.Errorf("slept %d times, want 3", s.clock.sleeps)
+	}
+	// the udp port is not asked for
+	for _, a := range s.dials {
+		if strings.HasSuffix(a, ":53") {
+			t.Errorf("dialed %s", a)
+		}
+	}
+	if len(s.dials) == 0 || s.dials[len(s.dials)-1] != "172.18.0.2:33060" {
+		t.Errorf("dials = %v", s.dials)
+	}
+	equal(t, "removed before Stop", s.d.removed, []string(nil))
+	_ = r.Stop(context.Background())
+	equal(t, "removed after Stop", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartNotReadyWithinWait(t *testing.T) {
+	s := newStartScene()
+	s.open = func(string) bool { return false }
+	s.d.logs = "booting\n"
+	s.o.Wait = 5 * time.Second
+	r, err := Start(context.Background(), s.d, s.o)
+	if err == nil || r != nil {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	if !strings.Contains(err.Error(), "3306, 33060") || !strings.Contains(err.Error(), "booting") {
+		t.Errorf("err = %v", err)
+	}
+	if s.clock.sleeps != 5 {
+		t.Errorf("slept %d times, want 5", s.clock.sleeps)
+	}
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartExitsBeforeReady(t *testing.T) {
+	s := newStartScene()
+	s.open = func(string) bool { return false }
+	s.d.exitAt = s.clock.now().Add(2 * time.Second)
+	s.o.Env = []string{"PASSWORD=s3cret-pw"}
+	s.d.logs = strings.Repeat("old line\n", 200) + "last s3cret-pw\n"
+	r, err := Start(context.Background(), s.d, s.o)
+	if err == nil || r != nil {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "stopped before it was ready") || !strings.Contains(msg, "last ***") || strings.Contains(msg, "s3cret-pw") {
+		t.Errorf("err = %q", msg)
+	}
+	_, tail, _ := strings.Cut(msg, "ready: ")
+	if len(tail) > 1024 {
+		t.Errorf("log in the error has %d bytes", len(tail))
+	}
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+	equal(t, "stopped", s.d.stopped, []string{"dep-1"})
+}
+
+func TestStartImageWithoutPortsStaysUpThreeSeconds(t *testing.T) {
+	s := newStartScene()
+	s.d.cfg.ExposedPorts = nil
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.clock.now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); got != 3*time.Second {
+		t.Errorf("waited %s, want 3s", got)
+	}
+	if len(s.dials) != 0 {
+		t.Errorf("dials = %v", s.dials)
+	}
+
+	s = newStartScene()
+	s.d.cfg.ExposedPorts = []string{"53/udp"}
+	s.d.exitAt = s.clock.now().Add(2 * time.Second)
+	if r, err := Start(context.Background(), s.d, s.o); err == nil || r != nil {
+		t.Fatalf("a container that stops at 2s was ready: %v", err)
+	}
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartCancelRemovesTheContainer(t *testing.T) {
+	s := newStartScene()
+	s.open = func(string) bool { return false }
+	ctx, cancel := context.WithCancel(context.Background())
+	s.o.sleep = func(ctx context.Context, d time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+	r, err := Start(ctx, s.d, s.o)
+	if r != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestRunningStopRemovesEvenWhenStopFails(t *testing.T) {
+	s := newStartScene()
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.Stop(ctx); err == nil || !strings.Contains(err.Error(), "stop failed") {
+		t.Errorf("err = %v", err)
+	}
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+	if err := r.Stop(context.Background()); err != nil {
+		t.Errorf("second Stop: %v", err)
+	}
+	equal(t, "removed once", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartImageMissingWithoutPull(t *testing.T) {
+	s := newStartScene()
+	s.d.have = false
+	if _, err := Start(context.Background(), s.d, s.o); err == nil {
+		t.Fatal("no error")
+	}
+	s.o.Pull = true
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "pulled", s.d.pulled, []string{"db:1"})
+}
+
+func TestObservePassesTheNetworkToTheTracedContainer(t *testing.T) {
+	s := newScene(t)
+	s.o.Network = "dock2nano-0a0a0a0a"
+	s.o.NetworkAliases = []string{"app"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, c := range s.d.creates {
+		if c.User == "0" {
+			n++
+			equal(t, "network", c.Network, "dock2nano-0a0a0a0a")
+			equal(t, "aliases", c.NetworkAliases, []string{"app"})
+		} else if c.Network != "" || c.NetworkAliases != nil {
+			t.Errorf("a helper container got the network: %+v", c)
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d traced containers", n)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -136,4 +137,106 @@ func TestConvertTwoServices(t *testing.T) {
 	if !strings.Contains(stdout.String(), "a service reaches another as <pkg>.service") {
 		t.Errorf("the report has no note about service names")
 	}
+}
+
+const itDBCompose = `name: itdb
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: app
+  client:
+    build: ./client
+    depends_on:
+      - db
+`
+
+const itDBDockerfile = `FROM alpine:3.20
+RUN apk add --no-cache mariadb-client
+CMD ["sh","-c","mysql -h db -uroot -psecret -e 'select 1' app && echo connected && sleep 60"]
+`
+
+// TestConvertServiceThatNeedsADatabase observes a client that connects to its
+// database when it starts: it only runs when the database runs beside it on
+// the network of the run, under its name.
+func TestConvertServiceThatNeedsADatabase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "docker", "version").CombinedOutput(); err != nil {
+		t.Skipf("docker version failed: %v: %s", err, out)
+	}
+	before := make([]map[string]bool, len(itLeftoverCommands))
+	for i, c := range itLeftoverCommands {
+		before[i] = map[string]bool{}
+		for _, l := range itDockerLines(t, c) {
+			before[i][l] = true
+		}
+	}
+	dir := t.TempDir()
+	home := t.TempDir()
+	out := t.TempDir()
+	for name, content := range map[string]string{"compose.yaml": itDBCompose, "client/Dockerfile": itDBDockerfile} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		exec.Command("docker", "rmi", "-f", ToolName+"/itdb/client:latest").Run()
+	})
+
+	var stdout, stderr bytes.Buffer
+	app := newApp()
+	app.Stdout = &stdout
+	app.Stderr = &stderr
+	app.Getwd = func() (string, error) { return dir, nil }
+	code := app.Run(ctx, []string{"convert", "-f", filepath.Join(dir, "compose.yaml"), "--ops-home", home, "-o", out, "--pull", "--seconds", "40"})
+	t.Logf("stderr:\n%s", stderr.String())
+	t.Logf("report:\n%s", stdout.String())
+	if code != 0 {
+		t.Fatalf("exit status %d", code)
+	}
+
+	report := stdout.String()
+	// the client ran until the end of the observation: it connected
+	if strings.Contains(report, "stopped with status") || strings.Contains(stderr.String(), "stopped with status") {
+		t.Errorf("a container stopped before the end of the observation")
+	}
+	if strings.Contains(report, "was not started for the observation") {
+		t.Errorf("the database was not started for the client")
+	}
+	if !strings.Contains(stderr.String(), "db: starting mysql:8.4 for client") {
+		t.Errorf("the database was not started beside the client")
+	}
+	if !regexp.MustCompile(`program \S*mysqld\b`).MatchString(report) {
+		t.Errorf("the program of the database is not mysqld")
+	}
+
+	// nothing of the run is left behind (what existed before, from other tests, is not counted)
+	for i, c := range itLeftoverCommands {
+		now := itDockerLines(t, c)
+		for _, l := range now {
+			if !before[i][l] {
+				t.Errorf("docker %v lists what the run left: %s", c, l)
+			}
+		}
+	}
+}
+
+var itLeftoverCommands = [][]string{
+	{"ps", "-a", "--format", "{{.Names}}", "--filter", "name=dock2nano-"},
+	{"network", "ls", "--format", "{{.Name}}", "--filter", "name=dock2nano-"},
+}
+
+func itDockerLines(t *testing.T, args []string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		t.Fatalf("docker %v: %v", args, err)
+	}
+	return strings.Fields(string(out))
 }

@@ -633,15 +633,33 @@ type CreateOptions struct {
 	CapAdd      []string
 	SecurityOpt []string
 	// Ports are publish specs such as "8080:80".
-	Ports      []string
-	Network    string
-	AutoRemove bool
+	Ports []string
+	// Network is the network to join (docker create --network). It must not start with '-'.
+	Network string
+	// NetworkAliases are further names of the container on Network
+	// (--network-alias); other containers of the network reach it by them.
+	// They need a Network and must not start with '-'.
+	NetworkAliases []string
+	AutoRemove     bool
 }
 
 // createArgs returns the arguments of docker create and the environment that
 // carries the values of o.Env.
 func createArgs(o CreateOptions) (args, env []string, err error) {
 	args = []string{"create"}
+	if o.Network != "" {
+		if err := checkArg("docker create", "network", o.Network); err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(o.NetworkAliases) > 0 && o.Network == "" {
+		return nil, nil, errors.New("docker create: network aliases need a network")
+	}
+	for _, al := range o.NetworkAliases {
+		if err := checkArg("docker create", "network alias", al); err != nil {
+			return nil, nil, err
+		}
+	}
 	if o.Name != "" {
 		args = append(args, "--name", o.Name)
 	}
@@ -684,6 +702,9 @@ func createArgs(o CreateOptions) (args, env []string, err error) {
 	if o.Network != "" {
 		args = append(args, "--network", o.Network)
 	}
+	for _, al := range o.NetworkAliases {
+		args = append(args, "--network-alias", al)
+	}
 	if o.AutoRemove {
 		args = append(args, "--rm")
 	}
@@ -722,6 +743,25 @@ func (c *Client) simple(ctx context.Context, op, id string, args ...string) erro
 		return err
 	}
 	_, err := c.do(ctx, op, append(args, id))
+	return err
+}
+
+// NetworkCreate runs docker network create. It fails when a network with that
+// name exists.
+func (c *Client) NetworkCreate(ctx context.Context, name string) error {
+	if err := checkArg("docker network create", "network name", name); err != nil {
+		return err
+	}
+	_, err := c.do(ctx, "docker network create", []string{"network", "create", name})
+	return err
+}
+
+// NetworkRemove runs docker network rm.
+func (c *Client) NetworkRemove(ctx context.Context, name string) error {
+	if err := checkArg("docker network rm", "network name", name); err != nil {
+		return err
+	}
+	_, err := c.do(ctx, "docker network rm", []string{"network", "rm", name})
 	return err
 }
 
