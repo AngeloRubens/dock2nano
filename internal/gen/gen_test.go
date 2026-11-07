@@ -595,6 +595,30 @@ func TestPortsTwoKindsAtOnce(t *testing.T) {
 	want1(t, p, "web", plan.Approximated, "ports[0]", "not forwarded to the host")
 }
 
+func TestPortMessagesNameTheContainerPortAndTheProtocol(t *testing.T) {
+	tests := []struct {
+		name string
+		port compose.Port
+		kind plan.Kind
+		msg  string
+	}{
+		{"unsupported protocol", compose.Port{Published: "8080", Target: "80", Protocol: "sctp"}, plan.Unsupported, "the protocol sctp is not supported by ops; the port 80 is not published"},
+		{"not published", compose.Port{Target: "9090", Protocol: "udp"}, plan.Note, "port 9090/udp is not published; it is reachable only from other services"},
+		{"not published, no protocol", compose.Port{Target: "9090"}, plan.Note, "port 9090/tcp is not published; it is reachable only from other services"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := svc("web")
+			s.Ports = []compose.Port{tt.port}
+			p, _ := one(t, &fake{}, s)
+			got := itemsOf(p, "web", tt.kind, "ports[0]")
+			if len(got) != 1 || got[0].Message != tt.msg {
+				t.Errorf("items = %+v, want one with the message %q", got, tt.msg)
+			}
+		})
+	}
+}
+
 func TestExposeIsNotPublished(t *testing.T) {
 	s := svc("web")
 	s.Expose = []string{"9000"}
@@ -839,6 +863,7 @@ func TestWorkingDirIsInTheManifest(t *testing.T) {
 		{"observed from the image", "", "/app", "/app", plan.Approximated, "cwd /app is set in the package manifest"},
 		{"file and observation agree", "/app", "/app", "/app", plan.Converted, "cwd /app is set in the package manifest"},
 		{"trailing slash is the same directory", "/app/", "/app", "/app", plan.Converted, "cwd /app is set"},
+		{"observed with a trailing slash is the same directory", "/app", "/app/", "/app/", plan.Converted, "cwd /app/ is set"},
 		{"root", "", "/", "/", "", ""},
 		{"not known", "", "", "/", "", ""},
 		{"file differs", "/srv", "/app", "/app", plan.Unsupported, "working_dir /srv of the file is not applied"},
@@ -920,6 +945,20 @@ func TestStoppedEarlyIsReported(t *testing.T) {
 	wantNone(t, p, "web", plan.Unsupported, "observation")
 }
 
+func TestStoppedEarlyWithoutALogHasNoLogSuffix(t *testing.T) {
+	const want = "the container stopped with status 3 before the end of the observation, so what was observed is not a running server; the program chosen is the last one it started"
+	for _, log := range []string{"", " \n\t\n"} {
+		in := newInput(&fake{}, svc("web"))
+		o := in.Services["web"].Observed
+		o.StoppedEarly, o.ExitCode, o.StoppedLog = true, 3, log
+		p := mustGen(t, in)
+		got := itemsOf(p, "web", plan.Unsupported, "observation")
+		if len(got) != 1 || got[0].Message != want {
+			t.Errorf("log %q: items = %+v, want one with the message %q", log, got, want)
+		}
+	}
+}
+
 func TestUnknownIsReported(t *testing.T) {
 	web := svc("web")
 	web.Unknown = []string{"privileged", "deploy.resources"}
@@ -965,6 +1004,40 @@ func TestVanishedFilesAreANote(t *testing.T) {
 
 	p, _ = one(t, &fake{}, web)
 	wantNone(t, p, "web", plan.Note, "vanished")
+}
+
+func TestObservedUserIsUnsupported(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = 999, 998
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "user")
+	if len(got) != 1 {
+		t.Fatalf("got %d items, want 1; report: %+v", len(got), p.Report)
+	}
+	const want = "the program ran as uid 999 (gid 998) while it was observed; nanos runs everything as root, so a program that refuses to run as root, or that depends on who owns its files, may not work"
+	if got[0].Message != want {
+		t.Errorf("message %q, want %q", got[0].Message, want)
+	}
+}
+
+func TestObservedUserRootOrUnknownHasNoItem(t *testing.T) {
+	for _, id := range []int{0, -1} {
+		web := svc("web")
+		in := newInput(&fake{}, web)
+		in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = id, id
+		p := mustGen(t, in)
+		wantNone(t, p, "web", plan.Unsupported, "user")
+	}
+}
+
+func TestObservedUserWithComposeUserIsOneItem(t *testing.T) {
+	web := svc("web")
+	web.User = "app"
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = 999, 999
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "user", "user app is not applied")
 }
 
 func TestChildProcessesAreUnsupported(t *testing.T) {

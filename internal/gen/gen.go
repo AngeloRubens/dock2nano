@@ -568,6 +568,9 @@ func (g *generator) identity(s *compose.Service, obs *observe.Result, m *plan.Ma
 	if u, _, _ := strings.Cut(s.User, ":"); u != "" && u != "root" && u != "0" {
 		g.add(s.Name, plan.Unsupported, "user", "user "+s.User+" is not applied; nanos runs the program as one user")
 	}
+	if obs.UID > 0 && s.User == "" {
+		g.add(s.Name, plan.Unsupported, "user", fmt.Sprintf("the program ran as uid %d (gid %d) while it was observed; nanos runs everything as root, so a program that refuses to run as root, or that depends on who owns its files, may not work", obs.UID, obs.GID))
+	}
 	// nanos reads "cwd" from the root of the manifest and changes to it before
 	// it starts the program; ops copies ManifestPassthrough into the manifest of
 	// the package. It is written for every service, "/" when the directory is

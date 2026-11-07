@@ -153,6 +153,11 @@ type Result struct {
 	// Env is the environment of the program, without what the container runtime adds.
 	Env []string
 
+	// UID and GID are the effective user and group ids the program ran as while it was observed,
+	// or -1 when they are not known (the process was gone, /proc could not be read or parsed).
+	UID int
+	GID int
+
 	// WorkingDir is the directory the program runs in.
 	WorkingDir string
 
@@ -612,6 +617,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// compared with it.
 	cmdline := slices.Clone(final.Argv)
 	cwd, exe := "", ""
+	uid, gid := -1, -1
 	running, err := r.d.Running(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("observe: checking that the traced container runs: %w", err)
@@ -643,6 +649,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 		if out, ok := r.procRead(ctx, id, "executable", []string{"readlink", base + "exe"}); ok {
 			exe = strings.TrimSpace(string(out))
+		}
+		if out, ok := r.procRead(ctx, id, "user and group", []string{"cat", base + "status"}); ok {
+			var good bool
+			if uid, gid, good = parseStatusIDs(string(out)); !good {
+				r.warnOnce("could not read the user and group of the program from /proc: they are not known")
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("observe: reading /proc of the program: %w", err)
@@ -732,6 +744,8 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		Program:            program,
 		Argv:               cmdline,
 		Env:                runningEnv,
+		UID:                uid,
+		GID:                gid,
 		WorkingDir:         cwd,
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
@@ -745,6 +759,35 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		StoppedLog:         r.stoppedLog,
 		Warnings:           r.warn,
 	}, nil
+}
+
+// parseStatusIDs reads the effective uid and gid (the second column) from the text of
+// /proc/<pid>/status. Both are -1 and ok is false when either line is missing or malformed.
+func parseStatusIDs(text string) (uid, gid int, ok bool) {
+	uid, gid = -1, -1
+	for _, line := range strings.Split(text, "\n") {
+		name, rest, found := strings.Cut(line, ":")
+		if !found || (name != "Uid" && name != "Gid") {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) < 2 {
+			return -1, -1, false
+		}
+		n, err := strconv.Atoi(fields[1])
+		if err != nil || n < 0 {
+			return -1, -1, false
+		}
+		if name == "Uid" {
+			uid = n
+		} else {
+			gid = n
+		}
+	}
+	if uid < 0 || gid < 0 {
+		return -1, -1, false
+	}
+	return uid, gid, true
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root. strace looks the
