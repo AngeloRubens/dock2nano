@@ -80,7 +80,7 @@ func TestConvertTwoServices(t *testing.T) {
 	write("nginx.conf", itNginxConf)
 	write("app/Dockerfile", itDockerfile)
 	t.Cleanup(func() {
-		exec.Command("docker", "rmi", "-f", ToolName+"/it-app:latest").Run()
+		exec.Command("docker", "rmi", "-f", ToolName+"/it/app:latest").Run()
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -108,7 +108,7 @@ func TestConvertTwoServices(t *testing.T) {
 	}
 
 	pkg := func(name string) string {
-		m, err := filepath.Glob(filepath.Join(home, "local_packages", "*", name))
+		m, err := filepath.Glob(filepath.Join(home, ".ops", "local_packages", "*", name))
 		if err != nil || len(m) != 1 {
 			t.Fatalf("package %s: %v %v", name, m, err)
 		}

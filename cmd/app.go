@@ -52,7 +52,8 @@ Flags of convert:
   --name NAME        service and project name with --dockerfile; default: the
                      name of the context directory
   -o DIR             directory where compose.yaml goes; default: .
-  --ops-home DIR     the ops home folder; default: $OPS_HOME, then ~/.ops
+  --ops-home DIR     like the OPS_HOME variable of ops: the folder that holds .ops;
+                     default: $OPS_HOME, then the home folder of the user
   --seconds N        how long each service is observed; default: 30
   --pull             pull the images that are missing on this machine
   --force            replace package folders and a compose.yaml that exist
@@ -96,6 +97,8 @@ type App struct {
 	Stat func(string) (fs.FileInfo, error)
 	// ReadFile reads a file, for env_file.
 	ReadFile func(string) ([]byte, error)
+	// UserHomeDir returns the home folder of the user.
+	UserHomeDir func() (string, error)
 	// RemoveAll removes the sysroots that are not used any more.
 	RemoveAll func(string) error
 }
@@ -122,6 +125,7 @@ func newApp() *App {
 	a.Getwd = os.Getwd
 	a.Stat = os.Stat
 	a.ReadFile = os.ReadFile
+	a.UserHomeDir = os.UserHomeDir
 	a.RemoveAll = os.RemoveAll
 	return a
 }

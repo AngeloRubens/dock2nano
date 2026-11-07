@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
 	"github.com/AngeloRubens/dock2nano/internal/docker"
 	"github.com/AngeloRubens/dock2nano/internal/dockerfile"
 	"github.com/AngeloRubens/dock2nano/internal/gen"
+	"github.com/AngeloRubens/dock2nano/internal/interp"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/output"
 	"github.com/AngeloRubens/dock2nano/internal/plan"
@@ -39,6 +40,26 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		return 0, err
 	}
 
+	if project.Name == "" {
+		project.Name = projectNameOf(dir)
+	}
+
+	// The package names are checked before anything is built or run.
+	var converted []string
+	skipped := map[string]string{}
+	for _, s := range ordered {
+		if reason := notConverted(s, only); reason != "" {
+			skipped[s.Name] = reason
+			continue
+		}
+		converted = append(converted, s.Name)
+	}
+	if len(converted) > 0 {
+		if _, _, err := gen.PackageNames(project, converted); err != nil {
+			return 0, err
+		}
+	}
+
 	inputs := map[string]gen.ServiceInput{}
 	var sysroots []string
 	defer func() {
@@ -46,11 +67,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			a.RemoveAll(s)
 		}
 	}()
+	arch, archOwner := "", ""
 	for _, s := range ordered {
-		if only != nil && !only[s.Name] {
-			continue
-		}
-		if !observable(s) {
+		if _, no := skipped[s.Name]; no {
 			continue
 		}
 		si, err := a.prepare(ctx, o, project, dir, s)
@@ -60,15 +79,25 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("service %s: %w", s.Name, err)
 		}
+		if si.Image != nil && si.Image.Architecture != "" {
+			if arch == "" {
+				arch, archOwner = si.Image.Architecture, s.Name
+			} else if si.Image.Architecture != arch {
+				return 0, fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, s.Name, si.Image.Architecture)
+			}
+		}
 		inputs[s.Name] = si
 	}
 
-	in := gen.Input{Project: project, Dir: dir, Services: inputs}
+	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch}
 	in.HostEnv = a.LookupEnv
 	in.ReadFile = a.ReadFile
 	in.Stat = a.Stat
 	p, err := a.Generate(in)
 	if err != nil {
+		if p != nil {
+			fmt.Fprint(a.Stdout, gen.Render(p.Report))
+		}
 		return 0, err
 	}
 	composePath := o.out
@@ -76,8 +105,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		composePath = filepath.Join(wd, composePath)
 	}
 	composePath = filepath.Join(composePath, "compose.yaml")
-	written, err := a.Write(p, output.Options{OpsHome: o.opsHome, ComposePath: composePath, Force: o.force})
+	written, err := a.Write(p, output.Options{OpsHome: a.opsHome(o), ComposePath: composePath, Force: o.force})
 	if err != nil {
+		fmt.Fprint(a.Stdout, gen.Render(p.Report))
 		return 0, err
 	}
 
@@ -102,6 +132,48 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}
 	return 0, nil
+}
+
+// opsHome is the OPS_HOME given to the writer: the flag, else the variable,
+// else the home folder of the user. Empty leaves the choice to the writer.
+func (a *App) opsHome(o *options) string {
+	if o.opsHome != "" {
+		return o.opsHome
+	}
+	if v, ok := a.LookupEnv("OPS_HOME"); ok && v != "" {
+		return v
+	}
+	if a.UserHomeDir != nil {
+		if h, err := a.UserHomeDir(); err == nil {
+			return h
+		}
+	}
+	return ""
+}
+
+// notConverted returns why a service is not converted, or "" when it is.
+func notConverted(s *compose.Service, only map[string]bool) string {
+	switch {
+	case only != nil && !only[s.Name]:
+		return "not selected with --service"
+	case len(s.Profiles) > 0:
+		return "has profiles (" + strings.Join(s.Profiles, ", ") + ")"
+	case s.Replicas != nil && *s.Replicas == 0:
+		return "has 0 replicas"
+	case s.Image == "" && s.Build == nil:
+		return "has no image and no build"
+	}
+	return ""
+}
+
+// projectNameOf is the project name when the file gives none: the folder of
+// the compose file.
+func projectNameOf(dir string) string {
+	base := filepath.Base(dir)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "project"
+	}
+	return base
 }
 
 // nextSteps prints what to run to start the result.
@@ -163,7 +235,7 @@ func (a *App) dockerfileProject(o *options, wd string) (*compose.Project, string
 	name := o.name
 	if name == "" {
 		name = sanitizeName(filepath.Base(ctxDir))
-		if name == "" || name == "." || name == "-" {
+		if strings.Trim(name, "-._") == "" {
 			name = "app"
 		}
 	}
@@ -205,15 +277,6 @@ func selection(p *compose.Project, names []string) (map[string]bool, error) {
 		only[n] = true
 	}
 	return only, nil
-}
-
-// observable reports whether the service is run for observation. The ones
-// that are not are left to the generator, which reports them.
-func observable(s *compose.Service) bool {
-	if len(s.Profiles) > 0 || s.Replicas != nil && *s.Replicas == 0 {
-		return false
-	}
-	return s.Image != "" || s.Build != nil
 }
 
 // dependencyOrder sorts the services by depends_on, keeping the file order
@@ -286,7 +349,10 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		si.Stage = a.stage(s, dfPath)
 	}
 
-	ep, cmd := gen.EffectiveCommand(s, img)
+	ep, cmd, err := gen.EffectiveCommand(s, img, a.LookupEnv)
+	if err != nil {
+		return si, err
+	}
 	// The entrypoint is always passed, even when empty, so that the CMD of the
 	// image is replaced by cmd and an entrypoint cleared in the file stays
 	// cleared.
@@ -295,6 +361,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	}
 	oo := observe.Options{Image: image, Entrypoint: ep, Cmd: cmd}
 	oo.Env = a.serviceEnv(s, dir)
+	oo.WorkingDir = s.WorkingDir
 	oo.Binds = a.binds(s, dir)
 	oo.Seconds = o.seconds
 	oo.Log = func(format string, args ...any) {
@@ -310,13 +377,36 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	return si, nil
 }
 
-// imageTag is the tag of the image built for a service.
+// imageTag is the tag of the image built for a service: the tool, the project
+// and the service, each one a valid component of an image name.
 func imageTag(p *compose.Project, dir string, s *compose.Service) string {
 	project := p.Name
 	if project == "" {
 		project = filepath.Base(dir)
 	}
-	return ToolName + "/" + sanitizeName(project) + "-" + sanitizeName(s.Name) + ":latest"
+	return ToolName + "/" + tagComponent(project) + "/" + tagComponent(s.Name) + ":latest"
+}
+
+// tagComponent turns s into a component of an image name: lower case, every
+// character outside [a-z0-9_.-] becomes '-', a run of separators becomes its
+// first character, and the ends are alphanumeric. An empty result is "x".
+func tagComponent(s string) string {
+	var b strings.Builder
+	for _, r := range sanitizeName(s) {
+		sep := r == '-' || r == '_' || r == '.'
+		if sep && b.Len() > 0 {
+			last := b.String()[b.Len()-1]
+			if last == '-' || last == '_' || last == '.' {
+				continue
+			}
+		}
+		b.WriteRune(r)
+	}
+	out := strings.Trim(b.String(), "-_.")
+	if out == "" {
+		return "x"
+	}
+	return out
 }
 
 // build builds the image of a service and returns the path of its Dockerfile.
@@ -344,10 +434,13 @@ func (a *App) build(ctx context.Context, dir string, s *compose.Service, tag str
 				continue
 			}
 			val = v
-		} else if strings.Contains(val, "$") {
-			v, err := expand(val, a.LookupEnv)
+		} else {
+			v, unset, err := interp.Expand(val, a.LookupEnv)
 			if err != nil {
 				return "", fmt.Errorf("build argument %s: %w", arg.Name, err)
+			}
+			for _, u := range unset {
+				fmt.Fprintf(a.Stderr, "%s: warning: build argument %s uses the variable %s, which is not set; it is replaced by an empty string\n", s.Name, arg.Name, u)
 			}
 			val = v
 		}
@@ -398,80 +491,20 @@ func (a *App) stage(s *compose.Service, path string) *dockerfile.Stage {
 	return f.Final()
 }
 
-// serviceEnv is the environment given to the observation: the env_file values
-// and then the environment values of the file, which win. Values that hold a
-// ${ are left out; the generator reports them.
+// serviceEnv is the environment given to the observation: what the generator
+// computes from environment and env_file, so that both use one source.
 func (a *App) serviceEnv(s *compose.Service, dir string) []string {
-	var order []string
-	seen := map[string]bool{}
-	vals := map[string]string{}
-	put := func(k, v string) {
-		if !seen[k] {
-			seen[k] = true
-			order = append(order, k)
-		}
-		vals[k] = v
+	env, _ := gen.ServiceEnv(s, dir, a.LookupEnv, a.ReadFile)
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
 	}
-	for _, f := range s.EnvFile {
-		data, err := a.ReadFile(absPath(dir, f))
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			k, v, ok := envLine(line)
-			if !ok {
-				continue
-			}
-			if strings.Contains(v, "${") {
-				delete(vals, k)
-				continue
-			}
-			put(k, v)
-		}
-	}
-	for _, e := range s.Environment {
-		if !e.Set {
-			continue
-		}
-		if strings.Contains(e.Value, "${") {
-			delete(vals, e.Name)
-			continue
-		}
-		put(e.Name, e.Value)
-	}
+	sort.Strings(keys)
 	var out []string
-	for _, k := range order {
-		if v, ok := vals[k]; ok {
-			out = append(out, k+"="+v)
-		}
+	for _, k := range keys {
+		out = append(out, k+"="+env[k])
 	}
 	return out
-}
-
-// envLine reads one line of an env_file: KEY=VALUE, with an optional "export "
-// and quotes around the value.
-func envLine(line string) (key, val string, ok bool) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return "", "", false
-	}
-	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-	key, val, ok = strings.Cut(line, "=")
-	if !ok {
-		return "", "", false
-	}
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return "", "", false
-	}
-	val = strings.TrimSpace(val)
-	if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
-		return key, val[1 : len(val)-1], true
-	}
-	if i := strings.Index(val, " #"); i >= 0 {
-		val = strings.TrimSpace(val[:i])
-	}
-	return key, val, true
 }
 
 // binds are the bind volumes of a service whose host path exists, as
@@ -480,6 +513,10 @@ func (a *App) binds(s *compose.Service, dir string) []string {
 	var out []string
 	for _, v := range s.Volumes {
 		if v.Type != "bind" || v.Source == "" || v.Target == "" || strings.Contains(v.Source, "$") {
+			continue
+		}
+		if strings.Contains(v.Source, ":") {
+			fmt.Fprintf(a.Stderr, "%s: warning: the bind source %q has a ':' and is not passed to the observation\n", s.Name, v.Source)
 			continue
 		}
 		host := absPath(dir, v.Source)
@@ -493,91 +530,4 @@ func (a *App) binds(s *compose.Service, dir string) []string {
 		out = append(out, b)
 	}
 	return out
-}
-
-// expand replaces $NAME, ${NAME}, ${NAME:-default} and ${NAME-default} with
-// the value of the variable. $$ is a dollar sign. A variable that is not set
-// and has no default is an error naming it.
-func expand(s string, lookup func(string) (string, bool)) (string, error) {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c != '$' || i+1 >= len(s) {
-			b.WriteByte(c)
-			continue
-		}
-		n := s[i+1]
-		switch {
-		case n == '$':
-			b.WriteByte('$')
-			i++
-		case n == '{':
-			end := strings.IndexByte(s[i+2:], '}')
-			if end < 0 {
-				return "", fmt.Errorf("%q has a ${ that is not closed", s)
-			}
-			v, err := expandBraced(s[i+2:i+2+end], lookup)
-			if err != nil {
-				return "", err
-			}
-			b.WriteString(v)
-			i += 2 + end
-		case nameStart(n):
-			j := i + 1
-			for j < len(s) && nameChar(s[j]) {
-				j++
-			}
-			v, ok := lookup(s[i+1 : j])
-			if !ok {
-				return "", unsetError(s[i+1 : j])
-			}
-			b.WriteString(v)
-			i = j - 1
-		default:
-			b.WriteByte('$')
-		}
-	}
-	return b.String(), nil
-}
-
-func expandBraced(body string, lookup func(string) (string, bool)) (string, error) {
-	j := 0
-	for j < len(body) && (j == 0 && nameStart(body[j]) || j > 0 && nameChar(body[j])) {
-		j++
-	}
-	name, rest := body[:j], body[j:]
-	if name == "" {
-		return "", fmt.Errorf("${%s} does not name a variable", body)
-	}
-	v, ok := lookup(name)
-	switch {
-	case rest == "":
-		if !ok {
-			return "", unsetError(name)
-		}
-		return v, nil
-	case strings.HasPrefix(rest, ":-"):
-		if !ok || v == "" {
-			return rest[2:], nil
-		}
-		return v, nil
-	case strings.HasPrefix(rest, "-"):
-		if !ok {
-			return rest[1:], nil
-		}
-		return v, nil
-	}
-	return "", fmt.Errorf("${%s} is not supported; use ${NAME}, ${NAME:-default} or ${NAME-default}", body)
-}
-
-func unsetError(name string) error {
-	return errors.New("the variable " + name + " is not set in the environment")
-}
-
-func nameStart(c byte) bool {
-	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-func nameChar(c byte) bool {
-	return nameStart(c) || c >= '0' && c <= '9'
 }
