@@ -12,11 +12,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
+	"unicode/utf8"
 )
+
+// ErrNotRunning is returned (wrapped) by Exec when docker reports that the
+// container is not running. It is not an *ExitError: the command never ran.
+var ErrNotRunning = errors.New("container is not running")
+
+// ErrNoContainer is returned (wrapped) by Exec when docker reports that the
+// container does not exist. It is not an *ExitError: the command never ran.
+var ErrNoContainer = errors.New("no such container")
 
 // Runner runs `docker args...`, feeding stdin when it is not nil, and returns
 // what the command wrote to stdout and stderr. A command that exits with a
@@ -34,25 +47,44 @@ type Streamer interface {
 
 // ExitError is a docker command that ran and exited with a non-zero status.
 type ExitError struct {
-	// Args are the arguments given to docker, when known.
+	// Bin is the binary that was run; empty means "docker".
+	Bin string
+	// Args are the arguments given to the binary, when known. They are the raw
+	// arguments and may hold secrets (--env K=V): Error() redacts them, but
+	// code that prints Args itself must do the same.
 	Args []string
-	// Code is the exit status of the command.
+	// Code is the exit status of the command, or -1 when a signal ended it.
 	Code int
-	// Stderr is everything the command wrote to stderr.
+	// Signal describes the signal that ended the command, such as
+	// "signal: killed". It is empty for a normal exit.
+	Signal string
+	// Stderr is what the command wrote to stderr (the last 64 KiB at most).
 	Stderr string
 }
 
 // stderrTail is how many bytes of stderr an error message shows.
 const stderrTail = 1024
 
+// stderrKeep is how many bytes of stderr the exec runner keeps.
+const stderrKeep = 64 << 10
+
+// waitDelay is how long the exec runner waits, after the context is done,
+// for the command and its pipes before it kills them.
+const waitDelay = 2 * time.Second
+
 func (e *ExitError) Error() string {
-	var b strings.Builder
-	b.WriteString("docker")
-	for _, a := range e.Args {
-		b.WriteByte(' ')
-		b.WriteString(a)
+	bin := e.Bin
+	if bin == "" {
+		bin = "docker"
 	}
-	fmt.Fprintf(&b, ": exit status %d", e.Code)
+	var b strings.Builder
+	b.WriteString(formatCmd(bin, e.Args))
+	if e.Signal != "" {
+		b.WriteString(": ")
+		b.WriteString(e.Signal)
+	} else {
+		fmt.Fprintf(&b, ": exit status %d", e.Code)
+	}
 	if tail := tailOf(e.Stderr); tail != "" {
 		b.WriteString(": ")
 		b.WriteString(tail)
@@ -60,13 +92,109 @@ func (e *ExitError) Error() string {
 	return b.String()
 }
 
-// tailOf trims s and keeps its last stderrTail bytes.
+// tailOf trims s and keeps its last stderrTail bytes, without cutting inside
+// a UTF-8 sequence.
 func tailOf(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > stderrTail {
-		s = "..." + s[len(s)-stderrTail:]
+		i := len(s) - stderrTail
+		for i < len(s) && !utf8.RuneStart(s[i]) {
+			i++
+		}
+		s = "..." + s[i:]
 	}
 	return s
+}
+
+// redactValue turns K=V into K=***. A value without '=' is kept.
+func redactValue(v string) string {
+	if i := strings.IndexByte(v, '='); i >= 0 {
+		return v[:i+1] + "***"
+	}
+	return v
+}
+
+// redactArgs returns a copy of args in which the values after --env, -e and
+// --build-arg (also in the --flag=K=V and -eK=V spellings) are redacted.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch {
+		case i > 0 && (args[i-1] == "--env" || args[i-1] == "-e" || args[i-1] == "--build-arg"):
+			out[i] = redactValue(a)
+		case strings.HasPrefix(a, "--env="):
+			out[i] = "--env=" + redactValue(a[len("--env="):])
+		case strings.HasPrefix(a, "--build-arg="):
+			out[i] = "--build-arg=" + redactValue(a[len("--build-arg="):])
+		case strings.HasPrefix(a, "-e") && !strings.HasPrefix(a, "--") && strings.Contains(a, "="):
+			out[i] = "-e" + redactValue(a[2:])
+		default:
+			out[i] = a
+		}
+	}
+	return out
+}
+
+// quoteArg quotes an argument that is empty or has white space.
+func quoteArg(a string) string {
+	if a == "" || strings.ContainsAny(a, " \t\n\r") {
+		return strconv.Quote(a)
+	}
+	return a
+}
+
+// formatCmd renders a command line for an error message, without secrets.
+func formatCmd(bin string, args []string) string {
+	var b strings.Builder
+	b.WriteString(bin)
+	for _, a := range redactArgs(args) {
+		b.WriteByte(' ')
+		b.WriteString(quoteArg(a))
+	}
+	return b.String()
+}
+
+// tailWriter keeps the last max bytes written to it.
+type tailWriter struct {
+	max int
+	buf []byte
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return len(p), nil
+	}
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		n := copy(t.buf, t.buf[len(t.buf)-t.max:])
+		t.buf = t.buf[:n]
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) Bytes() []byte { return t.buf }
+
+// errWriter passes writes to w and remembers the first error. It calls
+// onErr, when set, on that first error.
+type errWriter struct {
+	w     io.Writer
+	err   error
+	onErr func()
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(p)
+	if err != nil {
+		e.err = err
+		if e.onErr != nil {
+			e.onErr()
+		}
+	}
+	return n, err
 }
 
 type execRunner struct {
@@ -85,29 +213,71 @@ func (r *execRunner) Run(ctx context.Context, stdin io.Reader, args ...string) (
 	return out.Bytes(), stderr, err
 }
 
+// setupCancel makes the command stoppable. The command gets its own process
+// group; when the context is done the group gets SIGTERM (docker forwards it
+// to its children), and the group is killed if the command or a child that
+// holds the pipes is still there waitDelay later. The returned function
+// cancels the pending kill.
+func setupCancel(cmd *exec.Cmd) (stop func()) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = waitDelay
+	var timer *time.Timer
+	cmd.Cancel = func() error {
+		pid := cmd.Process.Pid
+		timer = time.AfterFunc(waitDelay, func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		return nil
+	}
+	return func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+}
+
 // Stream implements Streamer.
 func (r *execRunner) Stream(ctx context.Context, w io.Writer, args ...string) ([]byte, error) {
 	return r.run(ctx, nil, w, args)
 }
 
 func (r *execRunner) run(ctx context.Context, stdin io.Reader, stdout io.Writer, args []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, r.bin, args...)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, r.bin, args...)
+	stop := setupCancel(cmd)
+	defer stop()
 	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
+	// A failing stdout writer stops the command instead of leaving it
+	// blocked on a pipe nobody reads.
+	ew := &errWriter{w: stdout, onErr: cancel}
+	cmd.Stdout = ew
+	errBuf := &tailWriter{max: stderrKeep}
+	cmd.Stderr = errBuf
 	err := cmd.Run()
 	if err == nil {
 		return errBuf.Bytes(), nil
 	}
+	line := formatCmd(r.bin, args)
+	if ew.err != nil {
+		return errBuf.Bytes(), fmt.Errorf("%s: writing the output: %w", line, ew.err)
+	}
 	if ctx.Err() != nil {
-		return errBuf.Bytes(), fmt.Errorf("%s %s: %w", r.bin, strings.Join(args, " "), ctx.Err())
+		return errBuf.Bytes(), fmt.Errorf("%s: %w", line, ctx.Err())
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		return errBuf.Bytes(), &ExitError{Args: args, Code: ee.ExitCode(), Stderr: errBuf.String()}
+		x := &ExitError{Bin: r.bin, Args: args, Code: ee.ExitCode(), Stderr: string(errBuf.Bytes())}
+		if x.Code < 0 {
+			x.Signal = ee.String()
+		}
+		return errBuf.Bytes(), x
 	}
-	return errBuf.Bytes(), fmt.Errorf("%s %s: %w", r.bin, strings.Join(args, " "), err)
+	return errBuf.Bytes(), fmt.Errorf("%s: %w", line, err)
 }
 
 // Client drives docker through a Runner.
@@ -146,6 +316,18 @@ func wrap(op string, err error, stderr []byte) error {
 		return fmt.Errorf("%s: %w: %s", op, err, tail)
 	}
 	return fmt.Errorf("%s: %w", op, err)
+}
+
+// checkArg refuses an empty value and one that docker would take for an
+// option.
+func checkArg(op, what, v string) error {
+	if v == "" {
+		return fmt.Errorf("%s: no %s given", op, what)
+	}
+	if v[0] == '-' {
+		return fmt.Errorf("%s: %s %q starts with '-'", op, what, v)
+	}
+	return nil
 }
 
 // BuildOptions are the options of Build.
@@ -187,7 +369,8 @@ func buildArgs(o BuildOptions) []string {
 	for _, k := range keys {
 		args = append(args, "--build-arg", k+"="+o.Args[k])
 	}
-	return append(args, o.Context)
+	// "--" keeps a context that starts with '-' from being read as an option.
+	return append(args, "--", o.Context)
 }
 
 // Build runs docker build.
@@ -195,33 +378,41 @@ func (c *Client) Build(ctx context.Context, o BuildOptions) error {
 	if o.Context == "" {
 		return errors.New("docker build: no build context given")
 	}
+	for k := range o.Args {
+		if k == "" {
+			return errors.New("docker build: empty build argument name")
+		}
+	}
 	_, err := c.do(ctx, "docker build", buildArgs(o))
 	return err
 }
 
 // Pull runs docker pull.
 func (c *Client) Pull(ctx context.Context, image string) error {
-	if image == "" {
-		return errors.New("docker pull: no image given")
+	if err := checkArg("docker pull", "image", image); err != nil {
+		return err
 	}
 	_, err := c.do(ctx, "docker pull", []string{"pull", image})
 	return err
 }
 
 // HasImage reports whether the image is in the local store. Only docker's
-// "No such image" answer means false; any other failure, such as a daemon
+// "No such image" (podman: "image not known") answer means false; any other failure, such as a daemon
 // that is not running, is returned as an error.
 func (c *Client) HasImage(ctx context.Context, image string) (bool, error) {
-	if image == "" {
-		return false, errors.New("docker image inspect: no image given")
+	if err := checkArg("docker image inspect", "image", image); err != nil {
+		return false, err
 	}
 	_, stderr, err := c.r.Run(ctx, nil, "image", "inspect", "--format", "{{.Id}}", image)
 	if err == nil {
 		return true, nil
 	}
 	var ee *ExitError
-	if errors.As(err, &ee) && strings.Contains(strings.ToLower(ee.Stderr+string(stderr)), "no such image") {
-		return false, nil
+	if errors.As(err, &ee) {
+		low := strings.ToLower(ee.Stderr + "\n" + string(stderr))
+		if strings.Contains(low, "no such image") || strings.Contains(low, "image not known") {
+			return false, nil
+		}
 	}
 	return false, wrap("docker image inspect", err, stderr)
 }
@@ -241,6 +432,8 @@ type ImageConfig struct {
 	Volumes      []string
 	OS           string
 	Architecture string
+	// Variant is the CPU variant such as "v8"; empty when the image has none.
+	Variant string
 }
 
 // configJSON is the Config object of docker image inspect.
@@ -259,6 +452,7 @@ type inspectJSON struct {
 	ID           string      `json:"Id"`
 	OS           string      `json:"Os"`
 	Architecture string      `json:"Architecture"`
+	Variant      string      `json:"Variant"`
 	Config       *configJSON `json:"Config"`
 }
 
@@ -295,7 +489,7 @@ func parseInspect(raw []byte) (*ImageConfig, error) {
 	} else if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, err
 	}
-	cfg := &ImageConfig{ID: info.ID, OS: info.OS, Architecture: info.Architecture}
+	cfg := &ImageConfig{ID: info.ID, OS: info.OS, Architecture: info.Architecture, Variant: info.Variant}
 	if info.Config != nil {
 		c := info.Config
 		cfg.Entrypoint = c.Entrypoint
@@ -312,8 +506,8 @@ func parseInspect(raw []byte) (*ImageConfig, error) {
 // Inspect runs docker image inspect and returns the configuration of the
 // image.
 func (c *Client) Inspect(ctx context.Context, image string) (*ImageConfig, error) {
-	if image == "" {
-		return nil, errors.New("docker image inspect: no image given")
+	if err := checkArg("docker image inspect", "image", image); err != nil {
+		return nil, err
 	}
 	out, err := c.do(ctx, "docker image inspect", []string{"image", "inspect", "--format", "{{json .}}", image})
 	if err != nil {
@@ -397,9 +591,13 @@ func createArgs(o CreateOptions) []string {
 }
 
 // Create runs docker create and returns the id of the new container.
+//
+// Docker drops the CMD of the image whenever --entrypoint is given, even when
+// the entrypoint is only changed or cleared. A caller that sets Entrypoint
+// and wants the image CMD must pass it explicitly in Cmd.
 func (c *Client) Create(ctx context.Context, o CreateOptions) (string, error) {
-	if o.Image == "" {
-		return "", errors.New("docker create: no image given")
+	if err := checkArg("docker create", "image", o.Image); err != nil {
+		return "", err
 	}
 	out, err := c.do(ctx, "docker create", createArgs(o))
 	if err != nil {
@@ -414,8 +612,8 @@ func (c *Client) Create(ctx context.Context, o CreateOptions) (string, error) {
 
 // simple runs a command that takes one container id after fixed arguments.
 func (c *Client) simple(ctx context.Context, op, id string, args ...string) error {
-	if id == "" {
-		return fmt.Errorf("%s: no container id given", op)
+	if err := checkArg(op, "container id", id); err != nil {
+		return err
 	}
 	_, err := c.do(ctx, op, append(args, id))
 	return err
@@ -431,7 +629,7 @@ func (c *Client) Stop(ctx context.Context, id string, seconds int) error {
 	if seconds < 0 {
 		return fmt.Errorf("docker stop: negative timeout %d", seconds)
 	}
-	return c.simple(ctx, "docker stop", id, "stop", "--time", strconv.Itoa(seconds))
+	return c.simple(ctx, "docker stop", id, "stop", "-t", strconv.Itoa(seconds))
 }
 
 // Kill runs docker kill.
@@ -449,10 +647,10 @@ func (c *Client) Remove(ctx context.Context, id string, force bool) error {
 
 // Running reports whether the container is running.
 func (c *Client) Running(ctx context.Context, id string) (bool, error) {
-	if id == "" {
-		return false, errors.New("docker inspect: no container id given")
+	if err := checkArg("docker container inspect", "container id", id); err != nil {
+		return false, err
 	}
-	out, err := c.do(ctx, "docker inspect", []string{"inspect", "--format", "{{.State.Running}}", id})
+	out, err := c.do(ctx, "docker container inspect", []string{"container", "inspect", "--format", "{{.State.Running}}", id})
 	if err != nil {
 		return false, err
 	}
@@ -462,14 +660,14 @@ func (c *Client) Running(ctx context.Context, id string) (bool, error) {
 	case "false":
 		return false, nil
 	default:
-		return false, fmt.Errorf("docker inspect %s: unexpected State.Running %q", id, s)
+		return false, fmt.Errorf("docker container inspect %s: unexpected State.Running %q", id, s)
 	}
 }
 
 // Wait blocks until the container stops and returns its exit code.
 func (c *Client) Wait(ctx context.Context, id string) (int, error) {
-	if id == "" {
-		return 0, errors.New("docker wait: no container id given")
+	if err := checkArg("docker wait", "container id", id); err != nil {
+		return 0, err
 	}
 	out, err := c.do(ctx, "docker wait", []string{"wait", id})
 	if err != nil {
@@ -485,10 +683,13 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 
 // Exec runs cmd in the running container and returns what it wrote to
 // stdout. When the command exits with a non-zero status, the error is an
-// *ExitError with the exit code and the stderr of the command.
+// *ExitError with the exit code and the stderr of the command. When docker
+// itself says that the container is not running or does not exist, the
+// command never ran: the error then wraps ErrNotRunning or ErrNoContainer and
+// is not an *ExitError.
 func (c *Client) Exec(ctx context.Context, id string, cmd []string) ([]byte, error) {
-	if id == "" {
-		return nil, errors.New("docker exec: no container id given")
+	if err := checkArg("docker exec", "container id", id); err != nil {
+		return nil, err
 	}
 	if len(cmd) == 0 {
 		return nil, errors.New("docker exec: no command given")
@@ -501,6 +702,13 @@ func (c *Client) Exec(ctx context.Context, id string, cmd []string) ([]byte, err
 			if ee.Stderr == "" {
 				ee.Stderr = string(stderr)
 			}
+			low := strings.ToLower(ee.Stderr)
+			if strings.Contains(low, "no such container") {
+				return stdout, fmt.Errorf("docker exec %s: %w: %s", id, ErrNoContainer, tailOf(ee.Stderr))
+			}
+			if strings.Contains(low, "container") && strings.Contains(low, "is not running") {
+				return stdout, fmt.Errorf("docker exec %s: %w: %s", id, ErrNotRunning, tailOf(ee.Stderr))
+			}
 			return stdout, ee
 		}
 		return stdout, wrap("docker exec", err, stderr)
@@ -511,8 +719,16 @@ func (c *Client) Exec(ctx context.Context, id string, cmd []string) ([]byte, err
 // CopyFrom runs docker cp, copying containerPath of the container into the
 // host directory hostDir.
 func (c *Client) CopyFrom(ctx context.Context, id, containerPath, hostDir string) error {
-	if id == "" || containerPath == "" || hostDir == "" {
+	if err := checkArg("docker cp", "container id", id); err != nil {
+		return err
+	}
+	if containerPath == "" || hostDir == "" {
 		return errors.New("docker cp: container id, container path and host directory are all required")
+	}
+	// A relative host path that starts with '-' (a lone "-" means stdout) or
+	// has a ':' (read as container:path) gets "./" in front.
+	if !filepath.IsAbs(hostDir) && (hostDir[0] == '-' || strings.Contains(hostDir, ":")) {
+		hostDir = "./" + hostDir
 	}
 	_, err := c.do(ctx, "docker cp", []string{"cp", id + ":" + containerPath, hostDir})
 	return err
@@ -521,10 +737,25 @@ func (c *Client) CopyFrom(ctx context.Context, id, containerPath, hostDir string
 // Logs returns the output of the container: its stdout followed by its
 // stderr, since docker logs writes each stream to the matching stream.
 func (c *Client) Logs(ctx context.Context, id string) ([]byte, error) {
-	if id == "" {
-		return nil, errors.New("docker logs: no container id given")
+	if err := checkArg("docker logs", "container id", id); err != nil {
+		return nil, err
 	}
-	stdout, stderr, err := c.r.Run(ctx, nil, "logs", id)
+	return c.logs(ctx, "logs", id)
+}
+
+// LogsTail is Logs limited to the last lines lines (docker logs --tail).
+func (c *Client) LogsTail(ctx context.Context, id string, lines int) ([]byte, error) {
+	if err := checkArg("docker logs", "container id", id); err != nil {
+		return nil, err
+	}
+	if lines < 0 {
+		return nil, fmt.Errorf("docker logs: negative line count %d", lines)
+	}
+	return c.logs(ctx, "logs", "--tail", strconv.Itoa(lines), id)
+}
+
+func (c *Client) logs(ctx context.Context, args ...string) ([]byte, error) {
+	stdout, stderr, err := c.r.Run(ctx, nil, args...)
 	if err != nil {
 		return nil, wrap("docker logs", err, stderr)
 	}
@@ -534,8 +765,8 @@ func (c *Client) Logs(ctx context.Context, id string) ([]byte, error) {
 // Export runs docker export and writes the filesystem tar of the container
 // to w. It streams when the Runner is a Streamer.
 func (c *Client) Export(ctx context.Context, id string, w io.Writer) error {
-	if id == "" {
-		return errors.New("docker export: no container id given")
+	if err := checkArg("docker export", "container id", id); err != nil {
+		return err
 	}
 	args := []string{"export", id}
 	if s, ok := c.r.(Streamer); ok {
