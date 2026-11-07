@@ -52,11 +52,15 @@ func (f *File) Final() *Stage {
 // of s itself ("FROM nginx AS nginx"), the name of a later stage, or a number
 // is an image, as in Docker. It does not read stage numbers.
 func (f *File) BaseStage(s *Stage) *Stage {
-	for _, prev := range f.Stages {
-		if prev == s {
-			return nil
+	idx := -1
+	for i, st := range f.Stages {
+		if st == s {
+			idx = i
+			break
 		}
-		if prev.Name != "" && strings.EqualFold(prev.Name, s.Base) {
+	}
+	for i := 0; i < idx; i++ {
+		if prev := f.Stages[i]; prev.Name != "" && strings.EqualFold(prev.Name, s.Base) {
 			return prev
 		}
 	}
