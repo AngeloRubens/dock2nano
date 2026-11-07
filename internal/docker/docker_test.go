@@ -864,21 +864,24 @@ func TestOptionLikeArgumentsAreRefused(t *testing.T) {
 	c, f := newFake()
 	var buf bytes.Buffer
 	calls := map[string]func() error{
-		"pull":      func() error { return c.Pull(ctx, "-x") },
-		"hasimage":  func() error { _, err := c.HasImage(ctx, "-x"); return err },
-		"inspect":   func() error { _, err := c.Inspect(ctx, "-x"); return err },
-		"create":    func() error { _, err := c.Create(ctx, CreateOptions{Image: "-x"}); return err },
-		"start":     func() error { return c.Start(ctx, "-x") },
-		"stop":      func() error { return c.Stop(ctx, "-x", 1) },
-		"kill":      func() error { return c.Kill(ctx, "-x") },
-		"rm":        func() error { return c.Remove(ctx, "-x", false) },
-		"running":   func() error { _, err := c.Running(ctx, "-x"); return err },
-		"wait":      func() error { _, err := c.Wait(ctx, "-x"); return err },
-		"exec":      func() error { _, err := c.Exec(ctx, "-x", []string{"true"}); return err },
-		"cp":        func() error { return c.CopyFrom(ctx, "-x", "/etc", "out") },
-		"logs":      func() error { _, err := c.Logs(ctx, "-x"); return err },
-		"logs tail": func() error { _, err := c.LogsTail(ctx, "-x", 5); return err },
-		"export":    func() error { return c.Export(ctx, "-x", &buf) },
+		"pull":          func() error { return c.Pull(ctx, "-x") },
+		"hasimage":      func() error { _, err := c.HasImage(ctx, "-x"); return err },
+		"inspect":       func() error { _, err := c.Inspect(ctx, "-x"); return err },
+		"create":        func() error { _, err := c.Create(ctx, CreateOptions{Image: "-x"}); return err },
+		"start":         func() error { return c.Start(ctx, "-x") },
+		"stop":          func() error { return c.Stop(ctx, "-x", 1) },
+		"kill":          func() error { return c.Kill(ctx, "-x") },
+		"rm":            func() error { return c.Remove(ctx, "-x", false) },
+		"running":       func() error { _, err := c.Running(ctx, "-x"); return err },
+		"wait":          func() error { _, err := c.Wait(ctx, "-x"); return err },
+		"exec":          func() error { _, err := c.Exec(ctx, "-x", []string{"true"}); return err },
+		"execuser id":   func() error { _, err := c.ExecUser(ctx, "-x", "root", []string{"true"}); return err },
+		"execuser user": func() error { _, err := c.ExecUser(ctx, "c1", "-root", []string{"true"}); return err },
+		"ip":            func() error { _, err := c.IPAddress(ctx, "-x"); return err },
+		"cp":            func() error { return c.CopyFrom(ctx, "-x", "/etc", "out") },
+		"logs":          func() error { _, err := c.Logs(ctx, "-x"); return err },
+		"logs tail":     func() error { _, err := c.LogsTail(ctx, "-x", 5); return err },
+		"export":        func() error { return c.Export(ctx, "-x", &buf) },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil || !strings.Contains(err.Error(), "starts with '-'") {
@@ -895,19 +898,23 @@ func TestEmptyArgumentsAreRefused(t *testing.T) {
 	c, f := newFake()
 	var buf bytes.Buffer
 	calls := map[string]func() error{
-		"pull":      func() error { return c.Pull(ctx, "") },
-		"hasimage":  func() error { _, err := c.HasImage(ctx, ""); return err },
-		"inspect":   func() error { _, err := c.Inspect(ctx, ""); return err },
-		"create":    func() error { _, err := c.Create(ctx, CreateOptions{}); return err },
-		"running":   func() error { _, err := c.Running(ctx, ""); return err },
-		"wait":      func() error { _, err := c.Wait(ctx, ""); return err },
-		"exec id":   func() error { _, err := c.Exec(ctx, "", []string{"true"}); return err },
-		"exec cmd":  func() error { _, err := c.Exec(ctx, "c1", nil); return err },
-		"cp id":     func() error { return c.CopyFrom(ctx, "", "/etc", "out") },
-		"logs":      func() error { _, err := c.Logs(ctx, ""); return err },
-		"logs tail": func() error { _, err := c.LogsTail(ctx, "", 5); return err },
-		"logs neg":  func() error { _, err := c.LogsTail(ctx, "c1", -1); return err },
-		"export":    func() error { return c.Export(ctx, "", &buf) },
+		"pull":          func() error { return c.Pull(ctx, "") },
+		"hasimage":      func() error { _, err := c.HasImage(ctx, ""); return err },
+		"inspect":       func() error { _, err := c.Inspect(ctx, ""); return err },
+		"create":        func() error { _, err := c.Create(ctx, CreateOptions{}); return err },
+		"running":       func() error { _, err := c.Running(ctx, ""); return err },
+		"wait":          func() error { _, err := c.Wait(ctx, ""); return err },
+		"exec id":       func() error { _, err := c.Exec(ctx, "", []string{"true"}); return err },
+		"exec cmd":      func() error { _, err := c.Exec(ctx, "c1", nil); return err },
+		"execuser id":   func() error { _, err := c.ExecUser(ctx, "", "root", []string{"true"}); return err },
+		"execuser user": func() error { _, err := c.ExecUser(ctx, "c1", "", []string{"true"}); return err },
+		"execuser cmd":  func() error { _, err := c.ExecUser(ctx, "c1", "root", nil); return err },
+		"ip":            func() error { _, err := c.IPAddress(ctx, ""); return err },
+		"cp id":         func() error { return c.CopyFrom(ctx, "", "/etc", "out") },
+		"logs":          func() error { _, err := c.Logs(ctx, ""); return err },
+		"logs tail":     func() error { _, err := c.LogsTail(ctx, "", 5); return err },
+		"logs neg":      func() error { _, err := c.LogsTail(ctx, "c1", -1); return err },
+		"export":        func() error { return c.Export(ctx, "", &buf) },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil {
@@ -941,5 +948,98 @@ func TestDefault(t *testing.T) {
 	er, ok := c.r.(*execRunner)
 	if !ok || er.bin != "docker" {
 		t.Fatalf("runner = %#v", c.r)
+	}
+}
+
+func TestExecUser(t *testing.T) {
+	c, f := newFake(reply{stdout: "ok"})
+	out, err := c.ExecUser(context.Background(), "c1", "root", []string{"cat", "/proc/1/environ"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "ok" {
+		t.Fatalf("out = %q", out)
+	}
+	wantCall(t, f, "exec", "--user", "root", "c1", "cat", "/proc/1/environ")
+
+	// Exec itself does not get --user.
+	c, f = newFake(reply{})
+	if _, err := c.Exec(context.Background(), "c1", []string{"id"}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "exec", "c1", "id")
+}
+
+func TestExecUserErrors(t *testing.T) {
+	ctx := context.Background()
+	for name, tt := range map[string]struct {
+		stderr string
+		want   error
+	}{
+		"not running": {"Error response from daemon: container abc is not running", ErrNotRunning},
+		"no such":     {"Error response from daemon: No such container: abc", ErrNoContainer},
+	} {
+		c, _ := newFake(reply{stderr: tt.stderr, err: &ExitError{Code: 1}})
+		_, err := c.ExecUser(ctx, "abc", "root", []string{"true"})
+		var ee *ExitError
+		if !errors.Is(err, tt.want) || errors.As(err, &ee) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+
+	c, _ := newFake(reply{stdout: "partial", stderr: "cat: no such file", err: &ExitError{Code: 1}})
+	out, err := c.ExecUser(ctx, "abc", "root", []string{"cat", "x"})
+	var ee *ExitError
+	if !errors.As(err, &ee) || ee.Code != 1 || ee.Stderr != "cat: no such file" || string(out) != "partial" {
+		t.Fatalf("out = %q, err = %v", out, err)
+	}
+
+	cause := errors.New("no docker")
+	c, _ = newFake(reply{err: cause})
+	_, err = c.ExecUser(ctx, "abc", "root", []string{"x"})
+	if errors.As(err, &ee) || !errors.Is(err, cause) || !strings.HasPrefix(err.Error(), "docker exec: ") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestIPAddress(t *testing.T) {
+	for name, tt := range map[string]struct {
+		json string
+		want string
+	}{
+		"default bridge": {`{"IPAddress":"172.17.0.2","Networks":{"bridge":{"IPAddress":"172.17.0.2"}}}`, "172.17.0.2"},
+		"top level wins": {`{"IPAddress":"172.17.0.2","Networks":{"a":{"IPAddress":"10.0.0.5"}}}`, "172.17.0.2"},
+		"user network":   {`{"IPAddress":"","Networks":{"zeta":{"IPAddress":"10.0.2.2"},"alpha":{"IPAddress":"10.0.1.2"}}}`, "10.0.1.2"},
+		"skips no ip":    {`{"IPAddress":"","Networks":{"alpha":{"IPAddress":""},"beta":{"IPAddress":"10.0.3.2"}}}`, "10.0.3.2"},
+		"trailing nl":    {"{\"IPAddress\":\"172.17.0.9\"}\n", "172.17.0.9"},
+	} {
+		c, f := newFake(reply{stdout: tt.json})
+		got, err := c.IPAddress(context.Background(), "c1")
+		if err != nil || got != tt.want {
+			t.Errorf("%s: got %q, %v, want %q", name, got, err, tt.want)
+		}
+		wantCall(t, f, "container", "inspect", "--format", "{{json .NetworkSettings}}", "c1")
+	}
+}
+
+func TestIPAddressErrors(t *testing.T) {
+	for name, out := range map[string]string{
+		"no address":  `{"IPAddress":"","Networks":{"none":{"IPAddress":""}}}`,
+		"no networks": `{"IPAddress":"","Networks":{}}`,
+		"null":        "null",
+		"malformed":   `{"IPAddress":`,
+		"empty":       "",
+	} {
+		c, _ := newFake(reply{stdout: out})
+		got, err := c.IPAddress(context.Background(), "abc123")
+		if err == nil || got != "" || !strings.Contains(err.Error(), "abc123") {
+			t.Errorf("%s: got %q, %v", name, got, err)
+		}
+	}
+
+	cause := errors.New("no docker")
+	c, _ := newFake(reply{err: cause})
+	if _, err := c.IPAddress(context.Background(), "c1"); !errors.Is(err, cause) {
+		t.Errorf("runner error lost: %v", err)
 	}
 }

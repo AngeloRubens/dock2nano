@@ -688,13 +688,31 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 // command never ran: the error then wraps ErrNotRunning or ErrNoContainer and
 // is not an *ExitError.
 func (c *Client) Exec(ctx context.Context, id string, cmd []string) ([]byte, error) {
+	return c.exec(ctx, id, nil, cmd)
+}
+
+// ExecUser is Exec run as the given user (docker exec --user), such as "root"
+// to read /proc of a process that belongs to another user. The user is passed
+// as is: a name, a uid or user:group.
+func (c *Client) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	if err := checkArg("docker exec", "user", user); err != nil {
+		return nil, err
+	}
+	return c.exec(ctx, id, []string{"--user", user}, cmd)
+}
+
+// exec runs `docker exec opts... id cmd...` and classifies the failure as
+// Exec documents.
+func (c *Client) exec(ctx context.Context, id string, opts, cmd []string) ([]byte, error) {
 	if err := checkArg("docker exec", "container id", id); err != nil {
 		return nil, err
 	}
 	if len(cmd) == 0 {
 		return nil, errors.New("docker exec: no command given")
 	}
-	args := append([]string{"exec", id}, cmd...)
+	args := append([]string{"exec"}, opts...)
+	args = append(args, id)
+	args = append(args, cmd...)
 	stdout, stderr, err := c.r.Run(ctx, nil, args...)
 	if err != nil {
 		var ee *ExitError
@@ -714,6 +732,49 @@ func (c *Client) Exec(ctx context.Context, id string, cmd []string) ([]byte, err
 		return stdout, wrap("docker exec", err, stderr)
 	}
 	return stdout, nil
+}
+
+// networkSettingsJSON is the part of NetworkSettings that IPAddress reads.
+type networkSettingsJSON struct {
+	IPAddress string `json:"IPAddress"`
+	Networks  map[string]struct {
+		IPAddress string `json:"IPAddress"`
+	} `json:"Networks"`
+}
+
+// IPAddress returns the IP address of the container: the address on the
+// default bridge when it has one, otherwise the address on the first network
+// (by name) that has one.
+func (c *Client) IPAddress(ctx context.Context, id string) (string, error) {
+	const op = "docker container inspect"
+	if err := checkArg(op, "container id", id); err != nil {
+		return "", err
+	}
+	out, err := c.do(ctx, op, []string{"container", "inspect", "--format", "{{json .NetworkSettings}}", id})
+	if err != nil {
+		return "", err
+	}
+	var ns *networkSettingsJSON
+	if err := json.Unmarshal(bytes.TrimSpace(out), &ns); err != nil {
+		return "", fmt.Errorf("%s %s: reading the output: %w", op, id, err)
+	}
+	if ns == nil {
+		return "", fmt.Errorf("%s %s: no network settings", op, id)
+	}
+	if ns.IPAddress != "" {
+		return ns.IPAddress, nil
+	}
+	names := make([]string, 0, len(ns.Networks))
+	for n := range ns.Networks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if ip := ns.Networks[n].IPAddress; ip != "" {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("%s %s: the container has no IP address", op, id)
 }
 
 // CopyFrom runs docker cp, copying containerPath of the container into the
