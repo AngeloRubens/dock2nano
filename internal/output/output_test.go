@@ -110,8 +110,9 @@ func TestWriteExactFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0o644 {
-		t.Fatalf("manifest mode without an Env = %v, want 0644", fi.Mode().Perm())
+	// Arguments can be interpolated from the host environment: always 0600.
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("manifest mode without an Env = %v, want 0600", fi.Mode().Perm())
 	}
 	wantCompose := webCompose + "  - pkg: app\n    name: app\n    local: true\n    arch: amd64\n    base_volume_sz: 1g\n"
 	if got := read(t, composePath); got != wantCompose {
@@ -176,6 +177,29 @@ func TestWriteManifestPassesValidation(t *testing.T) {
 		t.Fatal("trailing data accepted")
 	}
 	if err := ValidateManifestJSON([]byte(`{"Program":"/a"}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManifestPassthroughIsWrittenAndValid(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	s := svc("web", src)
+	s.Manifest.ManifestPassthrough = map[string]any{"cwd": "/app"}
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web"), Services: []plan.Service{s}}
+	if _, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	b := []byte(read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "package.manifest")))
+	if !strings.Contains(string(b), "\"ManifestPassthrough\": {\n    \"cwd\": \"/app\"\n  }") {
+		t.Fatalf("manifest = %s", b)
+	}
+	if err := ValidateManifestJSON(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManifestJSON([]byte(`{"ManifestPassthrough":{"cwd":"/"}}`)); err != nil {
 		t.Fatal(err)
 	}
 }

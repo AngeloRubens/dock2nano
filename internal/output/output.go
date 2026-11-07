@@ -251,11 +251,9 @@ func writePackage(j *journal, base string, s plan.Service, force bool) (string, 
 	}
 	manifest = append(manifest, '\n')
 	mpath := filepath.Join(tmp, "package.manifest")
-	// The environment may hold secrets: keep the file to the owner then.
-	mode := fs.FileMode(0o644)
-	if len(s.Manifest.Env) > 0 {
-		mode = 0o600
-	}
+	// The environment and the arguments (interpolated from the host
+	// environment) may hold secrets: the file is always for the owner only.
+	const mode = fs.FileMode(0o600)
 	if err := os.WriteFile(mpath, manifest, mode); err != nil {
 		return "", err
 	}
@@ -455,6 +453,8 @@ type manifestDoc struct {
 	DisableArgsCopy bool
 
 	RunConfig runConfigDoc
+
+	ManifestPassthrough map[string]any
 }
 
 type runConfigDoc struct {

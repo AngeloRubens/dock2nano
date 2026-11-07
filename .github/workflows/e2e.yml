@@ -4,6 +4,8 @@ name: e2e
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   up:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[e2e]')
@@ -25,7 +27,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source
         run: |
-          git clone --depth 1 https://github.com/nanovms/ops /tmp/ops-src
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops .
           sudo install /tmp/ops /usr/local/bin/ops

@@ -433,6 +433,7 @@ const optionsCompose = `services:
       D: ${SET_LATER}
     env_file: web.env
     working_dir: /srv/app
+    user: "1000:1000"
     volumes:
       - ./conf:/etc/conf:ro
       - ./rw:/rw
@@ -469,7 +470,7 @@ func TestObserveOptions(t *testing.T) {
 	}
 	got.Log = nil
 	ep := []string{"/entry.sh"}
-	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app"}
+	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app", User: "1000:1000"}
 	want.Env = []string{"A=1", "B=hb", "C=c", "D=sl", "E=from-file", "Q=quoted", "R=raw", "S=keep # this"}
 	want.Binds = []string{filepath.Join(h.dir, "conf") + ":/etc/conf:ro", filepath.Join(h.dir, "rw") + ":/rw"}
 	if !reflect.DeepEqual(got, want) {
@@ -788,7 +789,7 @@ func TestOutputAndNextSteps(t *testing.T) {
 	if got := h.wrote[0].Services[0].PackageName; got != pkg {
 		t.Fatalf("package name %q, want %q", got, pkg)
 	}
-	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/" + pkg + "\n  " + composePath + "\n\nNext steps:\n  ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  ops compose up -f " + composePath + "\n"
+	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/" + pkg + "\n  " + composePath + "\n\nNext steps:\n  OPS_HOME=/home/u ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  sudo env OPS_HOME=/home/u PATH=\"$PATH\" ops compose up -f " + composePath + "\n"
 	if h.stdout.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", h.stdout, want)
 	}
@@ -801,7 +802,7 @@ func TestOutputAndNextSteps(t *testing.T) {
 	h.dock.have["w"] = true
 	h.env["OPS_HOME"] = "/from/env"
 	h.mustRun(0, "convert")
-	if h.wopts[0].OpsHome != "/from/env" || strings.Contains(h.stdout.String(), "OPS_HOME=") {
+	if h.wopts[0].OpsHome != "/from/env" || !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME=/from/env PATH=\"$PATH\" ops compose up -f ") {
 		t.Errorf("write options %+v, stdout:\n%s", h.wopts, h.stdout)
 	}
 
@@ -809,11 +810,84 @@ func TestOutputAndNextSteps(t *testing.T) {
 	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert", "-o", "/abs/dir", "--ops-home", "/my ops")
-	if !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops compose up -f /abs/dir/compose.yaml\n") || !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops pkg get eyberg/ops-dns:0.0.1") {
+	if !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME='/my ops' PATH=\"$PATH\" ops compose up -f /abs/dir/compose.yaml\n") || !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops pkg get eyberg/ops-dns:0.0.1") {
 		t.Errorf("stdout:\n%s", h.stdout)
 	}
 	if h.wopts[0].ComposePath != "/abs/dir/compose.yaml" || h.wopts[0].OpsHome != "/my ops" {
 		t.Errorf("write options: %+v", h.wopts)
+	}
+}
+
+func TestOpsHomeIsAbsolute(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert", "--ops-home", "rel/home")
+	abs := filepath.Join(h.dir, "rel", "home")
+	if h.wopts[0].OpsHome != abs {
+		t.Errorf("OpsHome = %q, want %q", h.wopts[0].OpsHome, abs)
+	}
+	if !strings.Contains(h.stdout.String(), "  OPS_HOME="+abs+" ops pkg get ") || !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME="+abs+" PATH=\"$PATH\" ops compose up -f ") {
+		t.Errorf("stdout:\n%s", h.stdout)
+	}
+
+	h = newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.env["OPS_HOME"] = "from/env"
+	h.mustRun(0, "convert")
+	if want := filepath.Join(h.dir, "from", "env"); h.wopts[0].OpsHome != want {
+		t.Errorf("OpsHome = %q, want %q", h.wopts[0].OpsHome, want)
+	}
+}
+
+func TestRelativeCurrentDirectoryIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.app.Getwd = func() (string, error) { return "rel/dir", nil }
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "not an absolute path") || len(h.observed) != 0 {
+		t.Errorf("stderr %q, observed %d", h.stderr, len(h.observed))
+	}
+}
+
+func TestBindWithRelativeTargetIsNotPassed(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    volumes:\n      - type: bind\n        source: ./ok\n        target: rel/target\n")
+	if err := os.MkdirAll(filepath.Join(h.dir, "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert")
+	if len(h.observed[0].Binds) != 0 || !strings.Contains(h.stderr.String(), "needs absolute paths") {
+		t.Errorf("binds %v, stderr %q", h.observed[0].Binds, h.stderr)
+	}
+}
+
+func TestPackageArch(t *testing.T) {
+	ok := []struct{ arch, variant, want string }{
+		{"amd64", "", "amd64"}, {"x86_64", "", "amd64"}, {"arm64", "", "arm64"}, {"arm64", "v8", "arm64"}, {"aarch64", "", "arm64"},
+	}
+	for _, tt := range ok {
+		if got, err := packageArch(tt.arch, tt.variant); err != nil || got != tt.want {
+			t.Errorf("packageArch(%q, %q) = %q, %v; want %q", tt.arch, tt.variant, got, err, tt.want)
+		}
+	}
+	for _, tt := range []struct{ arch, variant string }{{"arm", "v7"}, {"arm", ""}, {"386", ""}, {"riscv64", ""}, {"s390x", ""}} {
+		if _, err := packageArch(tt.arch, tt.variant); err == nil || !strings.Contains(err.Error(), tt.arch) {
+			t.Errorf("packageArch(%q, %q): err = %v", tt.arch, tt.variant, err)
+		}
+	}
+}
+
+func TestUnsupportedImageArchitectureIsAnError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.dock.images["w"] = &docker.ImageConfig{Architecture: "arm", Variant: "v7"}
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "arm/v7") || len(h.wrote) != 0 {
+		t.Errorf("stderr %q", h.stderr)
 	}
 }
 

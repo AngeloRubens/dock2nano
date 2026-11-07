@@ -4,6 +4,8 @@ name: survey
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   image:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[survey]')

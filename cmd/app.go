@@ -107,9 +107,21 @@ type App struct {
 // real disk. args are the arguments after the program name. It returns the
 // exit status.
 func Run(args []string) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background())
 	defer stop()
 	return newApp().Run(ctx, args)
+}
+
+// notifyContext returns a context that ends at the first SIGINT, SIGTERM or
+// SIGHUP. After that first signal the handler is removed, so that a second one
+// ends the process in the default way, even when the cleanup is stuck.
+func notifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 // newApp is the App that works on this machine.

@@ -27,6 +27,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !filepath.IsAbs(wd) {
+		return 0, fmt.Errorf("the current directory %q is not an absolute path", wd)
+	}
 	project, dir, err := a.load(o, wd)
 	if err != nil {
 		return 0, err
@@ -80,10 +83,14 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			return 0, fmt.Errorf("service %s: %w", s.Name, err)
 		}
 		if si.Image != nil && si.Image.Architecture != "" {
+			ia, err := packageArch(si.Image.Architecture, si.Image.Variant)
+			if err != nil {
+				return 0, fmt.Errorf("service %s: %w", s.Name, err)
+			}
 			if arch == "" {
-				arch, archOwner = si.Image.Architecture, s.Name
-			} else if si.Image.Architecture != arch {
-				return 0, fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, s.Name, si.Image.Architecture)
+				arch, archOwner = ia, s.Name
+			} else if ia != arch {
+				return 0, fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, s.Name, ia)
 			}
 		}
 		inputs[s.Name] = si
@@ -105,7 +112,8 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		composePath = filepath.Join(wd, composePath)
 	}
 	composePath = filepath.Join(composePath, "compose.yaml")
-	written, err := a.Write(p, output.Options{OpsHome: a.opsHome(o), ComposePath: composePath, Force: o.force})
+	home := a.opsHome(o, wd)
+	written, err := a.Write(p, output.Options{OpsHome: home, ComposePath: composePath, Force: o.force})
 	if err != nil {
 		fmt.Fprint(a.Stdout, gen.Render(p.Report))
 		return 0, err
@@ -117,7 +125,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	for _, w := range written {
 		fmt.Fprintf(a.Stdout, "  %s\n", w)
 	}
-	a.nextSteps(o, composePath)
+	a.nextSteps(home, composePath)
 
 	if o.strict {
 		n := 0
@@ -135,20 +143,41 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 }
 
 // opsHome is the OPS_HOME given to the writer: the flag, else the variable,
-// else the home folder of the user. Empty leaves the choice to the writer.
-func (a *App) opsHome(o *options) string {
-	if o.opsHome != "" {
-		return o.opsHome
-	}
-	if v, ok := a.LookupEnv("OPS_HOME"); ok && v != "" {
-		return v
-	}
-	if a.UserHomeDir != nil {
-		if h, err := a.UserHomeDir(); err == nil {
-			return h
+// else the home folder of the user, made absolute against wd. Empty leaves the
+// choice to the writer.
+func (a *App) opsHome(o *options, wd string) string {
+	h := o.opsHome
+	if h == "" {
+		if v, ok := a.LookupEnv("OPS_HOME"); ok && v != "" {
+			h = v
 		}
 	}
-	return ""
+	if h == "" && a.UserHomeDir != nil {
+		if d, err := a.UserHomeDir(); err == nil {
+			h = d
+		}
+	}
+	if h == "" {
+		return ""
+	}
+	return absPath(wd, h)
+}
+
+// packageArch is the architecture of the packages for an image: docker's
+// spelling mapped to the two that ops knows. arm64 with any variant (v8) is
+// fine; 32-bit arm and the rest are errors.
+func packageArch(arch, variant string) (string, error) {
+	switch arch {
+	case "amd64", "x86_64":
+		return "amd64", nil
+	case "arm64", "aarch64":
+		return "arm64", nil
+	}
+	name := arch
+	if variant != "" {
+		name += "/" + variant
+	}
+	return "", fmt.Errorf("the architecture %s of the image is not supported; nanos packages are amd64 or arm64", name)
 }
 
 // notConverted returns why a service is not converted, or "" when it is.
@@ -176,16 +205,19 @@ func projectNameOf(dir string) string {
 	return base
 }
 
-// nextSteps prints what to run to start the result.
-func (a *App) nextSteps(o *options, composePath string) {
+// nextSteps prints what to run to start the result. The second command is the
+// form that the e2e job runs: ops compose creates network interfaces and
+// starts qemu, so it needs root, and root needs the OPS_HOME and the PATH of
+// the user. home and composePath are absolute.
+func (a *App) nextSteps(home, composePath string) {
 	prefix := ""
-	if o.opsHome != "" {
-		prefix = "OPS_HOME=" + shellQuote(o.opsHome) + " "
+	if home != "" {
+		prefix = "OPS_HOME=" + shellQuote(home) + " "
 	}
 	fmt.Fprintln(a.Stdout)
 	fmt.Fprintln(a.Stdout, "Next steps:")
 	fmt.Fprintf(a.Stdout, "  %sops pkg get %s    (once, if you do not have it yet)\n", prefix, opsDNSPackage)
-	fmt.Fprintf(a.Stdout, "  %sops compose up -f %s\n", prefix, shellQuote(composePath))
+	fmt.Fprintf(a.Stdout, "  sudo env %sPATH=\"$PATH\" ops compose up -f %s\n", prefix, shellQuote(composePath))
 }
 
 // shellQuote quotes s for a POSIX shell when it needs it.
@@ -362,6 +394,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo := observe.Options{Image: image, Entrypoint: ep, Cmd: cmd}
 	oo.Env = a.serviceEnv(s, dir)
 	oo.WorkingDir = s.WorkingDir
+	oo.User = s.User
 	oo.Binds = a.binds(s, dir)
 	oo.Seconds = o.seconds
 	oo.Log = func(format string, args ...any) {
@@ -520,6 +553,10 @@ func (a *App) binds(s *compose.Service, dir string) []string {
 			continue
 		}
 		host := absPath(dir, v.Source)
+		if !filepath.IsAbs(host) || !strings.HasPrefix(v.Target, "/") {
+			fmt.Fprintf(a.Stderr, "%s: warning: the bind %q to %q needs absolute paths and is not passed to the observation\n", s.Name, host, v.Target)
+			continue
+		}
 		if _, err := a.Stat(host); err != nil {
 			continue
 		}

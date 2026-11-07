@@ -554,7 +554,7 @@ func TestPorts(t *testing.T) {
 		{"udp", compose.Port{Published: "53", Target: "53", Protocol: "udp"}, nil, []string{"53"}, map[plan.Kind]string{plan.Approximated: reach}},
 		{"range", compose.Port{Published: "8000-8010", Target: "8000-8010", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "port range 8000-8010:8000-8010 is not supported"}},
 		{"range on the host side only", compose.Port{Published: "8000-8010", Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "port range"}},
-		{"remapped", compose.Port{Published: "8080", Target: "80", Protocol: "tcp"}, []string{"8080"}, nil, map[plan.Kind]string{plan.Unsupported: "remapping a port is not supported by ops: 8080 is used, the container port is 80", plan.Approximated: reach}},
+		{"remapped", compose.Port{Published: "8080", Target: "80", Protocol: "tcp"}, []string{"80"}, nil, map[plan.Kind]string{plan.Unsupported: "the port mapping 8080:80 is not applied: the service is reachable on the container port 80, on the bridge ops0 at web.service and at the address of the instance; the published port 8080 does not exist (ops does not forward ports in compose mode)", plan.Approximated: reach}},
 		{"not published", compose.Port{Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Note: "only from other services"}},
 		{"sctp", compose.Port{Published: "80", Target: "80", Protocol: "sctp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "sctp"}},
 		{"variable", compose.Port{Published: "${P}", Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "variable"}},
@@ -585,11 +585,11 @@ func TestPortsTwoKindsAtOnce(t *testing.T) {
 	s := svc("web")
 	s.Ports = []compose.Port{{HostIP: "10.0.0.1", Published: "8080", Target: "80", Protocol: "tcp"}}
 	p, got := one(t, &fake{}, s)
-	if !reflect.DeepEqual(got.Manifest.RunConfig.Ports, []string{"8080"}) {
+	if !reflect.DeepEqual(got.Manifest.RunConfig.Ports, []string{"80"}) {
 		t.Errorf("Ports = %v", got.Manifest.RunConfig.Ports)
 	}
 	un := itemsOf(p, "web", plan.Unsupported, "ports[0]")
-	if len(un) != 2 || !strings.Contains(un[0].Message, "10.0.0.1") || !strings.Contains(un[1].Message, "remapping") {
+	if len(un) != 2 || !strings.Contains(un[0].Message, "10.0.0.1") || !strings.Contains(un[1].Message, "container port 80") {
 		t.Errorf("unsupported items = %+v, want the host address and the remap", un)
 	}
 	want1(t, p, "web", plan.Approximated, "ports[0]", "not forwarded to the host")
@@ -798,9 +798,7 @@ func TestUserAndWorkingDir(t *testing.T) {
 		{"other user", "app", "/", "/", true, ""},
 		{"numeric user and group", "1000:1000", "/", "/", true, ""},
 		{"same directory", "", "/", "/", false, ""},
-		{"other directory", "", "/srv", "/", false, "working_dir /srv is not applied"},
-		{"observed in a directory", "", "", "/app", false, "the program ran in /app while observed; nanos starts it in /; relative paths may differ"},
-		{"same directory in the file and observed", "", "/app", "/app", false, "the program ran in /app while observed; nanos starts it in /; relative paths may differ"},
+		{"other directory", "", "/srv", "/", false, "working_dir /srv of the file is not applied: the program was observed in /, and cwd / is set"},
 		{"observed directory not known", "", "", "", false, ""},
 	}
 	for _, tt := range tests {
@@ -828,6 +826,98 @@ func TestUserAndWorkingDir(t *testing.T) {
 	in.Services["web"].Observed.WorkingDir = "/app"
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Unsupported, "working_dir", "working_dir /other of the file is not applied")
+}
+
+func TestWorkingDirIsInTheManifest(t *testing.T) {
+	tests := []struct {
+		name      string
+		file, obs string
+		wantCwd   string
+		kind      plan.Kind
+		msg       string
+	}{
+		{"observed from the image", "", "/app", "/app", plan.Approximated, "cwd /app is set in the package manifest"},
+		{"file and observation agree", "/app", "/app", "/app", plan.Converted, "cwd /app is set in the package manifest"},
+		{"trailing slash is the same directory", "/app/", "/app", "/app", plan.Converted, "cwd /app is set"},
+		{"root", "", "/", "/", "", ""},
+		{"not known", "", "", "/", "", ""},
+		{"file differs", "/srv", "/app", "/app", plan.Unsupported, "working_dir /srv of the file is not applied"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := svc("web")
+			s.WorkingDir = tt.file
+			in := newInput(&fake{}, s)
+			in.Services["web"].Observed.WorkingDir = tt.obs
+			p := mustGen(t, in)
+			want := map[string]any{"cwd": tt.wantCwd}
+			if got := p.Services[0].Manifest.ManifestPassthrough; !reflect.DeepEqual(got, want) {
+				t.Errorf("ManifestPassthrough = %v, want %v", got, want)
+			}
+			for _, k := range []plan.Kind{plan.Converted, plan.Approximated, plan.Unsupported} {
+				if k == tt.kind {
+					want1(t, p, "web", k, "working_dir", tt.msg)
+				} else {
+					wantNone(t, p, "web", k, "working_dir")
+				}
+			}
+		})
+	}
+}
+
+// Every service gets its own cwd, "/" included: ops compose merges the maps of
+// all the manifests, so a service without one would inherit the previous cwd.
+func TestEveryServiceHasACwd(t *testing.T) {
+	in := newInput(&fake{}, svc("a"), svc("b"))
+	in.Services["a"].Observed.WorkingDir = "/app"
+	p := mustGen(t, in)
+	if len(p.Services) != 2 {
+		t.Fatalf("services = %d", len(p.Services))
+	}
+	if got := p.Services[0].Manifest.ManifestPassthrough["cwd"]; got != "/app" {
+		t.Errorf("a: cwd = %v", got)
+	}
+	if got := p.Services[1].Manifest.ManifestPassthrough["cwd"]; got != "/" {
+		t.Errorf("b: cwd = %v, want /", got)
+	}
+}
+
+func TestArchIsChecked(t *testing.T) {
+	for _, arch := range []string{"arm", "386", "riscv64", "x86_64", "ARM64"} {
+		in := newInput(&fake{}, svc("web"))
+		in.Arch = arch
+		_, err := Generate(in)
+		if err == nil || !strings.Contains(err.Error(), `"`+arch+`"`) {
+			t.Errorf("Arch %q: err = %v, want an error naming the value", arch, err)
+		}
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		in := newInput(&fake{}, svc("web"))
+		in.Arch = arch
+		p, err := Generate(in)
+		if err != nil || p.Arch != arch || p.Compose.Packages[0].Arch != arch {
+			t.Errorf("Arch %q: err = %v", arch, err)
+		}
+	}
+}
+
+func TestStoppedEarlyIsReported(t *testing.T) {
+	in := newInput(&fake{}, svc("web"))
+	o := in.Services["web"].Observed
+	o.StoppedEarly, o.ExitCode = true, 3
+	o.StoppedLog = "\nfirst line\nsecond line\n  third line\nfourth line\n"
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "observation", "stopped with status 3 before the end of the observation")
+	it := itemsOf(p, "web", plan.Unsupported, "observation")[0]
+	if !strings.Contains(it.Message, "Log: first line | second line | third line") || strings.Contains(it.Message, "fourth") {
+		t.Errorf("message = %q, want the first 3 lines of the log", it.Message)
+	}
+	if !strings.Contains(it.Message, "the program chosen is the last one it started") {
+		t.Errorf("message = %q", it.Message)
+	}
+	// A normal observation has no such item.
+	p = mustGen(t, newInput(&fake{}, svc("web")))
+	wantNone(t, p, "web", plan.Unsupported, "observation")
 }
 
 func TestUnknownIsReported(t *testing.T) {

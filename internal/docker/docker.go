@@ -3,6 +3,15 @@
 // It is a thin wrapper: every method builds an argument list in a small pure
 // function and hands it to a Runner. The tool therefore needs no Docker Go
 // SDK, and tests can replace the Runner with a fake that records the argv.
+//
+// Secrets never go on the command line, where any user of the machine sees
+// them in ps: environment variables and build arguments are passed to docker
+// by name (--env K, --build-arg K) and their values travel in the environment
+// of the docker process (see EnvRunner).
+//
+// Linux and macOS are the supported hosts. The package builds on Windows (the
+// process of a command is then killed without its process group), but that
+// is not a supported way to run the tool.
 package docker
 
 import (
@@ -18,7 +27,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -36,6 +44,19 @@ var ErrNoContainer = errors.New("no such container")
 // non-zero status must be reported as an *ExitError (possibly wrapped).
 type Runner interface {
 	Run(ctx context.Context, stdin io.Reader, args ...string) (stdout, stderr []byte, err error)
+}
+
+// EnvRunner is an optional extension of Runner: it runs the command with the
+// variables env ("NAME=value") added to the environment of the command, after
+// the environment of this process. The Client uses it to give docker the values
+// of --env K and --build-arg K without putting them in the argument list. A
+// Runner that does not implement it cannot run a call that has such values:
+// the call fails with an error and docker is not started (the values are never
+// put on the command line as a fallback).
+//
+// Export and CopyTar need no environment, so Streamer has no such variant.
+type EnvRunner interface {
+	RunEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) (stdout, stderr []byte, err error)
 }
 
 // Streamer is an optional extension of Runner: it copies stdout to w as the
@@ -208,49 +229,30 @@ func NewExecRunner(bin string) Runner {
 }
 
 func (r *execRunner) Run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, []byte, error) {
-	var out bytes.Buffer
-	stderr, err := r.run(ctx, stdin, &out, args)
-	return out.Bytes(), stderr, err
+	return r.RunEnv(ctx, nil, stdin, args...)
 }
 
-// setupCancel makes the command stoppable. The command gets its own process
-// group; when the context is done the group gets SIGTERM (docker forwards it
-// to its children), and the group is killed if the command or a child that
-// holds the pipes is still there waitDelay later. The returned function
-// cancels the pending kill.
-func setupCancel(cmd *exec.Cmd) (stop func()) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = waitDelay
-	var timer *time.Timer
-	cmd.Cancel = func() error {
-		pid := cmd.Process.Pid
-		timer = time.AfterFunc(waitDelay, func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
-		if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			return err
-		}
-		return nil
-	}
-	return func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}
+// RunEnv implements EnvRunner.
+func (r *execRunner) RunEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, []byte, error) {
+	var out bytes.Buffer
+	stderr, err := r.run(ctx, env, stdin, &out, args)
+	return out.Bytes(), stderr, err
 }
 
 // Stream implements Streamer.
 func (r *execRunner) Stream(ctx context.Context, w io.Writer, args ...string) ([]byte, error) {
-	return r.run(ctx, nil, w, args)
+	return r.run(ctx, nil, nil, w, args)
 }
 
-func (r *execRunner) run(ctx context.Context, stdin io.Reader, stdout io.Writer, args []string) ([]byte, error) {
+func (r *execRunner) run(ctx context.Context, env []string, stdin io.Reader, stdout io.Writer, args []string) ([]byte, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, r.bin, args...)
 	stop := setupCancel(cmd)
 	defer stop()
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdin = stdin
 	// A failing stdout writer stops the command instead of leaving it
 	// blocked on a pipe nobody reads.
@@ -304,6 +306,67 @@ func (c *Client) do(ctx context.Context, op string, args []string) ([]byte, erro
 	return stdout, nil
 }
 
+// doEnv is do with the variables env added to the environment of docker. With
+// no variables it is do. Without an EnvRunner it fails and starts nothing.
+func (c *Client) doEnv(ctx context.Context, op string, args, env []string) ([]byte, []byte, error) {
+	if len(env) == 0 {
+		stdout, stderr, err := c.r.Run(ctx, nil, args...)
+		return stdout, stderr, err
+	}
+	er, ok := c.r.(EnvRunner)
+	if !ok {
+		return nil, nil, fmt.Errorf("%s: the runner cannot pass environment variables, and secrets are never put on the command line", op)
+	}
+	return er.RunEnv(ctx, env, nil, args...)
+}
+
+// passEnv turns entries "NAME=value" into the arguments "flag NAME" and the
+// environment "NAME=value" that carries the values. An entry without '=' is
+// "flag NAME" alone: docker then takes the value from its own environment. A
+// name that is empty or has NUL, and a value that has NUL, are errors; when a
+// name is repeated the last value wins.
+func passEnv(op, flag string, entries []string) (args, env []string, err error) {
+	at := map[string]int{}
+	for _, e := range entries {
+		name, val, has := strings.Cut(e, "=")
+		if name == "" || strings.ContainsRune(name, 0) || strings.ContainsRune(val, 0) {
+			return nil, nil, fmt.Errorf("%s: %q is not a valid variable name with a value", op, name)
+		}
+		args = append(args, flag, name)
+		if !has {
+			continue
+		}
+		if i, dup := at[name]; dup {
+			env[i] = name + "=" + val
+			continue
+		}
+		at[name] = len(env)
+		env = append(env, name+"="+val)
+	}
+	return args, env, nil
+}
+
+// redactSecrets replaces every value of vals that has at least minSecret bytes
+// by "***". Longer values go first so that one that holds another is hidden
+// whole.
+func redactSecrets(s string, vals []string) string {
+	var long []string
+	for _, v := range vals {
+		if len(v) >= minSecret {
+			long = append(long, v)
+		}
+	}
+	sort.Slice(long, func(i, j int) bool { return len(long[i]) > len(long[j]) })
+	for _, v := range long {
+		s = strings.ReplaceAll(s, v, "***")
+	}
+	return s
+}
+
+// minSecret is the shortest value that is hidden in the stderr of a build:
+// shorter ones (a "1", "true") would hide too much of the message.
+const minSecret = 6
+
 // wrap adds the operation to err. An *ExitError already says everything, so
 // it only gets the operation as a prefix. For other errors the tail of stderr
 // is added when there is one.
@@ -344,8 +407,11 @@ type BuildOptions struct {
 	Quiet bool
 }
 
-func buildArgs(o BuildOptions) []string {
-	args := []string{"build"}
+// buildArgs returns the arguments of docker build and the environment that
+// carries the values of the build arguments (--build-arg NAME takes the value
+// from the environment of docker).
+func buildArgs(o BuildOptions) (args, env []string, err error) {
+	args = []string{"build"}
 	if o.Dockerfile != "" {
 		args = append(args, "--file", o.Dockerfile)
 	}
@@ -363,14 +429,26 @@ func buildArgs(o BuildOptions) []string {
 	}
 	keys := make([]string, 0, len(o.Args))
 	for k := range o.Args {
+		if k == "" {
+			return nil, nil, errors.New("docker build: empty build argument name")
+		}
+		if strings.ContainsAny(k, "=\x00") {
+			return nil, nil, fmt.Errorf("docker build: the build argument name %q must not contain '=' or NUL", k)
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	entries := make([]string, 0, len(keys))
 	for _, k := range keys {
-		args = append(args, "--build-arg", k+"="+o.Args[k])
+		entries = append(entries, k+"="+o.Args[k])
 	}
+	a, env, err := passEnv("docker build", "--build-arg", entries)
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, a...)
 	// "--" keeps a context that starts with '-' from being read as an option.
-	return append(args, "--", o.Context)
+	return append(args, "--", o.Context), env, nil
 }
 
 // Build runs docker build.
@@ -378,13 +456,25 @@ func (c *Client) Build(ctx context.Context, o BuildOptions) error {
 	if o.Context == "" {
 		return errors.New("docker build: no build context given")
 	}
-	for k := range o.Args {
-		if k == "" {
-			return errors.New("docker build: empty build argument name")
-		}
+	args, env, err := buildArgs(o)
+	if err != nil {
+		return err
 	}
-	_, err := c.do(ctx, "docker build", buildArgs(o))
-	return err
+	_, stderr, err := c.doEnv(ctx, "docker build", args, env)
+	if err != nil {
+		// The build prints its steps, which may show a value of a build
+		// argument: hide the values before the tail of stderr is shown.
+		vals := make([]string, 0, len(o.Args))
+		for _, v := range o.Args {
+			vals = append(vals, v)
+		}
+		var ee *ExitError
+		if errors.As(err, &ee) {
+			ee.Stderr = redactSecrets(ee.Stderr, vals)
+		}
+		return wrap("docker build", err, []byte(redactSecrets(string(stderr), vals)))
+	}
+	return nil
 }
 
 // Pull runs docker pull.
@@ -530,9 +620,14 @@ type CreateOptions struct {
 	// --entrypoint, so further elements are placed before Cmd.
 	Entrypoint *[]string
 	Cmd        []string
+	// Env holds NAME=value entries. The values are not put on the command line:
+	// they are passed in the environment of docker, which needs a Runner that is
+	// an EnvRunner (the exec runner is).
 	Env        []string
 	WorkingDir string
 	User       string
+	// Labels are key=value labels (docker create --label).
+	Labels []string
 	// Binds are host:container[:mode] volume specs.
 	Binds       []string
 	CapAdd      []string
@@ -543,8 +638,10 @@ type CreateOptions struct {
 	AutoRemove bool
 }
 
-func createArgs(o CreateOptions) []string {
-	args := []string{"create"}
+// createArgs returns the arguments of docker create and the environment that
+// carries the values of o.Env.
+func createArgs(o CreateOptions) (args, env []string, err error) {
+	args = []string{"create"}
 	if o.Name != "" {
 		args = append(args, "--name", o.Name)
 	}
@@ -564,8 +661,13 @@ func createArgs(o CreateOptions) []string {
 	if o.WorkingDir != "" {
 		args = append(args, "--workdir", o.WorkingDir)
 	}
-	for _, e := range o.Env {
-		args = append(args, "--env", e)
+	envArgs, env, err := passEnv("docker create", "--env", o.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, envArgs...)
+	for _, l := range o.Labels {
+		args = append(args, "--label", l)
 	}
 	for _, b := range o.Binds {
 		args = append(args, "--volume", b)
@@ -587,7 +689,7 @@ func createArgs(o CreateOptions) []string {
 	}
 	args = append(args, o.Image)
 	args = append(args, tail...)
-	return append(args, o.Cmd...)
+	return append(args, o.Cmd...), env, nil
 }
 
 // Create runs docker create and returns the id of the new container.
@@ -599,9 +701,13 @@ func (c *Client) Create(ctx context.Context, o CreateOptions) (string, error) {
 	if err := checkArg("docker create", "image", o.Image); err != nil {
 		return "", err
 	}
-	out, err := c.do(ctx, "docker create", createArgs(o))
+	args, env, err := createArgs(o)
 	if err != nil {
 		return "", err
+	}
+	out, stderr, err := c.doEnv(ctx, "docker create", args, env)
+	if err != nil {
+		return "", wrap("docker create", err, stderr)
 	}
 	id := strings.TrimSpace(string(out))
 	if id == "" {

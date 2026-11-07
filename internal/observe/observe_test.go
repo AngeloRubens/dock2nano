@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -28,6 +29,7 @@ import (
 const (
 	tracerID = "tracer-1"
 	appID    = "app-1"
+	probeID  = "probe-1"
 	loader   = "ld-musl-x86_64.so.1"
 )
 
@@ -128,7 +130,15 @@ type fakeDocker struct {
 	// that its context was cancelled by then.
 	tarStopped   map[string]bool
 	tarCancelled map[string]bool
+
+	// tailLines are the line counts LogsTail was asked for.
+	tailLines []int
+
+	// createErr, when set, is asked for every Create and can fail it.
+	createErr func(o docker.CreateOptions) error
 }
+
+var containerName = regexp.MustCompile(`^dock2nano-[0-9a-f]{8}$`)
 
 func (f *fakeDocker) Pull(ctx context.Context, image string) error {
 	f.pulled = append(f.pulled, image)
@@ -145,8 +155,16 @@ func (f *fakeDocker) Inspect(ctx context.Context, image string) (*docker.ImageCo
 
 func (f *fakeDocker) Create(ctx context.Context, o docker.CreateOptions) (string, error) {
 	f.creates = append(f.creates, o)
+	if f.createErr != nil {
+		if err := f.createErr(o); err != nil {
+			return "", err
+		}
+	}
 	if o.Image == trace.StraceImage {
 		return tracerID, nil
+	}
+	if o.Entrypoint != nil && len(*o.Entrypoint) == 1 && (*o.Entrypoint)[0] == passwdProbeEntrypoint {
+		return probeID, nil
 	}
 	return appID, nil
 }
@@ -306,8 +324,13 @@ func (f *fakeDocker) CopyTar(ctx context.Context, id, containerPath string, w io
 	return tw.Close()
 }
 
-func (f *fakeDocker) Logs(ctx context.Context, id string) ([]byte, error) {
-	return []byte(f.logs), nil
+func (f *fakeDocker) LogsTail(ctx context.Context, id string, lines int) ([]byte, error) {
+	f.tailLines = append(f.tailLines, lines)
+	all := strings.Split(strings.TrimRight(f.logs, "\n"), "\n")
+	if len(all) > lines {
+		all = all[len(all)-lines:]
+	}
+	return []byte(strings.Join(all, "\n")), nil
 }
 
 func (f *fakeDocker) IPAddress(ctx context.Context, id string) (string, error) {
@@ -362,7 +385,7 @@ func newScene(t *testing.T) *scene {
 	d.files["/etc/app.conf"] = entry{data: "port=80\n"}
 	d.files["/lib/libc.so"] = entry{link: "libc.so.6"}
 	d.files["/lib/libc.so.6"] = entry{data: "libc", mode: 0755}
-	d.files["/srv/rel.txt"] = entry{data: "relative"}
+	d.files["/app/rel.txt"] = entry{data: "relative"}
 	d.files["/usr/bin/app"] = entry{data: "#!/bin/sh\necho hi\n", mode: 0755}
 	d.files["/var/log/app.log"] = entry{link: "/dev/stderr"}
 	d.files["/bin/sh"] = entry{data: "shell", mode: 0755}
@@ -433,7 +456,13 @@ func TestObserveSuccess(t *testing.T) {
 		"-o", "/.ops-trace/files", "--",
 		"/entry.sh", "--serve",
 	}
+	if !containerName.MatchString(s.d.creates[1].Name) || s.d.creates[0].Name == s.d.creates[1].Name {
+		t.Errorf("container names %q and %q", s.d.creates[0].Name, s.d.creates[1].Name)
+	}
+	equal(t, "tracer container labels", s.d.creates[0].Labels, []string{"dock2nano=1"})
 	want := docker.CreateOptions{
+		Name:        s.d.creates[1].Name,
+		Labels:      []string{"dock2nano=1"},
 		Image:       "img:1",
 		Entrypoint:  &wrapped,
 		User:        "0",
@@ -461,11 +490,11 @@ func TestObserveSuccess(t *testing.T) {
 
 	// only the files of the trace after the final program started, plus the interpreter
 	equal(t, "copied", s.d.copied, []string{
-		"/etc/app.conf", "/lib/libc.so", "/srv/rel.txt", "/usr/bin/app", "/var/log/app.log",
+		"/app/rel.txt", "/etc/app.conf", "/lib/libc.so", "/usr/bin/app", "/var/log/app.log",
 		"/lib/libc.so.6", "/bin/sh",
 	})
 	equal(t, "sysroot files", tree(t, res.Sysroot), []string{
-		"bin/sh", "etc/app.conf", "lib/libc.so", "lib/libc.so.6", "srv/rel.txt", "usr/bin/app", "var/log/app.log",
+		"app/rel.txt", "bin/sh", "etc/app.conf", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
 	})
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
@@ -476,7 +505,7 @@ func TestObserveSuccess(t *testing.T) {
 	}
 	equal(t, "alias is a copy of the link target", read("lib/libc.so"), "libc")
 	equal(t, "console link is empty", read("var/log/app.log"), "")
-	equal(t, "relative path read against the cwd of /proc", read("srv/rel.txt"), "relative")
+	equal(t, "relative path read against the start directory of the container", read("app/rel.txt"), "relative")
 	if st, err := os.Lstat(filepath.Join(res.Sysroot, "lib/libc.so")); err != nil || !st.Mode().IsRegular() {
 		t.Errorf("lib/libc.so is not a regular file: %v %v", st, err)
 	}
@@ -702,9 +731,11 @@ func TestObserveWithoutAddressWarns(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "urls", s.probe.urls, []string(nil))
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "no address") {
+	equal(t, "warnings", len(res.Warnings), 2)
+	if !strings.Contains(res.Warnings[0], "no address") {
 		t.Errorf("warnings = %q", res.Warnings)
 	}
+	equal(t, "port warning", res.Warnings[1], "port 80 could not be asked for /: no address for the container")
 }
 
 func TestObserveStartFailureRemovesBoth(t *testing.T) {
@@ -796,12 +827,12 @@ func TestObserveCleanupErrorJoinsTheError(t *testing.T) {
 
 func TestObserveMissingFileIsAWarning(t *testing.T) {
 	s := newScene(t)
-	delete(s.d.files, "/srv/rel.txt")
+	delete(s.d.files, "/app/rel.txt")
 	res, err := s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], "not carried /srv/rel.txt") {
+	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], "not carried /app/rel.txt") {
 		t.Errorf("warnings = %q", res.Warnings)
 	}
 }
@@ -1151,6 +1182,7 @@ func TestObserveStoppedBeforeProcCouldBeRead(t *testing.T) {
 	}
 	equal(t, "sleeps", s.clock.sleeps, 0)
 	equal(t, "warnings", res.Warnings, []string{
+		"the container stopped with status 0 before the end of the observation; the program chosen is the last one it started, not necessarily a server",
 		"the program had stopped before /proc could be read: the command line, environment and directory are those of the image",
 	})
 	equal(t, "program", res.Program, "/usr/bin/app")
@@ -1391,4 +1423,292 @@ func TestHTTPProberStopsAtTenRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "requests made to a server that always redirects to itself", hits.Load(), int32(10))
+}
+
+func TestObserveTraceStartsInTheDirectoryOfTheContainer(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.WorkingDir = "/srv"
+	s.d.traceTxt = `10 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+10 chdir("sub") = 0
+11 execve("/usr/bin/app", ["app"], 0x7ffd /* 4 vars */) = 0
+11 openat(AT_FDCWD, "data.txt", O_RDONLY) = 3
+`
+	// where the program ended up, which is not where it started
+	s.d.exec["readlink /proc/11/cwd"] = "/srv/sub\n"
+	s.d.files["/srv/sub/data.txt"] = entry{data: "data"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(s.d.copied, "/srv/sub/data.txt") {
+		t.Errorf("copied = %v, want /srv/sub/data.txt in it", s.d.copied)
+	}
+	if got, err := os.ReadFile(filepath.Join(res.Sysroot, "srv/sub/data.txt")); err != nil || string(got) != "data" {
+		t.Errorf("srv/sub/data.txt = %q, %v", got, err)
+	}
+	equal(t, "working dir", res.WorkingDir, "/srv/sub")
+}
+
+func TestObserveRelativePathWithoutAWorkingDirIsReadAgainstRoot(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.WorkingDir = ""
+	delete(s.d.exec, "readlink /proc/11/cwd")
+	delete(s.d.files, "/app/rel.txt")
+	s.d.files["/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(s.d.copied, "/rel.txt") {
+		t.Errorf("copied = %v, want /rel.txt in it", s.d.copied)
+	}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "rel.txt")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestObserveUserIsResolvedThroughPasswd(t *testing.T) {
+	passwd := "root:x:0:0:root:/root:/bin/sh\n# comment:x:9:9\ngrafana:x:472:0:g:/h:/sbin/nologin\n"
+	for _, tc := range []struct {
+		name      string
+		imageUser string
+		optUser   string
+		noPasswd  bool
+		want      string
+		warn      string
+		read      bool
+	}{
+		{"uid", "472", "", false, "grafana", "", true},
+		{"uid and gid", "472:0", "", false, "grafana", "", true},
+		{"uid without a name", "65532:65532", "", false, "", "the image runs as uid 65532, which has no name in /etc/passwd; it was observed as root", true},
+		{"uid and no passwd", "472", "", true, "", "the image runs as uid 472, which has no name in /etc/passwd; it was observed as root (/etc/passwd could not be read: ", true},
+		{"name", "app", "", false, "app", "", false},
+		{"name and group", "app:staff", "", false, "app", "", false},
+		{"root", "root", "", false, "", "", false},
+		{"zero", "0", "", false, "", "", false},
+		{"zero and group", "0:0", "", false, "", "", false},
+		{"empty", "", "", false, "", "", false},
+		{"option replaces a name", "app", "472", false, "grafana", "", true},
+		{"option replaces a uid", "472", "web", false, "web", "", false},
+		{"option root over a uid", "472", "root", false, "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.cfg.User = tc.imageUser
+			s.o.User = tc.optUser
+			if !tc.noPasswd {
+				s.d.files["/etc/passwd"] = entry{data: passwd}
+			}
+			res, err := s.observe(t, context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			traced := s.d.creates[len(s.d.creates)-1]
+			if traced.Image != "img:1" || traced.User != "0" {
+				t.Fatalf("last container = %+v", traced)
+			}
+			got := ""
+			if i := slices.Index(*traced.Entrypoint, "-u"); i >= 0 {
+				got = (*traced.Entrypoint)[i+1]
+			}
+			equal(t, "strace -u", got, tc.want)
+			equal(t, "passwd read", slices.Contains(s.d.copied, "/etc/passwd"), tc.read)
+			if tc.read {
+				probe := s.d.creates[len(s.d.creates)-2]
+				if !containerName.MatchString(probe.Name) || probe.Name == traced.Name || !slices.Equal(probe.Labels, []string{"dock2nano=1"}) {
+					t.Errorf("probe container = %+v", probe)
+				}
+				if !slices.Contains(s.d.removed, probeID) || slices.Contains(s.d.started, probeID) {
+					t.Errorf("probe container: removed %v, started %v", s.d.removed, s.d.started)
+				}
+			}
+			var userWarnings []string
+			for _, w := range res.Warnings {
+				if strings.Contains(w, "the image runs as") {
+					userWarnings = append(userWarnings, w)
+				}
+			}
+			if tc.warn == "" {
+				equal(t, "user warnings", userWarnings, []string(nil))
+			} else if len(userWarnings) != 1 || !strings.HasPrefix(userWarnings[0], tc.warn) {
+				t.Errorf("user warnings = %q, want one starting with %q", userWarnings, tc.warn)
+			}
+		})
+	}
+}
+
+func TestObserveStoppedEarlyIsReported(t *testing.T) {
+	s := newScene(t)
+	s.o.Env = []string{"PASSWORD=s3cret-pw"}
+	s.d.notRunning = true
+	s.d.waitCode = 3
+	s.d.logs = "first\nsecond\nthird\nfourth s3cret-pw\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.StoppedEarly || res.ExitCode != 3 {
+		t.Errorf("StoppedEarly = %v, ExitCode = %d", res.StoppedEarly, res.ExitCode)
+	}
+	equal(t, "stopped log", res.StoppedLog, "first\nsecond\nthird\nfourth ***")
+	equal(t, "log lines asked for", s.d.tailLines, []int{100})
+	want := "the container stopped with status 3 before the end of the observation; the program chosen is the last one it started, not necessarily a server: first | second | third"
+	if len(res.Warnings) == 0 || res.Warnings[0] != want {
+		t.Errorf("warnings = %q, want the first to be %q", res.Warnings, want)
+	}
+}
+
+func TestObserveStoppedLogIsTheLastKiB(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	s.d.logs = strings.Repeat(strings.Repeat("x", 99)+"\n", 30)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.StoppedLog) > 1024 || len(res.StoppedLog) < 900 || strings.HasPrefix(res.StoppedLog, "\n") {
+		t.Errorf("stopped log has %d bytes", len(res.StoppedLog))
+	}
+	if strings.Trim(res.StoppedLog, "x\n") != "" {
+		t.Errorf("stopped log = %q", res.StoppedLog)
+	}
+}
+
+func TestObserveRunningUntilTheEndIsNotStoppedEarly(t *testing.T) {
+	s := newScene(t)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StoppedEarly || res.ExitCode != 0 || res.StoppedLog != "" {
+		t.Errorf("StoppedEarly = %v, ExitCode = %d, StoppedLog = %q", res.StoppedEarly, res.ExitCode, res.StoppedLog)
+	}
+	equal(t, "log lines asked for", s.d.tailLines, []int(nil))
+}
+
+type failProber struct{}
+
+func (failProber) Get(ctx context.Context, url string) error { return errors.New("connection refused") }
+
+func TestObserveProbeFailureWarnsOncePerPort(t *testing.T) {
+	s := newScene(t)
+	s.o.Probe = failProber{}
+	s.o.Seconds = 6
+	s.d.cfg.ExposedPorts = []string{"8080/tcp"}
+	s.d.exec["cat /proc/net/tcp"] = tcpHeader + "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings", res.Warnings, []string{"port 8080 could not be asked for /: connection refused"})
+}
+
+func TestObserveRedactLeavesShortAndImageValuesAlone(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.Env = append(s.d.cfg.Env, "LANG=en_US.UTF-8")
+	s.o.Env = []string{"DEBUG=1", "LANG=en_US.UTF-8", "TOKEN=secret-token"}
+	s.d.traceTxt = ""
+	s.d.logs = "/lib/x1.so en_US.UTF-8 secret-token"
+	_, err := s.observe(t, context.Background())
+	if err == nil || !strings.Contains(err.Error(), ": /lib/x1.so en_US.UTF-8 ***") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestObserveLogTailAsksForHundredLines(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = ""
+	s.d.logs = "a\nb"
+	if _, err := s.observe(t, context.Background()); err == nil {
+		t.Fatal("no error")
+	}
+	equal(t, "log lines asked for", s.d.tailLines, []int{100})
+}
+
+func TestObserveFailedCreateIsRemovedByName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		image string
+		want  func(name string) []string
+	}{
+		{"strace container", trace.StraceImage, func(name string) []string { return []string{name} }},
+		{"traced container", "img:1", func(name string) []string { return []string{tracerID, name} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s.d.createErr = func(o docker.CreateOptions) error {
+				if o.Image == tc.image {
+					cancel()
+					return context.Canceled
+				}
+				return nil
+			}
+			res, err := s.observe(t, ctx)
+			if res != nil || !errors.Is(err, context.Canceled) {
+				t.Fatalf("res = %v, err = %v", res, err)
+			}
+			name := s.d.creates[len(s.d.creates)-1].Name
+			if !containerName.MatchString(name) {
+				t.Fatalf("name = %q", name)
+			}
+			equal(t, "removed", s.d.removed, tc.want(name))
+			equal(t, "context errors at removal", s.d.removeCtx[len(s.d.removeCtx)-1], error(nil))
+		})
+	}
+}
+
+func TestObserveTraceFileThatIsALinkIsNotRead(t *testing.T) {
+	s := newScene(t)
+	var logged strings.Builder
+	s.o.Log = func(format string, args ...any) { logged.WriteString(fmt.Sprintf(format, args...)) }
+	s.d.onStart = func() {
+		real := filepath.Join(s.tmp, "elsewhere")
+		if err := os.WriteFile(real, []byte(sceneTrace), 0600); err != nil {
+			t.Fatal(err)
+		}
+		list := filepath.Join(s.d.bindDir, "files")
+		os.Remove(list)
+		if err := os.Symlink(real, list); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := s.observe(t, context.Background())
+	if err == nil || !strings.Contains(err.Error(), "started no program") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(logged.String(), "the trace file is not a regular file") {
+		t.Errorf("log = %q", logged.String())
+	}
+}
+
+func TestFetchRefusesARelativePath(t *testing.T) {
+	s := newScene(t)
+	s.d.files["etc/x"] = entry{data: "x"}
+	r := &run{d: s.d}
+	if _, err := r.fetch(context.Background(), appID, t.TempDir(), "etc/x"); err == nil {
+		t.Error("no error")
+	}
+	equal(t, "copied", s.d.copied, []string(nil))
+}
+
+func TestHTTPProberReadsAtMostOneMiBOfTheBody(t *testing.T) {
+	var failed atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 1<<20)
+		for i := 0; i < 64; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				failed.Store(true)
+				return
+			}
+		}
+	}))
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/"); err != nil {
+		t.Fatal(err)
+	}
+	srv.Close()
+	if !failed.Load() {
+		t.Error("the whole body was read")
+	}
 }
