@@ -117,6 +117,7 @@ func newHarness(t *testing.T) *harness {
 	h.app.Getwd = func() (string, error) { return h.dir, nil }
 	h.app.Stat = os.Stat
 	h.app.ReadFile = os.ReadFile
+	h.app.UserHomeDir = func() (string, error) { return "/home/u", nil }
 	h.app.RemoveAll = func(p string) error {
 		h.removed = append(h.removed, p)
 		return nil
@@ -235,6 +236,9 @@ func TestNoArgsAndHelpAndVersion(t *testing.T) {
 	if !strings.Contains(h.stdout.String(), "--service NAME") {
 		t.Errorf("convert -h printed no usage: %q", h.stdout)
 	}
+	if !strings.Contains(h.stdout.String(), "like the OPS_HOME variable of ops: the folder that holds .ops") {
+		t.Errorf("the help does not say what --ops-home means: %q", h.stdout)
+	}
 	h = newHarness(t)
 	h.mustRun(0, "version")
 	if h.stdout.String() != ToolName+" "+Version+"\n" {
@@ -307,7 +311,7 @@ func TestBuildCall(t *testing.T) {
 	if len(h.dock.builds) != 1 {
 		t.Fatalf("builds: %v", h.dock.builds)
 	}
-	tag := ToolName + "/shop-web:latest"
+	tag := ToolName + "/shop/web:latest"
 	want := docker.BuildOptions{Context: filepath.Join(h.dir, "web"), Dockerfile: filepath.Join(h.dir, "web", "docker", "Web.Dockerfile"), Target: "prod", Tag: tag, Quiet: true}
 	want.Args = map[string]string{"A": "1", "B": "bv", "C": "x-bv", "D": "dv"}
 	if !reflect.DeepEqual(h.dock.builds[0], want) {
@@ -325,6 +329,9 @@ func TestBuildCall(t *testing.T) {
 	if h.genIn[0].Services["web"].Image == nil {
 		t.Fatal("the image config did not reach the generator")
 	}
+	if strings.Contains(h.stderr.String(), "bv") || strings.Contains(h.stderr.String(), "dv") {
+		t.Errorf("a build argument value was printed: %q", h.stderr)
+	}
 }
 
 func TestBuildDefaults(t *testing.T) {
@@ -332,7 +339,7 @@ func TestBuildDefaults(t *testing.T) {
 	h.write("compose.yaml", "name: shop\nservices:\n  web:\n    build: ./web\n")
 	h.write("web/Dockerfile", stagesDockerfile)
 	h.mustRun(0, "convert")
-	want := docker.BuildOptions{Context: filepath.Join(h.dir, "web"), Dockerfile: filepath.Join(h.dir, "web", "Dockerfile"), Tag: ToolName + "/shop-web:latest", Quiet: true}
+	want := docker.BuildOptions{Context: filepath.Join(h.dir, "web"), Dockerfile: filepath.Join(h.dir, "web", "Dockerfile"), Tag: ToolName + "/shop/web:latest", Quiet: true}
 	if !reflect.DeepEqual(h.dock.builds[0], want) {
 		t.Fatalf("got %+v\nwant %+v", h.dock.builds[0], want)
 	}
@@ -344,26 +351,42 @@ func TestBuildDefaults(t *testing.T) {
 func TestBuildArgUnresolved(t *testing.T) {
 	h := newHarness(t)
 	h.write("compose.yaml", buildCompose)
-	h.mustRun(1, "convert")
+	h.mustRun(0, "convert")
+	if len(h.dock.builds) != 1 {
+		t.Fatalf("builds: %v", h.dock.builds)
+	}
+	want := map[string]string{"A": "1", "B": "", "C": "x-d"}
+	if !reflect.DeepEqual(h.dock.builds[0].Args, want) {
+		t.Errorf("args %v, want %v", h.dock.builds[0].Args, want)
+	}
 	msg := h.stderr.String()
-	for _, want := range []string{"service web", "build argument B", "B_VAL"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("stderr %q does not contain %q", msg, want)
+	for _, w := range []string{"web: warning: build argument B", "B_VAL", "not set"} {
+		if !strings.Contains(msg, w) {
+			t.Errorf("stderr %q does not contain %q", msg, w)
 		}
 	}
-	if len(h.dock.builds) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
-		t.Errorf("something ran after the error")
+	if strings.Contains(msg, "build argument C") {
+		t.Errorf("a variable with a default was reported: %q", msg)
 	}
 }
 
-func TestImageTagSanitized(t *testing.T) {
-	got := imageTag(&compose.Project{Name: "My_Shop X"}, "/srv/ignored", &compose.Service{Name: "Web.1"})
-	if want := ToolName + "/my_shop-x-web.1:latest"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
+func TestImageTag(t *testing.T) {
+	rows := []struct{ project, dir, service, want string }{
+		{"My_Shop X", "/srv/ignored", "Web.1", "my_shop-x/web.1"},
+		{"", "/srv/My App", "web", "my-app/web"},
+		{"a-b", "/d", "c", "a-b/c"},
+		{"a", "/d", "b-c", "a/b-c"},
+		{"_x", "/d", ".y", "x/y"},
+		{"a--b", "/d", "c__d", "a-b/c_d"},
+		{"a-.b", "/d", "c", "a-b/c"},
+		{"---", "/d", "c", "x/c"},
+		{"p", "/d", "Ünï", "p/n"},
 	}
-	got = imageTag(&compose.Project{}, "/srv/My App", &compose.Service{Name: "web"})
-	if want := ToolName + "/my-app-web:latest"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	for _, r := range rows {
+		got := imageTag(&compose.Project{Name: r.project}, r.dir, &compose.Service{Name: r.service})
+		if want := ToolName + "/" + r.want + ":latest"; got != want {
+			t.Errorf("%q %q: got %q, want %q", r.project, r.service, got, want)
+		}
 	}
 }
 
@@ -409,6 +432,7 @@ const optionsCompose = `services:
       C: c
       D: ${SET_LATER}
     env_file: web.env
+    working_dir: /srv/app
     volumes:
       - ./conf:/etc/conf:ro
       - ./rw:/rw
@@ -429,6 +453,8 @@ func TestObserveOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.dock.have["nginx:1"] = true
+	h.env["HOST_B"] = "hb"
+	h.env["SET_LATER"] = "sl"
 	h.mustRun(0, "convert", "--seconds", "7")
 	if len(h.observed) != 1 {
 		t.Fatalf("observed: %v", h.names())
@@ -443,11 +469,34 @@ func TestObserveOptions(t *testing.T) {
 	}
 	got.Log = nil
 	ep := []string{"/entry.sh"}
-	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7}
-	want.Env = []string{"E=from-file", "A=1", "Q=quoted", "R=raw", "S=keep # this", "C=c"}
+	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app"}
+	want.Env = []string{"A=1", "B=hb", "C=c", "D=sl", "E=from-file", "Q=quoted", "R=raw", "S=keep # this"}
 	want.Binds = []string{filepath.Join(h.dir, "conf") + ":/etc/conf:ro", filepath.Join(h.dir, "rw") + ":/rw"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+	for _, v := range []string{"from-file", "hb", "sl", "keep # this"} {
+		if strings.Contains(h.stderr.String(), v) {
+			t.Errorf("an environment value was printed: %q", h.stderr)
+		}
+	}
+}
+
+func TestBindSourceWithColon(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    volumes:\n      - type: bind\n        source: ./c:d\n        target: /x\n      - type: bind\n        source: ./ok\n        target: /y\n")
+	for _, d := range []string{"c:d", "ok"} {
+		if err := os.MkdirAll(filepath.Join(h.dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert")
+	if want := []string{filepath.Join(h.dir, "ok") + ":/y"}; !reflect.DeepEqual(h.observed[0].Binds, want) {
+		t.Errorf("binds %v, want %v", h.observed[0].Binds, want)
+	}
+	if !strings.Contains(h.stderr.String(), "web: warning: the bind source") || !strings.Contains(h.stderr.String(), "c:d") {
+		t.Errorf("no warning: %q", h.stderr)
 	}
 }
 
@@ -465,9 +514,11 @@ func TestObserveCommand(t *testing.T) {
 		{"entrypoint clears cmd", "    entrypoint: /other\n", docker.ImageConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}}, []string{"/other"}, nil},
 		{"empty entrypoint", "    entrypoint: []\n", docker.ImageConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}}, []string{}, nil},
 		{"empty command", "    command: []\n", docker.ImageConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}}, []string{"/e"}, nil},
+		{"interpolated command", "    command: run ${CMD_ARG} \"two words\"\n", docker.ImageConfig{Entrypoint: []string{"/e"}}, []string{"/e"}, []string{"run", "one", "two words"}},
 	}
 	for _, r := range rows {
 		h := newHarness(t)
+		h.env["CMD_ARG"] = "one"
 		h.write("compose.yaml", "services:\n  web:\n    image: img\n"+r.extra)
 		h.dock.have["img"] = true
 		img := r.image
@@ -480,6 +531,25 @@ func TestObserveCommand(t *testing.T) {
 		if !reflect.DeepEqual(got.Cmd, r.cmd) {
 			t.Errorf("%s: cmd %v, want %v", r.name, got.Cmd, r.cmd)
 		}
+	}
+}
+
+func TestCommandErrorStopsTheRun(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    command: run ${BROKEN\n")
+	h.dock.have["w"] = true
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "service web:") || len(h.observed) != 0 || len(h.wrote) != 0 {
+		t.Errorf("stderr %q, observed %v", h.stderr, h.names())
+	}
+}
+
+func TestPackageNamesChecked(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "name: p\nservices:\n  Web:\n    image: a\n  web:\n    image: b\n")
+	h.mustRun(1, "convert")
+	if len(h.dock.calls) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
+		t.Errorf("something ran before the package names were checked: %v", h.dock.calls)
 	}
 }
 
@@ -508,6 +578,10 @@ func TestSkippedServices(t *testing.T) {
 	}
 	if len(h.genIn[0].Services) != 1 || h.genIn[0].Services["main"].Observed == nil {
 		t.Fatalf("inputs: %v", h.genIn[0].Services)
+	}
+	wantSkipped := map[string]string{"dbg": "has profiles (debug)", "zero": "has 0 replicas", "bare": "has no image and no build"}
+	if !reflect.DeepEqual(h.genIn[0].Skipped, wantSkipped) {
+		t.Errorf("skipped %v, want %v", h.genIn[0].Skipped, wantSkipped)
 	}
 	out := h.stdout.String()
 	for _, want := range []string{"service dbg:", "service zero:", "service bare:", "profiles", "replicas"} {
@@ -637,6 +711,9 @@ func TestServiceFilter(t *testing.T) {
 	if !strings.Contains(h.stdout.String(), "service web:") {
 		t.Errorf("the service left out is not in the report:\n%s", h.stdout)
 	}
+	if want := map[string]string{"web": "not selected with --service"}; !reflect.DeepEqual(h.genIn[0].Skipped, want) {
+		t.Errorf("skipped %v, want %v", h.genIn[0].Skipped, want)
+	}
 
 	h = newHarness(t)
 	h.write("compose.yaml", file)
@@ -650,7 +727,7 @@ func TestDockerfileMode(t *testing.T) {
 	h := newHarness(t)
 	h.write("app/Dockerfile", stagesDockerfile)
 	h.mustRun(0, "convert", "--dockerfile", "app/Dockerfile", "-o", "out", "--ops-home", "/oh", "--force")
-	tag := ToolName + "/app-app:latest"
+	tag := ToolName + "/app/app:latest"
 	want := docker.BuildOptions{Context: filepath.Join(h.dir, "app"), Dockerfile: filepath.Join(h.dir, "app", "Dockerfile"), Tag: tag, Quiet: true}
 	if len(h.dock.builds) != 1 || !reflect.DeepEqual(h.dock.builds[0], want) {
 		t.Fatalf("builds: %+v\nwant %+v", h.dock.builds, want)
@@ -677,7 +754,7 @@ func TestDockerfileModeNameAndContext(t *testing.T) {
 	h := newHarness(t)
 	h.write("ci/Dockerfile", "FROM alpine\n")
 	h.mustRun(0, "convert", "--dockerfile", "ci/Dockerfile", "--context", "src", "--name", "demo")
-	want := docker.BuildOptions{Context: filepath.Join(h.dir, "src"), Dockerfile: filepath.Join(h.dir, "ci", "Dockerfile"), Tag: ToolName + "/demo-demo:latest", Quiet: true}
+	want := docker.BuildOptions{Context: filepath.Join(h.dir, "src"), Dockerfile: filepath.Join(h.dir, "ci", "Dockerfile"), Tag: ToolName + "/demo/demo:latest", Quiet: true}
 	if !reflect.DeepEqual(h.dock.builds[0], want) {
 		t.Fatalf("got %+v\nwant %+v", h.dock.builds[0], want)
 	}
@@ -690,6 +767,13 @@ func TestDockerfileModeNameAndContext(t *testing.T) {
 	h.mustRun(0, "convert", "--dockerfile", "My App/Dockerfile")
 	if h.wrote[0].Services[0].Name != "my-app" {
 		t.Errorf("default name: %+v", h.wrote[0].Services)
+	}
+
+	h = newHarness(t)
+	h.write("my_app/Dockerfile", "FROM alpine\n")
+	h.mustRun(0, "convert", "--dockerfile", "my_app/Dockerfile")
+	if h.wrote[0].Services[0].Name != "my_app" {
+		t.Errorf("a name with an underscore: %+v", h.wrote[0].Services)
 	}
 }
 
@@ -708,8 +792,17 @@ func TestOutputAndNextSteps(t *testing.T) {
 	if h.stdout.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", h.stdout, want)
 	}
-	if !reflect.DeepEqual(h.wopts, []output.Options{{ComposePath: composePath}}) {
+	if !reflect.DeepEqual(h.wopts, []output.Options{{OpsHome: "/home/u", ComposePath: composePath}}) {
 		t.Errorf("write options: %+v", h.wopts)
+	}
+
+	h = newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.env["OPS_HOME"] = "/from/env"
+	h.mustRun(0, "convert")
+	if h.wopts[0].OpsHome != "/from/env" || strings.Contains(h.stdout.String(), "OPS_HOME=") {
+		t.Errorf("write options %+v, stdout:\n%s", h.wopts, h.stdout)
 	}
 
 	h = newHarness(t)
@@ -724,57 +817,66 @@ func TestOutputAndNextSteps(t *testing.T) {
 	}
 }
 
-func TestWriteErrorPrintsNothing(t *testing.T) {
+func TestWriteErrorPrintsReportThenError(t *testing.T) {
 	h := newHarness(t)
 	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
 	h.dock.have["w"] = true
-	h.app.Write = func(p *plan.Plan, o output.Options) ([]string, error) { return nil, errors.New("exists") }
+	var report string
+	h.app.Write = func(p *plan.Plan, o output.Options) ([]string, error) {
+		report = gen.Render(p.Report)
+		return nil, errors.New("exists")
+	}
 	h.mustRun(1, "convert")
-	if h.stdout.Len() != 0 || !strings.Contains(h.stderr.String(), "exists") {
+	if report == "" || h.stdout.String() != report || !strings.Contains(h.stderr.String(), "exists") {
 		t.Errorf("stdout %q, stderr %q", h.stdout, h.stderr)
+	}
+	if strings.Contains(h.stdout.String(), "Written") {
+		t.Errorf("stdout: %q", h.stdout)
 	}
 	if len(h.removed) != 1 {
 		t.Errorf("removed: %v", h.removed)
 	}
 }
 
-func TestExpand(t *testing.T) {
-	env := map[string]string{"A": "a", "E": ""}
-	lookup := func(k string) (string, bool) {
-		v, ok := env[k]
-		return v, ok
+func TestGenerateErrorPrintsReportThenError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	rep := []plan.Item{{Service: "web", Kind: plan.Unsupported, Key: "service", Message: "gone"}}
+	h.app.Generate = func(in gen.Input) (*plan.Plan, error) {
+		return &plan.Plan{Report: rep}, errors.New("no service could be converted")
 	}
-	rows := []struct {
-		in, want, err string
-	}{
-		{"plain", "plain", ""},
-		{"$A", "a", ""},
-		{"${A}", "a", ""},
-		{"x${A}y$A.z", "xaya.z", ""},
-		{"$$A", "$A", ""},
-		{"cost $", "cost $", ""},
-		{"${NO:-d}", "d", ""},
-		{"${E:-d}", "d", ""},
-		{"${E-d}", "", ""},
-		{"${NO-d}", "d", ""},
-		{"${A:-d}", "a", ""},
-		{"${NO}", "", "the variable NO is not set"},
-		{"$NO", "", "the variable NO is not set"},
-		{"${NO:?x}", "", "is not supported"},
-		{"${A", "", "not closed"},
-		{"${}", "", "does not name a variable"},
+	h.mustRun(1, "convert")
+	if h.stdout.String() != gen.Render(rep) || !strings.Contains(h.stderr.String(), "no service could be converted") || len(h.wrote) != 0 {
+		t.Errorf("stdout %q, stderr %q", h.stdout, h.stderr)
 	}
-	for _, r := range rows {
-		got, err := expand(r.in, lookup)
-		if r.err != "" {
-			if err == nil || !strings.Contains(err.Error(), r.err) {
-				t.Errorf("%q: error %v, want %q", r.in, err, r.err)
-			}
-			continue
+}
+
+func TestArch(t *testing.T) {
+	file := "services:\n  a:\n    image: a\n  b:\n    image: b\n"
+	h := newHarness(t)
+	h.write("compose.yaml", file)
+	h.dock.have["a"], h.dock.have["b"] = true, true
+	h.dock.images["a"] = &docker.ImageConfig{Architecture: "arm64"}
+	h.dock.images["b"] = &docker.ImageConfig{Architecture: "arm64"}
+	h.mustRun(0, "convert")
+	if h.genIn[0].Arch != "arm64" {
+		t.Errorf("arch %q", h.genIn[0].Arch)
+	}
+
+	h = newHarness(t)
+	h.write("compose.yaml", file)
+	h.dock.have["a"], h.dock.have["b"] = true, true
+	h.dock.images["a"] = &docker.ImageConfig{Architecture: "arm64"}
+	h.dock.images["b"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.mustRun(1, "convert")
+	for _, w := range []string{"a (arm64)", "b (amd64)"} {
+		if !strings.Contains(h.stderr.String(), w) {
+			t.Errorf("stderr %q does not contain %q", h.stderr, w)
 		}
-		if err != nil || got != r.want {
-			t.Errorf("%q: got %q, %v, want %q", r.in, got, err, r.want)
-		}
+	}
+	if len(h.wrote) != 0 {
+		t.Error("a result was written")
 	}
 }
 

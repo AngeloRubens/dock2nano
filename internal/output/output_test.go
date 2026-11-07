@@ -62,7 +62,7 @@ func onePlan(sys string) *plan.Plan {
 	return &plan.Plan{Arch: "amd64", Compose: composeOf("web"), Services: []plan.Service{svc("web", sys)}}
 }
 
-const webManifest = "{\n  \"Program\": \"/web\",\n  \"RunConfig\": {}\n}\n"
+const webManifest = "{\n  \"Program\": \"/web\",\n  \"RebootOnExit\": false,\n  \"RunConfig\": {\n    \"Ports\": [],\n    \"UDPPorts\": []\n  }\n}\n"
 
 const webCompose = "packages:\n  - pkg: web\n    name: web\n    local: true\n    arch: amd64\n    base_volume_sz: 1g\n"
 
@@ -87,24 +87,31 @@ func TestWriteExactFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Join(home, "local_packages", "amd64")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
 	want := []string{filepath.Join(base, "web"), filepath.Join(base, "app"), composePath}
 	if !reflect.DeepEqual(written, want) {
 		t.Fatalf("written = %v, want %v", written, want)
 	}
-	wantManifest := "{\n  \"Program\": \"/web\",\n  \"Args\": [\n    \"-p\",\n    \"80\"\n  ],\n  \"Env\": {\n    \"A\": \"1\",\n    \"B\": \"2\"\n  },\n  \"RunConfig\": {\n    \"Ports\": [\n      \"80\"\n    ]\n  }\n}\n"
+	wantManifest := "{\n  \"Program\": \"/web\",\n  \"Args\": [\n    \"-p\",\n    \"80\"\n  ],\n  \"Env\": {\n    \"A\": \"1\",\n    \"B\": \"2\"\n  },\n  \"RebootOnExit\": false,\n  \"RunConfig\": {\n    \"Ports\": [\n      \"80\"\n    ],\n    \"UDPPorts\": []\n  }\n}\n"
 	if got := read(t, filepath.Join(base, "web", "package.manifest")); got != wantManifest {
 		t.Fatalf("manifest = %q, want %q", got, wantManifest)
 	}
-	if got := read(t, filepath.Join(base, "app", "package.manifest")); got != "{\n  \"Program\": \"/app\",\n  \"RunConfig\": {}\n}\n" {
+	if got := read(t, filepath.Join(base, "app", "package.manifest")); got != "{\n  \"Program\": \"/app\",\n  \"RebootOnExit\": false,\n  \"RunConfig\": {\n    \"Ports\": [],\n    \"UDPPorts\": []\n  }\n}\n" {
 		t.Fatalf("app manifest = %q", got)
 	}
 	fi, err := os.Stat(filepath.Join(base, "web", "package.manifest"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("manifest mode with an Env = %v, want 0600", fi.Mode().Perm())
+	}
+	fi, err = os.Stat(filepath.Join(base, "app", "package.manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if fi.Mode().Perm() != 0o644 {
-		t.Fatalf("manifest mode = %v, want 0644", fi.Mode().Perm())
+		t.Fatalf("manifest mode without an Env = %v, want 0644", fi.Mode().Perm())
 	}
 	wantCompose := webCompose + "  - pkg: app\n    name: app\n    local: true\n    arch: amd64\n    base_volume_sz: 1g\n"
 	if got := read(t, composePath); got != wantCompose {
@@ -139,21 +146,25 @@ func TestWriteManifestPassesValidation(t *testing.T) {
 	put(t, filepath.Join(src, "web"), "b", 0o755)
 	p := onePlan(src)
 	p.Services[0].Manifest = plan.Manifest{
-		Program:      "/web",
-		Args:         []string{"a"},
-		Env:          map[string]string{"K": "V"},
-		Version:      "1",
-		MapDirs:      map[string]string{"/h": "/g"},
-		RebootOnExit: true,
-		RunConfig:    plan.RunConfig{Ports: []string{"80"}, UDPPorts: []string{"53"}},
+		Program:         "/web",
+		Args:            []string{"a"},
+		Env:             map[string]string{"K": "V"},
+		Version:         "1",
+		MapDirs:         map[string]string{"/h": "/g"},
+		RebootOnExit:    true,
+		DisableArgsCopy: true,
+		RunConfig:       plan.RunConfig{Ports: []string{"80"}, UDPPorts: []string{"53"}},
 	}
 	home := filepath.Join(dir, "home")
 	if _, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
 		t.Fatal(err)
 	}
-	b := []byte(read(t, filepath.Join(home, "local_packages", "amd64", "web", "package.manifest")))
+	b := []byte(read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "package.manifest")))
 	if err := ValidateManifestJSON(b); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\"DisableArgsCopy\": true") {
+		t.Fatalf("manifest = %s, want DisableArgsCopy", b)
 	}
 	if err := ValidateManifestJSON([]byte(`{"Program":"/a","Bogus":1}`)); err == nil {
 		t.Fatal("unknown field accepted")
@@ -173,7 +184,7 @@ func TestWriteFolderExists(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	composePath := filepath.Join(dir, "compose.yaml")
-	base := filepath.Join(home, "local_packages", "amd64")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
 	put(t, filepath.Join(base, "app", "marker"), "old", 0o644)
 	src1 := filepath.Join(dir, "src1")
 	src2 := filepath.Join(dir, "src2")
@@ -210,7 +221,7 @@ func TestWriteForceReplaces(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	composePath := filepath.Join(dir, "compose.yaml")
-	base := filepath.Join(home, "local_packages", "amd64")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
 	put(t, filepath.Join(base, "web", "marker"), "old", 0o644)
 	put(t, composePath, "old\n", 0o644)
 	src := filepath.Join(dir, "src")
@@ -293,7 +304,7 @@ func TestWriteRollbackKeepsWhatExisted(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	composePath := filepath.Join(dir, "compose.yaml")
-	base := filepath.Join(home, "local_packages", "amd64")
+	base := filepath.Join(home, ".ops", "local_packages", "amd64")
 	put(t, filepath.Join(base, "web", "marker"), "old", 0o644)
 	put(t, filepath.Join(base, "other", "keep"), "keep", 0o644)
 	put(t, composePath, "old\n", 0o644)
@@ -405,13 +416,57 @@ func TestWriteOpsHomeFromEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "envhome")
 	t.Setenv("OPS_HOME", home)
+	t.Setenv("HOME", filepath.Join(dir, "otherhome"))
 	src := filepath.Join(dir, "src")
 	put(t, filepath.Join(src, "web"), "b", 0o755)
 	if _, err := Write(onePlan(src), Options{ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(t, filepath.Join(home, "local_packages", "amd64", "web", "package.manifest")); got != webManifest {
+	if got := read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "package.manifest")); got != webManifest {
 		t.Fatalf("manifest = %q", got)
+	}
+}
+
+func TestWriteOpsHomeDefaultsToUserHome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPS_HOME", "")
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(onePlan(src), Options{ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dir, ".ops", "local_packages", "amd64", "web", "package.manifest")); got != webManifest {
+		t.Fatalf("manifest = %q", got)
+	}
+}
+
+func TestWriteOpsHomeOptionWinsOverEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPS_HOME", filepath.Join(dir, "env"))
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	opt := filepath.Join(dir, "opt")
+	if _, err := Write(onePlan(src), Options{OpsHome: opt, ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(filepath.Join(opt, ".ops", "local_packages", "amd64", "web")) || exists(filepath.Join(dir, "env")) {
+		t.Fatal("the package is not under <option>/.ops")
+	}
+}
+
+func TestWriteOpsHomeEmptyIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPS_HOME", "")
+	t.Setenv("HOME", "")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	written, err := Write(onePlan(src), Options{ComposePath: filepath.Join(dir, "c.yaml")})
+	if err == nil || written != nil {
+		t.Fatalf("written = %v, err = %v, want an error", written, err)
+	}
+	if !exists(filepath.Join(src, "web")) {
+		t.Fatal("the sysroot was consumed")
 	}
 }
 
@@ -568,7 +623,7 @@ func TestWriteCrossDeviceRemovesSourceAfterSuccess(t *testing.T) {
 	if _, err := Write(onePlan(src), Options{OpsHome: home, ComposePath: filepath.Join(dir, "c.yaml")}); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(t, filepath.Join(home, "local_packages", "amd64", "web", "sysroot", "web")); got != "b" {
+	if got := read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "sysroot", "web")); got != "b" {
 		t.Fatalf("content = %q", got)
 	}
 	if exists(src) {

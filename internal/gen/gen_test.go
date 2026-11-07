@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"reflect"
@@ -224,12 +226,32 @@ func TestServiceNotObserved(t *testing.T) {
 	in := newInput(&fake{}, web, db)
 	delete(in.Services, "db")
 	in.Services["web"] = ServiceInput{}
-	p := mustGen(t, in)
+	p, err := Generate(in)
+	if err == nil {
+		t.Fatal("no service could be converted and there was no error")
+	}
+	if p == nil {
+		t.Fatal("the plan with the report must come back with the error")
+	}
 	if len(p.Services) != 0 {
 		t.Errorf("services = %v, want none", names(p))
 	}
 	want1(t, p, "web", plan.Unsupported, "service", "not observed")
 	want1(t, p, "db", plan.Unsupported, "service", "not observed")
+}
+
+func TestSkippedReason(t *testing.T) {
+	web, db := svc("web"), svc("db")
+	in := newInput(&fake{}, web, db)
+	in.Skipped = map[string]string{"db": "the image cannot be built: no Dockerfile"}
+	p := mustGen(t, in)
+	if got := names(p); !reflect.DeepEqual(got, []string{"web"}) {
+		t.Errorf("services = %v, want [web]", got)
+	}
+	want1(t, p, "db", plan.Unsupported, "service", "no Dockerfile")
+	if m := itemsOf(p, "db", plan.Unsupported, "service")[0].Message; strings.Contains(m, "not observed") {
+		t.Errorf("message %q must give the reason, not the generic text", m)
+	}
 }
 
 func TestNoProgramIsAnError(t *testing.T) {
@@ -275,6 +297,9 @@ func TestProgramArgsAndPackage(t *testing.T) {
 	if m.Program != "/bin/web" || !reflect.DeepEqual(m.Args, []string{"/bin/web", "-x"}) || m.Version != "" {
 		t.Errorf("manifest = %+v", m)
 	}
+	if !m.DisableArgsCopy {
+		t.Error("DisableArgsCopy is false: ops would copy a host file named like Args[1] into the image")
+	}
 	if got.Sysroot != "/tmp/sys-web" || got.Name != "web" || got.PackageName != "proj_web" {
 		t.Errorf("service = %+v", got)
 	}
@@ -285,13 +310,35 @@ func TestProgramArgsAndPackage(t *testing.T) {
 	if p.Arch != "amd64" {
 		t.Errorf("Arch = %q, want amd64", p.Arch)
 	}
-	want1(t, p, "web", plan.Observed, "program", "/bin/web -x")
+	want1(t, p, "web", plan.Observed, "program", "program /bin/web and 1 arguments")
+	if m := itemsOf(p, "web", plan.Observed, "program")[0].Message; strings.Contains(m, "-x") {
+		t.Errorf("message %q shows an argument", m)
+	}
 
 	in := newInput(&fake{}, web)
 	in.Arch = "arm64"
 	p = mustGen(t, in)
 	if p.Arch != "arm64" || p.Compose.Packages[0].Arch != "arm64" {
 		t.Errorf("arch = %q / %q, want arm64", p.Arch, p.Compose.Packages[0].Arch)
+	}
+}
+
+func TestArchDefaultIsTheMachine(t *testing.T) {
+	old := goarch
+	t.Cleanup(func() { goarch = old })
+	goarch = "arm64"
+	p := mustGen(t, newInput(&fake{}, svc("web")))
+	if p.Arch != "arm64" || p.Compose.Packages[0].Arch != "arm64" {
+		t.Errorf("arch = %q / %q, want arm64", p.Arch, p.Compose.Packages[0].Arch)
+	}
+	goarch = "riscv64"
+	if _, err := Generate(newInput(&fake{}, svc("web"))); err == nil || !strings.Contains(err.Error(), "riscv64") {
+		t.Errorf("error = %v, want one that names riscv64", err)
+	}
+	in := newInput(&fake{}, svc("web"))
+	in.Arch = "amd64"
+	if p := mustGen(t, in); p.Arch != "amd64" {
+		t.Errorf("an explicit arch was changed to %q", p.Arch)
 	}
 }
 
@@ -302,10 +349,14 @@ func TestNames(t *testing.T) {
 		{"Web", "proj", "/work/app", "web", "proj_web"},
 		{"web-2", "My Proj", "/work/app", "web-2", "my-proj_web-2"},
 		{"web", "", "/work/My App", "web", "my-app_web"},
-		{"exactly15chars-", "p", "/w", "exactly15chars-", "p_exactly15chars-"},
+		{"exactly15chars-", "p", "/w", "exactly15chars", "p_exactly15chars-"},
+		{"my_app", "p", "/w", "my-app", "p_my_app"},
+		{"web.app", "p", "/w", "web-app", "p_web.app"},
+		{"web", "..", "/w", "web", "._web"},
+		{"web", "a..b", "/w", "web", "a.b_web"},
 	}
 	for _, tt := range good {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name+"/"+tt.project, func(t *testing.T) {
 			in := newInput(&fake{}, svc(tt.name))
 			in.Project.Name = tt.project
 			in.Dir = tt.dir
@@ -315,23 +366,98 @@ func TestNames(t *testing.T) {
 			}
 		})
 	}
-	bad := []string{"my_app", "web.app", "sixteen-chars-xx", ""}
-	for _, name := range bad {
-		t.Run("bad "+name, func(t *testing.T) {
-			_, err := Generate(newInput(&fake{}, svc(name)))
-			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", name)) {
-				t.Errorf("error = %v, want one that names %q", err, name)
-			}
-		})
+	_, err := Generate(newInput(&fake{}, svc("")))
+	if err == nil {
+		t.Error("an empty service name gave no error")
 	}
-	_, err := Generate(newInput(&fake{}, svc("Web"), svc("web")))
-	if err == nil || !strings.Contains(err.Error(), "already used") {
-		t.Errorf("two services with the same package name: error = %v", err)
+	_, err = Generate(newInput(&fake{}, svc("Web"), svc("web")))
+	if err == nil || !strings.Contains(err.Error(), `"Web"`) || !strings.Contains(err.Error(), `"web"`) {
+		t.Errorf("two services with the same package name: error = %v, want both named", err)
 	}
 }
 
+func TestFolderNamesThatCollide(t *testing.T) {
+	// The long names get different package names (the hash is of the original
+	// name) but the same folder name, which is lower-cased.
+	_, err := Generate(newInput(&fake{}, svc("Long-Service-Name-X"), svc("long-service-name-x")))
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if !strings.Contains(err.Error(), `"Long-Service-Name-X"`) || !strings.Contains(err.Error(), `"long-service-name-x"`) || !strings.Contains(err.Error(), "folder") {
+		t.Errorf("error %q must name both services and the folder", err)
+	}
+}
+
+func TestPackageNames(t *testing.T) {
+	long := "a-very-long-service-name"
+	sum := sha1.Sum([]byte(long))
+	wantLong := "a-very-l-" + hex.EncodeToString(sum[:])[:6]
+	tests := []struct {
+		service, want string
+		note          bool
+	}{
+		{"web", "web", false},
+		{"Web", "web", true},
+		{"redis_cache", "redis-cache", true},
+		{"a.b__c", "a-b-c", true},
+		{"-x-", "x", true},
+		{"dns", "svc-dns", true},
+		{"DNS", "svc-dns", true},
+		{long, wantLong, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.service, func(t *testing.T) {
+			m, items, err := PackageNames(&compose.Project{}, []string{tt.service})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m[tt.service] != tt.want {
+				t.Errorf("package name = %q, want %q", m[tt.service], tt.want)
+			}
+			if len(m[tt.service]) > 15 {
+				t.Errorf("package name %q is longer than 15", m[tt.service])
+			}
+			if tt.note != (len(items) == 1) {
+				t.Fatalf("items = %+v, want a note: %v", items, tt.note)
+			}
+			if tt.note && (items[0].Kind != plan.Note || items[0].Service != tt.service || !strings.Contains(items[0].Message, "service "+tt.service+" is package "+tt.want+" because")) {
+				t.Errorf("item = %+v", items[0])
+			}
+		})
+	}
+	if len(wantLong) != 15 {
+		t.Fatalf("test data: %q has %d characters", wantLong, len(wantLong))
+	}
+	_, items, _ := PackageNames(&compose.Project{}, []string{"redis_cache"})
+	if want := "service redis_cache is package redis-cache because a tap device name is at most 15 characters, a-z0-9-"; items[0].Message != want {
+		t.Errorf("message = %q, want %q", items[0].Message, want)
+	}
+	for _, bad := range []string{"", "---", "..."} {
+		if _, _, err := PackageNames(&compose.Project{}, []string{bad}); err == nil {
+			t.Errorf("%q gave no error", bad)
+		}
+	}
+	_, _, err := PackageNames(&compose.Project{}, []string{"redis_cache", "redis-cache"})
+	if err == nil || !strings.Contains(err.Error(), "redis_cache") || !strings.Contains(err.Error(), "redis-cache") {
+		t.Errorf("error = %v, want both services named", err)
+	}
+	_, _, err = PackageNames(&compose.Project{}, []string{"dns", "svc-dns"})
+	if err == nil {
+		t.Error("dns and svc-dns collide and gave no error")
+	}
+}
+
+func TestLongNamesStayApart(t *testing.T) {
+	p := mustGen(t, newInput(&fake{}, svc("a-very-long-service-one"), svc("a-very-long-service-two")))
+	a, b := p.Compose.Packages[0].Pkg, p.Compose.Packages[1].Pkg
+	if a == b || len(a) != 15 || len(b) != 15 {
+		t.Errorf("packages %q and %q", a, b)
+	}
+	want1(t, p, "a-very-long-service-one", plan.Note, "package name", "is package "+a)
+}
+
 func TestEnvironment(t *testing.T) {
-	f := &fake{files: map[string]string{}, host: map[string]string{"G": "fromhost"}}
+	f := &fake{files: map[string]string{}, host: map[string]string{"G": "fromhost", "HOME": "/root"}}
 	f.files["/work/app/env.list"] = "# comment\n\nB=file\nexport C=\"quoted\"\nD='sq ${X}'\nE=val # trailing\nF=${HOME}\nBARE\n"
 	f.files["/abs/other.env"] = "\xef\xbb\xbfK=v\r\nL=w\r\n"
 	s := svc("web")
@@ -341,22 +467,68 @@ func TestEnvironment(t *testing.T) {
 		{Name: "G"},
 		{Name: "H"},
 		{Name: "I", Value: "${Y:-1}", Set: true},
+		{Name: "J", Value: "${NOPE}/x", Set: true},
 	}
 	in := newInput(f, s)
 	in.Services["web"].Observed.Env = []string{"A=img", "B=img", "PATH=/bin", "noequals"}
 	p := mustGen(t, in)
-	want := map[string]string{"A": "img", "PATH": "/bin", "B": "env", "C": "quoted", "D": "sq ${X}", "E": "val", "F": "${HOME}", "G": "fromhost", "I": "${Y:-1}", "K": "v", "L": "w"}
+	want := map[string]string{"A": "img", "PATH": "/bin", "B": "env", "C": "quoted", "D": "sq ${X}", "E": "val", "F": "/root", "G": "fromhost", "I": "1", "J": "/x", "K": "v", "L": "w"}
 	if got := p.Services[0].Manifest.Env; !reflect.DeepEqual(got, want) {
 		t.Errorf("Env = %v, want %v", got, want)
 	}
-	want1(t, p, "web", plan.Unsupported, "environment.H", "not set")
-	want1(t, p, "web", plan.Unsupported, "environment.I", "not interpolated")
-	want1(t, p, "web", plan.Unsupported, "env_file[0] line 7", "not interpolated")
-	want1(t, p, "web", plan.Unsupported, "env_file[0] line 8", "not set")
+	want1(t, p, "web", plan.Note, "environment.H", "not set")
+	want1(t, p, "web", plan.Note, "environment.J", "NOPE")
+	want1(t, p, "web", plan.Note, "env_file[0]", "BARE")
 	want1(t, p, "web", plan.Unsupported, "env_file[2]", "missing.env")
-	wantNone(t, p, "web", plan.Unsupported, "environment.G")
-	wantNone(t, p, "web", plan.Unsupported, "env_file[0] line 5")
+	wantNone(t, p, "web", plan.Unsupported, "environment.I")
+	wantNone(t, p, "web", plan.Note, "environment.I")
+	wantNone(t, p, "web", plan.Note, "environment.G")
 	wantNone(t, p, "web", plan.Unsupported, "env_file[1]")
+	wantNone(t, p, "web", plan.Note, "env_file[1]")
+}
+
+func TestServiceEnvIsOneSource(t *testing.T) {
+	f := &fake{files: map[string]string{"/d/a.env": "A=file\nB=${H}\nQ=\"x y\"\n", "/d/b.env": "A=second\nBAD LINE\n"}, host: map[string]string{"H": "host"}}
+	s := svc("web")
+	s.EnvFile = []string{"a.env"}
+	s.Environment = []compose.EnvVar{{Name: "A", Value: "env", Set: true}, {Name: "C", Value: "$$H ${H}", Set: true}}
+	got, items := ServiceEnv(s, "/d", f.lookup, f.read)
+	want := map[string]string{"A": "env", "B": "host", "Q": "x y", "C": "$H host"}
+	if !reflect.DeepEqual(got, want) || len(items) != 0 {
+		t.Errorf("env = %v, items = %+v; want %v and no items", got, items, want)
+	}
+	s.EnvFile = []string{"b.env"}
+	s.Environment = nil
+	got, items = ServiceEnv(s, "/d", f.lookup, f.read)
+	if len(got) != 0 || len(items) != 1 || items[0].Kind != plan.Unsupported || items[0].Key != "env_file[0]" || items[0].Service != "web" || !strings.Contains(items[0].Message, "line 2") {
+		t.Errorf("env = %v, items = %+v; want an unsupported item for line 2 and nothing set", got, items)
+	}
+	s.EnvFile = nil
+	s.Environment = []compose.EnvVar{{Name: "R", Value: "${NOPE:?need NOPE}", Set: true}}
+	got, items = ServiceEnv(s, "/d", f.lookup, f.read)
+	if _, set := got["R"]; set || len(items) != 1 || items[0].Kind != plan.Unsupported || items[0].Key != "environment.R" {
+		t.Errorf("env = %v, items = %+v", got, items)
+	}
+}
+
+func TestEnvNeverShowsValues(t *testing.T) {
+	f := &fake{files: map[string]string{"/work/app/e.env": "P=${NOPE}s3cretfile\n"}}
+	web, db := svc("web"), svc("db")
+	web.EnvFile = []string{"e.env"}
+	web.Environment = []compose.EnvVar{{Name: "URL", Value: "postgres://u:s3cret@db/x", Set: true}, {Name: "U", Value: "${GONE}s3cret", Set: true}}
+	web.Command = compose.Command{Shell: "run --requirepass s3cretpw", Set: true}
+	web.Healthcheck = &compose.Healthcheck{Test: compose.Command{Shell: "redis-cli -a s3cretpw ping", Set: true}}
+	in := newInput(f, db, web)
+	in.Services["web"].Observed.Argv = []string{"/bin/web", "--requirepass", "s3cretpw"}
+	p := mustGen(t, in)
+	out := Render(p.Report)
+	for _, bad := range []string{"s3cret", "requirepass", "postgres://"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("Render holds %q:\n%s", bad, out)
+		}
+	}
+	want1(t, p, "web", plan.Observed, "program", "program /bin/web and 2 arguments")
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "starts with redis-cli and has 4 words")
 }
 
 func TestEnvironmentEmptyIsNil(t *testing.T) {
@@ -367,23 +539,23 @@ func TestEnvironmentEmptyIsNil(t *testing.T) {
 }
 
 func TestPorts(t *testing.T) {
+	const reach = "reachable at web.service and at the address of the instance on the ops0 bridge; not forwarded to the host"
 	tests := []struct {
-		name   string
-		port   compose.Port
-		tcp    []string
-		udp    []string
-		kind   plan.Kind
-		substr string
+		name  string
+		port  compose.Port
+		tcp   []string
+		udp   []string
+		items map[plan.Kind]string
 	}{
-		{"tcp", compose.Port{Published: "80", Target: "80", Protocol: "tcp"}, []string{"80"}, nil, "", ""},
-		{"empty protocol is tcp", compose.Port{Published: "80", Target: "80"}, []string{"80"}, nil, "", ""},
-		{"udp", compose.Port{Published: "53", Target: "53", Protocol: "udp"}, nil, []string{"53"}, "", ""},
-		{"range", compose.Port{Published: "8000-8010", Target: "8000-8010", Protocol: "tcp"}, []string{"8000-8010"}, nil, "", ""},
-		{"remapped", compose.Port{Published: "8080", Target: "80", Protocol: "tcp"}, []string{"8080"}, nil, plan.Approximated, "8080 is used, the container port is 80"},
-		{"not published", compose.Port{Target: "80", Protocol: "tcp"}, nil, nil, plan.Note, "only from other services"},
-		{"host address", compose.Port{HostIP: "127.0.0.1", Published: "80", Target: "80", Protocol: "tcp"}, []string{"80"}, nil, plan.Unsupported, "127.0.0.1"},
-		{"sctp", compose.Port{Published: "80", Target: "80", Protocol: "sctp"}, nil, nil, plan.Unsupported, "sctp"},
-		{"variable", compose.Port{Published: "${P}", Target: "80", Protocol: "tcp"}, nil, nil, plan.Unsupported, "variable"},
+		{"tcp", compose.Port{Published: "80", Target: "80", Protocol: "tcp"}, []string{"80"}, nil, map[plan.Kind]string{plan.Approximated: reach}},
+		{"empty protocol is tcp", compose.Port{Published: "80", Target: "80"}, []string{"80"}, nil, map[plan.Kind]string{plan.Approximated: reach}},
+		{"udp", compose.Port{Published: "53", Target: "53", Protocol: "udp"}, nil, []string{"53"}, map[plan.Kind]string{plan.Approximated: reach}},
+		{"range", compose.Port{Published: "8000-8010", Target: "8000-8010", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "port range 8000-8010:8000-8010 is not supported"}},
+		{"range on the host side only", compose.Port{Published: "8000-8010", Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "port range"}},
+		{"remapped", compose.Port{Published: "8080", Target: "80", Protocol: "tcp"}, []string{"8080"}, nil, map[plan.Kind]string{plan.Unsupported: "remapping a port is not supported by ops: 8080 is used, the container port is 80", plan.Approximated: reach}},
+		{"not published", compose.Port{Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Note: "only from other services"}},
+		{"sctp", compose.Port{Published: "80", Target: "80", Protocol: "sctp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "sctp"}},
+		{"variable", compose.Port{Published: "${P}", Target: "80", Protocol: "tcp"}, nil, nil, map[plan.Kind]string{plan.Unsupported: "variable"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -394,13 +566,13 @@ func TestPorts(t *testing.T) {
 			if !reflect.DeepEqual(rc.Ports, tt.tcp) || !reflect.DeepEqual(rc.UDPPorts, tt.udp) {
 				t.Errorf("Ports = %v, UDPPorts = %v, want %v and %v", rc.Ports, rc.UDPPorts, tt.tcp, tt.udp)
 			}
-			if tt.kind == "" {
-				for _, k := range []plan.Kind{plan.Note, plan.Approximated, plan.Unsupported} {
+			for _, k := range []plan.Kind{plan.Note, plan.Approximated, plan.Unsupported} {
+				if substr, ok := tt.items[k]; ok {
+					want1(t, p, "web", k, "ports[0]", substr)
+				} else {
 					wantNone(t, p, "web", k, "ports[0]")
 				}
-				return
 			}
-			want1(t, p, "web", tt.kind, "ports[0]", tt.substr)
 		})
 	}
 }
@@ -412,8 +584,11 @@ func TestPortsTwoKindsAtOnce(t *testing.T) {
 	if !reflect.DeepEqual(got.Manifest.RunConfig.Ports, []string{"8080"}) {
 		t.Errorf("Ports = %v", got.Manifest.RunConfig.Ports)
 	}
-	want1(t, p, "web", plan.Unsupported, "ports[0]", "10.0.0.1")
-	want1(t, p, "web", plan.Approximated, "ports[0]", "8080")
+	un := itemsOf(p, "web", plan.Unsupported, "ports[0]")
+	if len(un) != 2 || !strings.Contains(un[0].Message, "10.0.0.1") || !strings.Contains(un[1].Message, "remapping") {
+		t.Errorf("unsupported items = %+v, want the host address and the remap", un)
+	}
+	want1(t, p, "web", plan.Approximated, "ports[0]", "not forwarded to the host")
 }
 
 func TestExposeIsNotPublished(t *testing.T) {
@@ -443,6 +618,7 @@ func TestVolumes(t *testing.T) {
 		{"bind options", compose.Volume{Type: "bind", Source: "./data", Target: "/data", Options: "z"}, plan.Approximated, "options z are ignored"},
 		{"missing path", compose.Volume{Type: "bind", Source: "./nope", Target: "/n"}, plan.Unsupported, "/work/app/nope"},
 		{"home directory", compose.Volume{Type: "bind", Source: "~/x", Target: "/x"}, plan.Unsupported, "starts with ~"},
+		{"colon in the source", compose.Volume{Type: "bind", Source: "/data:x", Target: "/x"}, plan.Unsupported, "holds ':'"},
 		{"named", compose.Volume{Type: "volume", Source: "db", Target: "/var/lib/db"}, plan.Unsupported, "named volume db"},
 		{"anonymous", compose.Volume{Type: "volume", Target: "/cache"}, plan.Unsupported, "anonymous volume"},
 		{"tmpfs", compose.Volume{Type: "tmpfs", Target: "/run"}, plan.Unsupported, "tmpfs"},
@@ -524,11 +700,11 @@ func TestHealthcheck(t *testing.T) {
 	s := svc("web")
 	s.Healthcheck = &compose.Healthcheck{Test: compose.Command{Exec: []string{"CMD", "curl", "-f", "http://localhost"}, Set: true}}
 	p, _ := one(t, &fake{}, s)
-	want1(t, p, "web", plan.Unsupported, "healthcheck", "CMD curl -f http://localhost")
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "starts with curl and has 3 words")
 
 	s.Healthcheck = &compose.Healthcheck{Test: compose.Command{Shell: "pg_isready -U x", Set: true}}
 	p, _ = one(t, &fake{}, s)
-	want1(t, p, "web", plan.Unsupported, "healthcheck", "pg_isready -U x")
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "starts with pg_isready and has 3 words")
 
 	s.Healthcheck = &compose.Healthcheck{Disable: true}
 	p, _ = one(t, &fake{}, s)
@@ -538,7 +714,10 @@ func TestHealthcheck(t *testing.T) {
 	in := newInput(&fake{}, plain)
 	in.Services["web"] = ServiceInput{Observed: observed("web"), Stage: &dockerfile.Stage{Healthcheck: &dockerfile.Healthcheck{Test: dockerfile.Command{Shell: "wget -q localhost", Set: true}}}}
 	p = mustGen(t, in)
-	want1(t, p, "web", plan.Unsupported, "healthcheck", "wget -q localhost")
+	want1(t, p, "web", plan.Unsupported, "healthcheck", "the HEALTHCHECK of the Dockerfile")
+	if m := itemsOf(p, "web", plan.Unsupported, "healthcheck")[0].Message; strings.Contains(m, "localhost") || !strings.Contains(m, "starts with wget and has 3 words") {
+		t.Errorf("message = %q", m)
+	}
 }
 
 func TestNetworks(t *testing.T) {
@@ -564,11 +743,14 @@ func TestServiceNamesNote(t *testing.T) {
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}, {Name: "URL", Value: "postgres://db:5432/x", Set: true}, {Name: "SELF", Value: "web", Set: true}, {Name: "OTHER", Value: "dbx", Set: true}}
 	p := mustGen(t, newInput(&fake{}, db, web))
 	want1(t, p, "", plan.Note, "service names", "db -> db.service, web -> web.service")
-	want1(t, p, "", plan.Note, "service names", "web: DB_HOST=db; web: URL=postgres://db:5432/x.")
 	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
-	for _, bad := range []string{"SELF=", "OTHER="} {
+	want := "a service reaches another as <pkg>.service, not by its compose name: db -> db.service, web -> web.service. Environment variables whose value names another service were not rewritten: web: DB_HOST, URL."
+	if msg != want {
+		t.Errorf("message = %q, want %q", msg, want)
+	}
+	for _, bad := range []string{"SELF", "OTHER", "postgres", "5432", "DB_HOST=", "=db"} {
 		if strings.Contains(msg, bad) {
-			t.Errorf("message %q lists %s", msg, bad)
+			t.Errorf("message %q holds %s", msg, bad)
 		}
 	}
 	if got := p.Services[0].Manifest.Env["DB_HOST"]; got != "" {
@@ -582,38 +764,66 @@ func TestServiceNamesNote(t *testing.T) {
 	wantNone(t, p, "", plan.Note, "service names")
 }
 
+func TestEnvironmentSharedNote(t *testing.T) {
+	web, db, cache := svc("web"), svc("db"), svc("cache")
+	web.Environment = []compose.EnvVar{{Name: "B_VAR", Value: "s3cret", Set: true}, {Name: "A_VAR", Value: "v", Set: true}}
+	cache.Environment = []compose.EnvVar{{Name: "C_VAR", Value: "v", Set: true}}
+	p := mustGen(t, newInput(&fake{}, db, web, cache))
+	want := "ops compose reads all packages into one configuration: environment variables of one service stay set for the services after it. Variables per service: web: A_VAR, B_VAR; cache: C_VAR."
+	want1(t, p, "", plan.Note, "environment", want)
+	if m := itemsOf(p, "", plan.Note, "environment")[0].Message; m != want {
+		t.Errorf("message = %q, want %q", m, want)
+	}
+	p, _ = one(t, &fake{}, web)
+	wantNone(t, p, "", plan.Note, "environment")
+	p = mustGen(t, newInput(&fake{}, svc("a"), svc("b")))
+	wantNone(t, p, "", plan.Note, "environment")
+}
+
 func TestUserAndWorkingDir(t *testing.T) {
 	tests := []struct {
 		name       string
 		user, wd   string
+		obsWD      string
 		wantUser   bool
-		wantWorkDr bool
+		wantWorkDr string
 	}{
-		{"nothing", "", "", false, false},
-		{"root", "root", "/", false, false},
-		{"zero with group", "0:0", "/", false, false},
-		{"other user", "app", "/", true, false},
-		{"numeric user and group", "1000:1000", "/", true, false},
-		{"same directory", "", "/", false, false},
-		{"other directory", "", "/srv", false, true},
+		{"nothing", "", "", "/", false, ""},
+		{"root", "root", "/", "/", false, ""},
+		{"zero with group", "0:0", "/", "/", false, ""},
+		{"other user", "app", "/", "/", true, ""},
+		{"numeric user and group", "1000:1000", "/", "/", true, ""},
+		{"same directory", "", "/", "/", false, ""},
+		{"other directory", "", "/srv", "/", false, "working_dir /srv is not applied"},
+		{"observed in a directory", "", "", "/app", false, "the program ran in /app while observed; nanos starts it in /; relative paths may differ"},
+		{"same directory in the file and observed", "", "/app", "/app", false, "the program ran in /app while observed; nanos starts it in /; relative paths may differ"},
+		{"observed directory not known", "", "", "", false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := svc("web")
 			s.User, s.WorkingDir = tt.user, tt.wd
-			p, _ := one(t, &fake{}, s)
+			in := newInput(&fake{}, s)
+			in.Services["web"].Observed.WorkingDir = tt.obsWD
+			p := mustGen(t, in)
 			if tt.wantUser {
 				want1(t, p, "web", plan.Unsupported, "user", tt.user)
 			} else {
 				wantNone(t, p, "web", plan.Unsupported, "user")
 			}
-			if tt.wantWorkDr {
-				want1(t, p, "web", plan.Unsupported, "working_dir", "/srv")
+			if tt.wantWorkDr != "" {
+				want1(t, p, "web", plan.Unsupported, "working_dir", tt.wantWorkDr)
 			} else {
 				wantNone(t, p, "web", plan.Unsupported, "working_dir")
 			}
 		})
 	}
+	s := svc("web")
+	s.WorkingDir = "/other"
+	in := newInput(&fake{}, s)
+	in.Services["web"].Observed.WorkingDir = "/app"
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "working_dir", "working_dir /other of the file is not applied")
 }
 
 func TestUnknownIsReported(t *testing.T) {
@@ -656,6 +866,7 @@ func TestEffectiveCommand(t *testing.T) {
 	exec := func(w ...string) compose.Command { return compose.Command{Exec: w, Set: true} }
 	shell := func(s string) compose.Command { return compose.Command{Shell: s, Set: true} }
 	img := &docker.ImageConfig{Entrypoint: []string{"/entry"}, Cmd: []string{"a", "b"}}
+	f := &fake{host: map[string]string{"PORT": "8080", "SP": "two words", "EMPTY": ""}}
 	tests := []struct {
 		name  string
 		ep    compose.Command
@@ -673,20 +884,33 @@ func TestEffectiveCommand(t *testing.T) {
 		{"no image", compose.Command{}, exec("run", "it"), nil, "<none>", "run|it"},
 		{"simple shell form", compose.Command{}, shell(`nginx -g "daemon off;"`), img, "/entry", "nginx|-g|daemon off;"},
 		{"single quotes are literal", compose.Command{}, shell(`echo '$HOME' ''`), img, "/entry", "echo|$HOME|"},
-		{"pipe goes to sh", compose.Command{}, shell("echo hi | cat"), img, "/entry", "/bin/sh|-c|echo hi | cat"},
-		{"variable goes to sh", compose.Command{}, shell("echo $HOME"), img, "/entry", "/bin/sh|-c|echo $HOME"},
-		{"variable in double quotes goes to sh", compose.Command{}, shell(`echo "$HOME"`), img, "/entry", `/bin/sh|-c|echo "$HOME"`},
-		{"open quote goes to sh", compose.Command{}, shell(`echo "hi`), img, "/entry", `/bin/sh|-c|echo "hi`},
-		{"assignment goes to sh", compose.Command{}, shell("A=1 run"), img, "/entry", "/bin/sh|-c|A=1 run"},
-		{"option with equals stays", compose.Command{}, shell("run --a=1"), img, "/entry", "run|--a=1"},
-		{"glob goes to sh", compose.Command{}, shell("ls *.txt"), img, "/entry", "/bin/sh|-c|ls *.txt"},
+		{"pipe is an ordinary word", compose.Command{}, shell("echo hi | cat"), img, "/entry", "echo|hi|||cat"},
+		{"glob is not expanded", compose.Command{}, shell("ls *.txt"), img, "/entry", "ls|*.txt"},
+		{"assignment is an ordinary word", compose.Command{}, shell("A=1 run"), img, "/entry", "A=1|run"},
+		{"option with equals", compose.Command{}, shell("run --a=1"), img, "/entry", "run|--a=1"},
 		{"shell entrypoint", shell("/start.sh"), compose.Command{}, img, "/start.sh", ""},
+		{"variable", compose.Command{}, shell("run --port $PORT --p2 ${PORT}"), img, "/entry", "run|--port|8080|--p2|8080"},
+		{"interpolation comes before the split", compose.Command{}, shell("run $SP"), img, "/entry", "run|two|words"},
+		{"quoted variable stays one word", compose.Command{}, shell(`run "$SP"`), img, "/entry", "run|two words"},
+		{"no expansion after the split", compose.Command{}, shell(`run $$PORT "$$PORT"`), img, "/entry", "run|$PORT|$PORT"},
+		{"default", compose.Command{}, shell("run ${NOPE:-dflt}"), img, "/entry", "run|dflt"},
+		{"unset is an empty word only in quotes", compose.Command{}, shell(`run $NOPE ""`), img, "/entry", "run|"},
+		{"backslash outside quotes", compose.Command{}, shell(`run a\ b c\"d`), img, "/entry", `run|a b|c"d`},
+		{"backslash in double quotes", compose.Command{}, shell(`run "a\"b" "c\d"`), img, "/entry", `run|a"b|c\d`},
+		{"tabs and newlines separate", compose.Command{}, shell("run\ta\nb"), img, "/entry", "run|a|b"},
+		{"list is interpolated per element", compose.Command{}, exec("run", "--port=$PORT", "$SP", "a b"), img, "/entry", "run|--port=8080|two words|a b"},
+		{"list is not split", compose.Command{}, exec("run $SP"), img, "/entry", "run two words"},
+		{"entrypoint is interpolated", shell("/bin/$PORT -x"), compose.Command{}, img, "/bin/8080|-x", ""},
+		{"image values are kept as they are", compose.Command{}, compose.Command{}, &docker.ImageConfig{Entrypoint: []string{"/e", "$PORT"}, Cmd: []string{"$SP", "'x"}}, "/e|$PORT", "$SP|'x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := svc("web")
 			s.Entrypoint, s.Command = tt.ep, tt.cmd
-			ep, cmd := EffectiveCommand(s, tt.img)
+			ep, cmd, err := EffectiveCommand(s, tt.img, f.lookup)
+			if err != nil {
+				t.Fatal(err)
+			}
 			gotE := "<none>"
 			if ep != nil {
 				gotE = strings.Join(*ep, "|")
@@ -698,9 +922,41 @@ func TestEffectiveCommand(t *testing.T) {
 	}
 }
 
+func TestEffectiveCommandErrors(t *testing.T) {
+	f := &fake{}
+	for _, tt := range []struct{ name, ep, cmd, want string }{
+		{"open double quote", "", `run "x`, "command"},
+		{"open single quote", "", "run 'x", "command"},
+		{"open quote in the entrypoint", `/e "x`, "", "entrypoint"},
+		{"required variable", "", "run ${NOPE:?must be set}", "NOPE"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := svc("web")
+			if tt.ep != "" {
+				s.Entrypoint = compose.Command{Shell: tt.ep, Set: true}
+			}
+			if tt.cmd != "" {
+				s.Command = compose.Command{Shell: tt.cmd, Set: true}
+			}
+			_, _, err := EffectiveCommand(s, nil, f.lookup)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want one holding %q", err, tt.want)
+			}
+		})
+	}
+	s := svc("web")
+	s.Command = compose.Command{Exec: []string{"run", "${NOPE:?x}"}, Set: true}
+	if _, _, err := EffectiveCommand(s, nil, f.lookup); err == nil {
+		t.Error("a required variable in a list gave no error")
+	}
+}
+
 func TestEffectiveCommandDoesNotShareImageSlices(t *testing.T) {
 	img := &docker.ImageConfig{Entrypoint: []string{"/entry"}, Cmd: []string{"a"}}
-	ep, cmd := EffectiveCommand(svc("web"), img)
+	ep, cmd, err := EffectiveCommand(svc("web"), img, (&fake{}).lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
 	(*ep)[0] = "changed"
 	cmd[0] = "changed"
 	if img.Entrypoint[0] != "/entry" || img.Cmd[0] != "a" {

@@ -4,6 +4,8 @@
 // what did not convert. It has no logic of its own.
 package plan
 
+import "encoding/json"
+
 // Plan is everything the converter decided.
 type Plan struct {
 	// Arch is the architecture of the packages, such as "amd64".
@@ -35,7 +37,7 @@ type ComposePackage struct {
 type Service struct {
 	// Name is the compose name of the service.
 	Name string
-	// PackageName is the folder name under local_packages/<arch>/.
+	// PackageName is the folder name under .ops/local_packages/<arch>/.
 	PackageName string
 	// Sysroot is a host directory holding the files of the package. The writer
 	// moves or copies it to <package>/sysroot.
@@ -48,19 +50,45 @@ type Service struct {
 // carries. ops reads it with unknown fields refused, so only fields that
 // exist there are listed, with the same JSON names.
 type Manifest struct {
-	Program      string            `json:",omitempty"`
-	Args         []string          `json:",omitempty"`
-	Env          map[string]string `json:",omitempty"`
-	Version      string            `json:",omitempty"`
-	MapDirs      map[string]string `json:",omitempty"`
-	RebootOnExit bool              `json:",omitempty"`
-	RunConfig    RunConfig         `json:",omitempty"`
+	Program string            `json:",omitempty"`
+	Args    []string          `json:",omitempty"`
+	Env     map[string]string `json:",omitempty"`
+	Version string            `json:",omitempty"`
+	MapDirs map[string]string `json:",omitempty"`
+
+	// RebootOnExit is always written: ops compose reads every manifest into
+	// one shared configuration, so a key left out would keep the value of the
+	// service before it.
+	RebootOnExit bool `json:"RebootOnExit"`
+
+	// DisableArgsCopy stops ops from copying a host file named like Args[1]
+	// into the image.
+	DisableArgsCopy bool `json:",omitempty"`
+
+	RunConfig RunConfig `json:",omitempty"`
 }
 
 // RunConfig is the part of types.RunConfig the converter sets.
 type RunConfig struct {
-	Ports    []string `json:",omitempty"`
-	UDPPorts []string `json:",omitempty"`
+	Ports    []string
+	UDPPorts []string
+}
+
+// MarshalJSON writes both lists always, as [] when empty, so that the ports of
+// one service do not stay set for the next one when ops compose reads all the
+// manifests into one configuration.
+func (r RunConfig) MarshalJSON() ([]byte, error) {
+	out := struct {
+		Ports    []string
+		UDPPorts []string
+	}{Ports: r.Ports, UDPPorts: r.UDPPorts}
+	if out.Ports == nil {
+		out.Ports = []string{}
+	}
+	if out.UDPPorts == nil {
+		out.UDPPorts = []string{}
+	}
+	return json.Marshal(out)
 }
 
 // Kind says how a piece of the input was treated.

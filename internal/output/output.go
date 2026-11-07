@@ -1,6 +1,7 @@
 // Package output writes a plan.Plan to disk where "ops compose up" finds it:
-// one package folder per service under <ops home>/local_packages/<arch>/ and a
-// compose.yaml that lists them.
+// one package folder per service under <parent>/.ops/local_packages/<arch>/ and
+// a compose.yaml that lists them. <parent> is what ops calls OPS_HOME: ops adds
+// ".ops" to it.
 package output
 
 import (
@@ -21,7 +22,10 @@ import (
 
 // Options says where Write puts things.
 type Options struct {
-	// OpsHome is the ops home folder. Empty means $OPS_HOME, then ~/.ops.
+	// OpsHome has the meaning of the OPS_HOME variable of ops: it is the
+	// PARENT of the ".ops" folder, not the folder itself. The packages go to
+	// <OpsHome>/.ops/local_packages/<arch>/<name>. Empty means $OPS_HOME, then
+	// the home folder of the user.
 	OpsHome string
 	// ComposePath is where compose.yaml goes. Empty means ./compose.yaml.
 	ComposePath string
@@ -97,18 +101,23 @@ func validName(what, s string) error {
 	return nil
 }
 
+// opsHome returns the parent of the ".ops" folder, as ops does with OPS_HOME.
 func opsHome(o Options) (string, error) {
-	if o.OpsHome != "" {
-		return o.OpsHome, nil
+	h := o.OpsHome
+	if h == "" {
+		h = os.Getenv("OPS_HOME")
 	}
-	if h := os.Getenv("OPS_HOME"); h != "" {
-		return h, nil
+	if h == "" {
+		var err error
+		h, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("output: no ops home: %w", err)
+		}
 	}
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("output: no ops home: %w", err)
+	if h == "" {
+		return "", errors.New("output: the ops home is empty: set OPS_HOME or the option")
 	}
-	return filepath.Join(h, ".ops"), nil
+	return h, nil
 }
 
 // Write writes the packages of p and then its compose.yaml. It returns the
@@ -140,7 +149,7 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 	if composePath == "" {
 		composePath = "compose.yaml"
 	}
-	base := filepath.Join(home, "local_packages", p.Arch)
+	base := filepath.Join(home, ".ops", "local_packages", p.Arch)
 	if !o.Force {
 		if exists(composePath) {
 			return nil, fmt.Errorf("output: %s exists; use force to replace it", composePath)
@@ -242,10 +251,15 @@ func writePackage(j *journal, base string, s plan.Service, force bool) (string, 
 	}
 	manifest = append(manifest, '\n')
 	mpath := filepath.Join(tmp, "package.manifest")
-	if err := os.WriteFile(mpath, manifest, 0o644); err != nil {
+	// The environment may hold secrets: keep the file to the owner then.
+	mode := fs.FileMode(0o644)
+	if len(s.Manifest.Env) > 0 {
+		mode = 0o600
+	}
+	if err := os.WriteFile(mpath, manifest, mode); err != nil {
 		return "", err
 	}
-	if err := os.Chmod(mpath, 0o644); err != nil {
+	if err := os.Chmod(mpath, mode); err != nil {
 		return "", err
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
@@ -437,6 +451,8 @@ type manifestDoc struct {
 	MapDirs map[string]string
 
 	RebootOnExit bool
+
+	DisableArgsCopy bool
 
 	RunConfig runConfigDoc
 }
