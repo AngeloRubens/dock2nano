@@ -63,7 +63,7 @@ jobs:
           for h in $web $app; do ping -c2 -W2 $h || echo "no ping to $h"; done
           curl -sS -m 10 -v "http://$web:8080/" 2>&1 | tail -15 || echo "web: no answer"
           curl -sS -m 10 -v "http://$app:8081/" 2>&1 | tail -15 || echo "app: no answer"
-          dig +short @192.168.33.216 web.service app.service || true
+          dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-dns.txt | tail -1 | awk '{print $2}'); echo "dns=$dnsip"; dig +short +time=2 +tries=1 @$dnsip web.service app.service || true
       - name: down
         if: always()
         run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -5 || true
