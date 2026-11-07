@@ -321,12 +321,12 @@ func TestTouchedPathsChdir(t *testing.T) {
 }
 
 func TestNotCarried(t *testing.T) {
-	for _, p := range []string{"/proc", "/proc/self/fd/1", "/sys/kernel/mm", "/dev/null", "/dev/stderr", "/.ops-trace", "/.ops-trace/files"} {
+	for _, p := range []string{"/proc", "/proc/self/fd/1", "/sys/kernel/mm", "/dev/null", "/dev/stderr", "/.ops-trace", "/.ops-trace/files", "/etc/resolv.conf", "/etc/hosts", "/etc/hostname"} {
 		if !NotCarried(p) {
 			t.Errorf("NotCarried(%q) = false, want true", p)
 		}
 	}
-	for _, p := range []string{"/", "/process", "/proc2/x", "/devices", "/etc/hosts", "/usr/sys/x", "/.ops-trace2"} {
+	for _, p := range []string{"/", "/process", "/proc2/x", "/devices", "/etc/hosts.allow", "/etc/resolv.conf.d/x", "/usr/sys/x", "/.ops-trace2"} {
 		if NotCarried(p) {
 			t.Errorf("NotCarried(%q) = true, want false", p)
 		}
@@ -339,7 +339,7 @@ func TestIsConsoleLink(t *testing.T) {
 			t.Errorf("IsConsoleLink(%q) = false, want true", p)
 		}
 	}
-	for _, p := range []string{"/var/log/nginx/error.log", "/dev/../etc/passwd", "/procedures/x"} {
+	for _, p := range []string{"/var/log/nginx/error.log", "/dev/../etc/passwd", "/procedures/x", "/etc/hosts"} {
 		if IsConsoleLink(p) {
 			t.Errorf("IsConsoleLink(%q) = true, want false", p)
 		}
@@ -802,7 +802,7 @@ func TestConfigurationFiles(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{
 		"etc/nginx/nginx.conf", "etc/passwd", "etc/ssl/openssl.cnf",
-		"etc/hosts", "etc/hostname", "etc/ssl/certs/ca.pem", "etc/ld.so.cache", "etc/ld.so.conf.d/x.conf",
+		"etc/hosts", "etc/hostname", "etc/resolv.conf", "etc/ssl/certs/ca.pem", "etc/ld.so.cache", "etc/ld.so.conf.d/x.conf",
 		"app/config.yaml", "app/app.yml", "app/a.toml", "app/b.properties", "app/c.ini", "app/d.cnf", "app/e.conf",
 		"app/data.json", "app/UPPER.CONF", "lib/libc.so",
 	} {

@@ -9,19 +9,33 @@ nanos. The purpose is to see what the tool converts and what it reports.
 Files
   docker-compose.yml     db (mysql:8.4, named volume, healthcheck) and
                          petclinic (build ./petclinic, port 8080, waits for db)
-  petclinic/Dockerfile   stage 1 builds the WAR with ./mvnw -Pglassfish
-                         -DskipTests package; stage 2 is GlassFish on a JRE
+  petclinic/Dockerfile   stage 1 builds the WAR with mvn -B -q -Pglassfish
+                         -DskipTests package (mvn, not ./mvnw: the maven image
+                         sets MAVEN_CONFIG, which the wrapper reads as a build
+                         phase); stage 2 is GlassFish on a JRE
   petclinic/start.sh     at container start: creates the JDBC pool and the
                          resource jdbc/petclinicDS from DB_HOST, DB_NAME,
                          DB_USER, DB_PASSWORD, deploys the WAR, runs GlassFish
                          in the foreground
 
-Things not verified
-  - Whether the glassfish profile needs more than skipping tests. If the build
-    fails, the Dockerfile needs more options here.
-  - The WAR name; the Dockerfile takes the first target/*.war.
-  - The asadmin pool properties and the stop/start restart in start.sh.
+Workflows
+  .github/workflows/petclinic.yml     runs only convert, on manual dispatch or
+                                      on a commit message containing
+                                      [petclinic]. The report is the result,
+                                      failures included.
+  .github/workflows/petclinic-up.yml  converts, starts the result with
+                                      "ops compose up" and reports how far it
+                                      gets, on manual dispatch or on a commit
+                                      message containing [petclinic-up]. It
+                                      asserts nothing: the output is the
+                                      finding.
 
-The workflow .github/workflows/petclinic.yml runs only convert, on manual
-dispatch or on a commit message containing [petclinic]. The report is the
-result, failures included.
+Verified
+  - The Maven build of stage 1 and the image build were run on CI.
+
+Not verified, and known not to work at the moment
+  - GlassFish does not answer on nanos at the moment. Whether it can is still
+    unverified.
+  - mysqld refuses to run as root there, and nanos runs everything as root, so
+    the db service does not work on nanos either.
+  - The asadmin pool properties and the stop/start restart in start.sh.

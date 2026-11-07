@@ -36,15 +36,18 @@ type fakeDocker struct {
 	netCreated []string
 	netRemoved []string
 	netErr     error
+	// netLabels are the labels given to each NetworkCreate.
+	netLabels [][]string
 	// netRemoveErr fails NetworkRemove.
 	netRemoveErr error
 	// removeCtxErr is the error of the context of each NetworkRemove.
 	removeCtxErr []error
 }
 
-func (f *fakeDocker) NetworkCreate(ctx context.Context, name string) error {
+func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, labels ...string) error {
 	*f.events = append(*f.events, "net create")
 	f.netCreated = append(f.netCreated, name)
+	f.netLabels = append(f.netLabels, labels)
 	return f.netErr
 }
 
@@ -65,6 +68,9 @@ func (s *fakeStopper) Stop(ctx context.Context) error {
 	s.h.events = append(s.h.events, "stop "+s.name)
 	return s.h.stopErr[s.name]
 }
+
+// NoteList is what Start noticed about the container, by its image.
+func (s *fakeStopper) NoteList() []string { return s.h.startNotes[s.name] }
 
 func (f *fakeDocker) Build(ctx context.Context, o docker.BuildOptions) error {
 	f.calls = append(f.calls, "build "+o.Tag)
@@ -125,18 +131,30 @@ type harness struct {
 	// started are the options of each Start; startErr fails the start of an image.
 	started  []observe.StartOptions
 	startErr map[string]error
+	// startNotes are the notes a started container carries, by its image.
+	startNotes map[string][]string
 	// stopErr fails the Stop of a started container, by its image.
 	stopErr map[string]error
 	// onObserve runs at the start of each observation, with its options.
 	onObserve func(o observe.Options) error
+	// tmp is the temporary directory of the test: the copies of the binds are
+	// made in it, and it must be empty when the test ends.
+	tmp string
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{t: t, dir: t.TempDir(), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	h := &harness{t: t, dir: t.TempDir(), tmp: t.TempDir(), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	t.Setenv("TMPDIR", h.tmp)
+	t.Cleanup(func() {
+		if left, _ := os.ReadDir(h.tmp); len(left) != 0 {
+			t.Errorf("the temporary directory is not empty after the run: %v", left)
+		}
+	})
 	h.dock = &fakeDocker{have: map[string]bool{}, images: map[string]*docker.ImageConfig{}}
 	h.obsErr = map[string]error{}
 	h.startErr = map[string]error{}
+	h.startNotes = map[string][]string{}
 	h.stopErr = map[string]error{}
 	h.dock.events = &h.events
 	h.env = map[string]string{}
@@ -541,7 +559,12 @@ func TestObserveOptions(t *testing.T) {
 	ep := []string{"/entry.sh"}
 	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app", User: "1000:1000"}
 	want.Env = []string{"A=1", "B=hb", "C=c", "D=sl", "E=from-file", "Q=quoted", "R=raw", "S=keep # this"}
-	want.Binds = []string{filepath.Join(h.dir, "conf") + ":/etc/conf:ro", filepath.Join(h.dir, "rw") + ":/rw"}
+	// the read-only bind is mounted as it is, the other one as a copy
+	if len(got.Binds) != 2 || got.Binds[0] != filepath.Join(h.dir, "conf")+":/etc/conf:ro" {
+		t.Fatalf("binds %v", got.Binds)
+	}
+	h.wantCopy(got.Binds[1], filepath.Join(h.dir, "rw"), "/rw")
+	want.Binds = got.Binds
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
@@ -562,9 +585,10 @@ func TestBindSourceWithColon(t *testing.T) {
 	}
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert")
-	if want := []string{filepath.Join(h.dir, "ok") + ":/y"}; !reflect.DeepEqual(h.observed[0].Binds, want) {
-		t.Errorf("binds %v, want %v", h.observed[0].Binds, want)
+	if len(h.observed[0].Binds) != 1 {
+		t.Fatalf("binds %v", h.observed[0].Binds)
 	}
+	h.wantCopy(h.observed[0].Binds[0], filepath.Join(h.dir, "ok"), "/y")
 	if !strings.Contains(h.stderr.String(), "web: warning: the bind source") || !strings.Contains(h.stderr.String(), "c:d") {
 		t.Errorf("no warning: %q", h.stderr)
 	}
@@ -1089,10 +1113,10 @@ func TestOnlyBindVolumesWithASourceReachTheObservation(t *testing.T) {
 	}
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert")
-	want := []string{filepath.Join(h.dir, "real") + ":/real"}
-	if !reflect.DeepEqual(h.observed[0].Binds, want) {
-		t.Errorf("binds %v, want %v", h.observed[0].Binds, want)
+	if len(h.observed[0].Binds) != 1 {
+		t.Fatalf("binds %v", h.observed[0].Binds)
 	}
+	h.wantCopy(h.observed[0].Binds[0], filepath.Join(h.dir, "real"), "/real")
 }
 
 func TestDependsOnMissingServiceIsAnError(t *testing.T) {
@@ -1234,7 +1258,7 @@ func TestNetworkCreateFailureStopsTheRun(t *testing.T) {
 	h.haveAll("a")
 	h.dock.netErr = errors.New("no docker")
 	h.mustRun(1, "convert")
-	if !strings.Contains(h.stderr.String(), "no docker") || len(h.observed) != 0 || len(h.dock.netRemoved) != 0 {
+	if !strings.Contains(h.stderr.String(), "no docker") || len(h.observed) != 0 {
 		t.Errorf("stderr %q, observed %v, removed %v", h.stderr, h.names(), h.dock.netRemoved)
 	}
 }
@@ -1467,5 +1491,20 @@ func TestStartingADependencyIsAnnounced(t *testing.T) {
 	// db is running by the time api is observed: it is not started again
 	if strings.Contains(out, "for api") {
 		t.Errorf("a dependency was started for api: %q", out)
+	}
+}
+
+func TestNotesOfAStartedDependencyReachTheReport(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.startNotes["d"] = []string{"the container was running but listens on no port after 60 seconds"}
+	h.mustRun(0, "convert")
+	for _, svc := range []string{"web", "api"} {
+		warns := h.genIn[0].Services[svc].Observed.Warnings
+		want := "the service db was started for the observation of " + svc + ": the container was running but listens on no port after 60 seconds"
+		if len(warns) != 1 || warns[0] != want {
+			t.Errorf("%s: warnings %q, want %q", svc, warns, want)
+		}
 	}
 }

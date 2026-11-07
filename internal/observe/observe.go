@@ -35,9 +35,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -276,29 +278,72 @@ func (r *run) logf(format string, args ...any) {
 	}
 }
 
-// redact hides the values of the variables of Options.Env whose name looks like a secret (see
-// secretNames) in text that comes from outside (the output of the container, errors of Docker).
-// The names are not secret and are left alone, and so are the values of the other variables
-// (DB_NAME=petclinic), which would garble the text around them.
+// redact hides secrets of Options.Env in text that comes from outside (the output of the container,
+// errors of Docker): the value of a variable whose name looks like a secret (see secretNames); for
+// any variable, the user and password of a URL in its value (jdbc: URLs too) and the value of
+// password= and pwd= pairs in it. The names are not secret and are left alone, and so are the
+// values of the other variables (DB_NAME=petclinic), which would garble the text around them.
 func (r *run) redact(text string) string {
 	for _, e := range r.o.Env {
 		// a short value (DEBUG=1) or one the image has anyway is not a secret, and replacing it
 		// would damage the text around it
 		k, v, ok := strings.Cut(e, "=")
-		if ok && secretName(k) && len(v) >= minSecret && !r.imageValues[v] {
+		if !ok {
+			continue
+		}
+		if secretName(k) && len(v) >= minSecret && !r.imageValues[v] {
 			text = strings.ReplaceAll(text, v, "***")
+		}
+		if info := urlUserinfo(v); info != "" {
+			text = strings.ReplaceAll(text, info+"@", "***@")
+		}
+		for _, m := range passwordPair.FindAllStringSubmatch(v, -1) {
+			text = strings.ReplaceAll(text, m[0], m[1]+"=***")
+			if len(m[2]) >= minSecret && !r.imageValues[m[2]] {
+				text = strings.ReplaceAll(text, m[2], "***")
+			}
 		}
 	}
 	return text
 }
 
+// passwordPair matches password=value and pwd=value in a query string or a string separated by
+// semicolons; the name is group 1 and the value group 2.
+var passwordPair = regexp.MustCompile(`(?i)(password|pwd)=([^&;\s"']+)`)
+
+// urlUserinfo gives the user (and password) of a URL value as it is written in it, or "" when the
+// value is not a URL with a user. A leading jdbc: is dropped first.
+func urlUserinfo(value string) string {
+	value = strings.TrimPrefix(value, "jdbc:")
+	u, err := url.Parse(value)
+	if err != nil || u.User == nil {
+		return ""
+	}
+	_, rest, found := strings.Cut(value, "://")
+	if !found {
+		return ""
+	}
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	at := strings.LastIndex(rest, "@")
+	if at <= 0 {
+		return ""
+	}
+	return rest[:at]
+}
+
 // secretNames are the parts of the name of a variable (compared in upper case) that make redact
 // hide its value.
-var secretNames = []string{"PASS", "SECRET", "TOKEN", "KEY", "CRED", "AUTH", "PRIVATE", "CERT", "SIGN", "SALT"}
+var secretNames = []string{"PASS", "SECRET", "TOKEN", "KEY", "CRED", "AUTH", "PRIVATE", "CERT", "SIGN", "SALT", "DSN"}
 
-// secretName tells whether the name of a variable looks like the name of a secret.
+// secretName tells whether the name of a variable looks like the name of a secret. PWD and OLDPWD
+// are the directory the shell is in, not a password, though MYSQL_PWD is one.
 func secretName(name string) bool {
 	name = strings.ToUpper(name)
+	if name != "PWD" && name != "OLDPWD" && strings.Contains(name, "PWD") {
+		return true
+	}
 	for _, part := range secretNames {
 		if strings.Contains(name, part) {
 			return true
@@ -702,6 +747,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}, note)
 	if err != nil {
 		return nil, fmt.Errorf("observe: carrying interpreters: %w", err)
+	}
+
+	// nanos fails the exec when the directory the program starts in is not in the package, and the
+	// program may open nothing there
+	if wd := path.Clean(cwd); path.IsAbs(wd) && wd != "/" {
+		if err := os.MkdirAll(filepath.Join(sysroot, filepath.FromSlash(wd)), 0755); err != nil {
+			return nil, fmt.Errorf("observe: making the working directory %s: %w", wd, err)
+		}
 	}
 
 	// the created files that were gone at the end are counted, not listed

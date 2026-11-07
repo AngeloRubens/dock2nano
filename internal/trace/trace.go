@@ -455,8 +455,18 @@ var supersededLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)\+\+\+ sup
 var forkLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:(?:clone3?|fork|vfork)\(|<\.\.\. (?:clone3?|fork|vfork) resumed>).*\) += ([0-9]+)`)
 
 // NotCarried says whether a path is one the kernel of the machine makes or the container runtime
-// puts in, which no package has to bring.
+// puts in, which no package has to bring. The files the runtime writes for the network of the
+// container (/etc/resolv.conf, /etc/hosts, /etc/hostname) count too: ops writes its own, and the
+// resolv.conf of the container holds the address of the resolver of the docker network.
 func NotCarried(p string) bool {
+	return kernelPath(p) || slices.Contains(runtimeFiles, p)
+}
+
+// runtimeFiles are the files the container runtime writes into every container.
+var runtimeFiles = []string{"/etc/resolv.conf", "/etc/hosts", "/etc/hostname"}
+
+// kernelPath says whether a path is under /proc, /sys, /dev or the trace mount.
+func kernelPath(p string) bool {
 	for _, prefix := range []string{"/proc", "/sys", "/dev", TraceMount} {
 		if p == prefix || strings.HasPrefix(p, prefix+"/") {
 			return true
@@ -471,7 +481,7 @@ func NotCarried(p string) bool {
 // the console, like the error.log of the nginx image, is carried as an empty file, since the
 // machine has no /dev/stderr; see CarryConsoleLink. The target is cleaned first.
 func IsConsoleLink(p string) bool {
-	return NotCarried(path.Clean(p))
+	return kernelPath(path.Clean(p))
 }
 
 // CarryConsoleLink puts an empty file in the sysroot under name, creating its directories, so that
@@ -935,7 +945,7 @@ func ConfigurationFiles(sysroot string) []string {
 		}
 		name := "/" + filepath.ToSlash(rel)
 		switch {
-		case strings.HasPrefix(name, "/etc/ssl/certs/"), strings.HasPrefix(name, "/etc/ld.so"), name == "/etc/hosts", name == "/etc/hostname":
+		case strings.HasPrefix(name, "/etc/ssl/certs/"), strings.HasPrefix(name, "/etc/ld.so"), slices.Contains(runtimeFiles, name):
 		case strings.HasPrefix(name, "/etc/"):
 			found = append(found, name)
 		case slices.Contains([]string{".conf", ".cnf", ".ini", ".yaml", ".yml", ".toml", ".properties"}, path.Ext(name)):

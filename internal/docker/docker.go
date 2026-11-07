@@ -747,12 +747,19 @@ func (c *Client) simple(ctx context.Context, op, id string, args ...string) erro
 }
 
 // NetworkCreate runs docker network create. It fails when a network with that
-// name exists.
-func (c *Client) NetworkCreate(ctx context.Context, name string) error {
+// name exists. Each label is "key=value" and is passed as --label.
+func (c *Client) NetworkCreate(ctx context.Context, name string, labels ...string) error {
 	if err := checkArg("docker network create", "network name", name); err != nil {
 		return err
 	}
-	_, err := c.do(ctx, "docker network create", []string{"network", "create", name})
+	args := []string{"network", "create"}
+	for _, l := range labels {
+		if err := checkArg("docker network create", "label", l); err != nil {
+			return err
+		}
+		args = append(args, "--label", l)
+	}
+	_, err := c.do(ctx, "docker network create", append(args, name))
 	return err
 }
 
