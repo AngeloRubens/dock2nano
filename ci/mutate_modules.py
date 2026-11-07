@@ -18,8 +18,8 @@ PKG = {
     "interp": ("internal/interp", ["interp.go"]),
     "output": ("internal/output", ["output.go"]),
     "plan": ("internal/plan", ["plan.go"]),
-    "observe": ("internal/observe", ["observe.go"]),
-    "trace": ("internal/trace", ["trace.go"]),
+    "observe": ("internal/observe", ["observe.go", "start.go"]),
+    "trace": ("internal/trace", ["trace.go", "children.go"]),
     "docker": ("internal/docker", ["docker.go"]),
     "dockerfile": ("internal/dockerfile", ["parse.go", "dockerfile.go"]),
     "cmd": ("cmd", ["convert.go", "app.go"]),
@@ -96,10 +96,10 @@ A("gen-networks-default", "gen", "TestNetworks",
   r'''if n != "default" {''', r'''if true {''')
 A("gen-user-root-zero", "gen", "TestUserAndWorkingDir",
   r'''u != "root" && u != "0" {''', r'''u != "root" {''')
-A("gen-workdir-observed", "gen", "TestUserAndWorkingDir",
-  r'''case obs.WorkingDir != "" && obs.WorkingDir != "/":''', r'''case false:''')
-A("gen-workdir-file-only", "gen", "TestUserAndWorkingDir",
-  r'''case s.WorkingDir != "" && s.WorkingDir != obs.WorkingDir:''', r'''case false:''')
+A("gen-workdir-observed", "gen", "TestUserAndWorkingDir|TestWorkingDirIsInTheManifest|TestEveryServiceHasACwd",
+  r'''m.ManifestPassthrough = map[string]any{"cwd": cwd}''', r'''m.ManifestPassthrough = map[string]any{"cwd": "/"}''')
+A("gen-workdir-file-only", "gen", "TestUserAndWorkingDir|TestWorkingDirIsInTheManifest",
+  r'''case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):''', r'''case s.WorkingDir != "" && s.WorkingDir != cwd:''')
 # names.go
 A("names-clean-lowercase", "gen", "TestPackageNames|TestNames",
   r'''for _, r := range strings.ToLower(s) {''', r'''for _, r := range s {''')
@@ -160,9 +160,9 @@ A("plan-udp-ports-empty-list", "plan", "TestManifestJSONAlwaysWritesWhatOpsKeeps
 A("output-ops-home-is-the-parent", "output", "TestWriteExactFiles|TestWriteOpsHomeFromEnvironment",
   r'''base := filepath.Join(home, ".ops", "local_packages", p.Arch)''', r'''base := filepath.Join(home, "local_packages", p.Arch)''')
 A("output-manifest-with-env-is-0600", "output", "TestWriteExactFiles",
-  r'''mode = 0o600''', r'''mode = 0o644''')
-A("output-manifest-without-env-is-0644", "output", "TestWriteExactFiles",
-  r'''mode := fs.FileMode(0o644)''', r'''mode := fs.FileMode(0o600)''')
+  r'''const mode = fs.FileMode(0o600)''', r'''const mode = fs.FileMode(0o644)''')
+A("output-manifest-without-env-is-0644", "output", "TestWriteManifestPassesValidation|TestManifestPassthroughIsWrittenAndValid",
+  r'''»ManifestPassthrough map[string]any⏎}''', r'''}''')
 A("output-rollback-order", "output", "TestWriteRollbackWhenSecondPackageFails|TestWriteRollbackKeepsWhatExisted|TestWriteCrossDeviceKeepsSourceOnFailure",
   r'''for i := len(j.undo) - 1; i >= 0; i-- {''', r'''for i := 0; i < len(j.undo); i++ {''')
 A("output-finish-runs", "output", "TestWriteForceReplaces|TestWriteCrossDeviceRemovesSourceAfterSuccess",
@@ -189,10 +189,10 @@ A("observe-entrypoint-drops-image-cmd", "observe", "TestObserveCommandOverrides|
   r'''entrypoint = *o.Entrypoint⏎»»cmd = nil''', r'''entrypoint = *o.Entrypoint''')
 A("observe-args-last", "observe", "TestObserveCommandOverrides|TestObserveTargetExecutableAndArgs",
   r'''return append(argv, o.Args...)''', r'''return argv''')
-A("observe-user-root-zero", "observe", "TestObserveUserOfTheImageRunsTheProgram",
-  r'''if name == "" || name == "root" || name == "0" {''', r'''if name == "" || name == "root" {''')
-A("observe-user-group-cut", "observe", "TestObserveUserOfTheImageRunsTheProgram",
-  r'''name, _, _ := strings.Cut(imageUser, ":")''', r'''name := imageUser''')
+A("observe-user-root-zero", "observe", "TestObserveUserOfTheImageRunsTheProgram|TestObserveUserIsResolvedThroughPasswd",
+  r'''if uid == 0 {''', r'''if false && uid == 0 {''')
+A("observe-user-group-cut", "observe", "TestObserveUserOfTheImageRunsTheProgram|TestObserveUserIsResolvedThroughPasswd",
+  r'''who, _, _ := strings.Cut(user, ":")''', r'''who := user''')
 A("observe-container-starts-as-root", "observe", "TestObserveSuccess|TestObserveUserOfTheImageRunsTheProgram",
   r'''User:        "0",''', r'''User:        cfg.User,''')
 A("observe-tracer-out-read-only", "observe", "TestObserveSuccess|TestObserveBindsFollowTheTracerBinds",
@@ -212,7 +212,7 @@ A("observe-tracer-dir-removed", "observe", "TestObserveSuccess",
 A("observe-env-values-redacted", "observe", "TestObserveSecretsStayOutOfErrorsAndLogs",
   r'''text = strings.ReplaceAll(text, v, "***")''', r'''_ = v''')
 A("observe-lines-before-the-program", "observe", "TestObserveSuccess",
-  r'''trace.TouchedPaths(raw, cwd, from)''', r'''trace.TouchedPaths(raw, cwd, 0)''')
+  r'''trace.TouchedPaths(raw, startDir, from)''', r'''trace.TouchedPaths(raw, startDir, 0)''')
 A("observe-console-link-empty-file", "observe", "TestObserveSuccess",
   r'''case trace.IsConsoleLink(link):''', r'''case false:''')
 A("observe-half-written-file-removed", "observe", "TestObserveHalfWrittenFileIsRemoved",
@@ -250,7 +250,7 @@ A("trace-not-carried-prefix-boundary", "trace", "TestNotCarried",
 
 # ------------------------------------------------------------- internal/docker
 A("docker-build-args-sorted", "docker", "TestBuildArgs",
-  r'''sort.Strings(keys)⏎»for _, k := range keys {⏎»»args = append(args, "--build-arg"''', r'''for _, k := range keys {⏎»»args = append(args, "--build-arg"''')
+  r'''sort.Strings(keys)⏎»entries := make([]string, 0, len(keys))''', r'''entries := make([]string, 0, len(keys))''')
 A("docker-build-context-after-dashes", "docker", "TestBuildArgs",
   r'''return append(args, "--", o.Context)''', r'''return append(args, o.Context)''')
 A("docker-option-like-argument", "docker", "TestOptionLikeArgumentsAreRefused",
@@ -316,7 +316,7 @@ A("cmd-image-tag-ends-alphanumeric", "cmd", "TestImageTag",
 A("cmd-image-tag-empty-component", "cmd", "TestImageTag",
   r'''if out == "" {⏎»»return "x"''', r'''if false {⏎»»return "x"''')
 A("cmd-arch-different", "cmd", "TestArch",
-  r'''} else if si.Image.Architecture != arch {''', r'''} else if false {''')
+  r'''} else if ia != arch {''', r'''} else if false {''')
 A("cmd-skip-profiles", "cmd", "TestSkippedServices",
   r'''case len(s.Profiles) > 0:''', r'''case false:''')
 A("cmd-skip-not-selected", "cmd", "TestServiceFilter",
@@ -450,6 +450,337 @@ A("cmd-dockerfile-default-name", "cmd", "TestDockerfileDefaultNameIsAppWhenTheFo
   r'''name = "app"''', r'''name = "x"''')
 A("cmd-empty-output-flag", "cmd", "TestEmptyOutputFlagIsAnError",
   r'''if o.out == "" {''', r'''if false && o.out == "" {''')
+
+# ------------------------------------------- mutations for the tests of the modules branch
+# observe: start directory, user, stopped early, warnings, log
+A("observe-start-dir-is-the-container-dir", "observe", "TestObserveTraceStartsInTheDirectoryOfTheContainer",
+  r'''startDir := workingDir''', r'''startDir := "/"''')
+A("observe-start-dir-empty-is-root", "observe", "TestObserveRelativePathWithoutAWorkingDirIsReadAgainstRoot",
+  r'''if startDir == "" {''', r'''if false && startDir == "" {''')
+A("observe-user-option-replaces-image", "observe", "TestObserveUserIsResolvedThroughPasswd",
+  r'''imageUser = r.o.User''', r'''_ = r.o.User''')
+A("observe-passwd-name-by-uid", "observe", "TestObserveUserIsResolvedThroughPasswd",
+  r'''err == nil && n == uid {''', r'''err == nil {''')
+A("observe-stopped-is-noted", "observe", "TestObserveStoppedEarlyIsReported|TestObserveRunningUntilTheEndIsNotStoppedEarly",
+  r'''if stopped {⏎»»if err := r.noteStopped(ctx, id); err != nil {''', r'''if stopped && false {⏎»»if err := r.noteStopped(ctx, id); err != nil {''')
+A("observe-stopped-exit-code", "observe", "TestObserveStoppedEarlyIsReported",
+  r'''r.stopped, r.exitCode = true, code''', r'''r.stopped, r.exitCode = true, 0''')
+A("observe-stopped-log-redacted", "observe", "TestObserveStoppedEarlyIsReported",
+  r'''if out, lerr := r.d.LogsTail(lctx, id, logLines); lerr == nil {⏎»»text := strings.TrimSpace(r.redact(string(out)))''',
+  r'''if out, lerr := r.d.LogsTail(lctx, id, logLines); lerr == nil {⏎»»text := strings.TrimSpace(string(out))''')
+A("observe-stopped-log-size", "observe", "TestObserveStoppedLogIsTheLastKiB",
+  r'''if len(text) > stoppedLogBytes {''', r'''if len(text) > stoppedLogBytes*4 {''')
+A("observe-stopped-first-lines", "observe", "TestObserveStoppedEarlyIsReported",
+  r'''if len(first) == 3 {''', r'''if len(first) == 4 {''')
+A("observe-log-lines-asked", "observe", "TestObserveLogTailAsksForHundredLines|TestObserveStoppedEarlyIsReported",
+  r'''logLines = 100''', r'''logLines = 50''')
+A("observe-stopped-in-result", "observe", "TestObserveRunningUntilTheEndIsNotStoppedEarly",
+  r'''StoppedEarly:       r.stopped,''', r'''StoppedEarly:       true,''')
+A("observe-probe-failure-is-warned", "observe", "TestObserveProbeFailureWarnsOncePerPort",
+  r'''r.warnOnce(r.redact(fmt.Sprintf("port %d could not be asked for /: %s", port, failed[port])))''', r'''_, _ = port, failed[port]''')
+A("observe-redact-short-values", "observe", "TestObserveRedactLeavesShortAndImageValuesAlone",
+  r'''ok && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && !r.imageValues[v] {''')
+A("observe-redact-image-values", "observe", "TestObserveRedactLeavesShortAndImageValuesAlone",
+  r'''ok && len(v) >= minSecret && !r.imageValues[v] {''', r'''ok && len(v) >= minSecret {''')
+A("observe-failed-create-removed", "observe", "TestObserveFailedCreateIsRemovedByName",
+  r'''_ = r.d.Remove(cctx, o.Name, true)''', r'''_ = cctx''')
+A("observe-container-name", "observe", "TestObserveSuccess|TestObserveFailedCreateIsRemovedByName|TestStartCreateOptions",
+  r'''o.Name = r.containerName()''', r'''o.Name = ""''')
+A("observe-container-label", "observe", "TestObserveSuccess|TestStartCreateOptions|TestObserveUserIsResolvedThroughPasswd",
+  r'''o.Labels = []string{ownLabel}''', r'''o.Labels = nil''')
+A("observe-trace-file-link-not-read", "observe", "TestObserveTraceFileThatIsALinkIsNotRead",
+  r'''if !st.Mode().IsRegular() {''', r'''if false && !st.Mode().IsRegular() {''')
+A("observe-prober-body-limit", "observe", "TestHTTPProberReadsAtMostOneMiBOfTheBody",
+  r'''probeBodyLimit = 1 << 20''', r'''probeBodyLimit = 1 << 40''')
+A("observe-fetch-relative-path", "observe", "TestFetchRefusesARelativePath",
+  r'''if !path.IsAbs(p) {⏎»»return fetched{}, fmt.Errorf("the path %q is not absolute", p)''', r'''if false {⏎»»return fetched{}, fmt.Errorf("the path %q is not absolute", p)''')
+A("observe-created-gone-counted", "observe", "TestObserveCreatedAndGoneIsCountedNotWarned",
+  r'''if r.created[p] && isNotFound(err) {''', r'''if false && r.created[p] && isNotFound(err) {''')
+A("observe-gone-needs-created", "observe", "TestObserveGoneButNotCreatedStillWarns",
+  r'''if r.created[p] && isNotFound(err) {''', r'''if isNotFound(err) {''')
+A("observe-gone-needs-not-found", "observe", "TestObserveOtherCopyErrorOfCreatedFileStillWarns",
+  r'''if r.created[p] && isNotFound(err) {''', r'''if r.created[p] {''')
+A("observe-not-carried-warn-limit", "observe", "TestObserveNotCarriedWarningsAreAggregated",
+  r'''if r.notCarried <= maxWarnedPaths {''', r'''if true {''')
+A("observe-not-carried-more", "observe", "TestObserveNotCarriedWarningsAreAggregated",
+  r'''if r.notCarried > maxWarnedPaths {''', r'''if false && r.notCarried > maxWarnedPaths {''')
+A("observe-not-carried-more-count", "observe", "TestObserveNotCarriedWarningsAreAggregated",
+  r'''r.notCarried-maxWarnedPaths))''', r'''r.notCarried))''')
+A("observe-created-warning-limit", "observe", "TestObserveCreatedWarningListsTenPaths",
+  r'''list = list[:maxWarnedPaths]''', r'''list = list[:maxWarnedPaths+1]''')
+A("observe-created-more-count", "observe", "TestObserveCreatedWarningListsTenPaths",
+  r'''len(list)-maxWarnedPaths)''', r'''len(list))''')
+A("observe-alias-not-carried-warned", "observe", "TestObserveAliasOfAPathThatWasNotCarriedIsAWarning",
+  r'''case done[link] && !carried[link]:''', r'''case false:''')
+A("observe-carried-is-recorded", "observe", "TestObserveAliasOfAPathThatWasNotCarriedIsAWarning|TestObserveSuccess",
+  r'''carried[p] = true''', r'''_ = carried''')
+A("observe-children-from-the-program", "observe", "TestObserveCountsChildProcesses",
+  r'''children := trace.ChildProcesses(raw, from)''', r'''children := trace.ChildProcesses(raw, 0)''')
+A("observe-child-calls-distinct", "observe", "TestObserveCountsChildProcesses",
+  r'''if !slices.Contains(childCalls, c.Call) {''', r'''if true {''')
+A("observe-children-count", "observe", "TestObserveCountsChildProcesses",
+  r'''len(children),''', r'''0,''')
+A("observe-network-passed", "observe", "TestObservePassesTheNetworkToTheTracedContainer",
+  r'''Network:        r.o.Network,''', r'''Network:        "",''')
+A("observe-network-aliases-passed", "observe", "TestObservePassesTheNetworkToTheTracedContainer",
+  r'''NetworkAliases: r.o.NetworkAliases,''', r'''NetworkAliases: nil,''')
+# observe: Start
+A("observe-start-network", "observe", "TestStartCreateOptions",
+  r'''Network:        o.Network,''', r'''Network:        "",''')
+A("observe-start-network-aliases", "observe", "TestStartCreateOptions",
+  r'''NetworkAliases: o.NetworkAliases,''', r'''NetworkAliases: nil,''')
+A("observe-start-binds", "observe", "TestStartCreateOptions",
+  r'''Binds:          o.Binds,''', r'''Binds:          nil,''')
+A("observe-start-user", "observe", "TestStartCreateOptions",
+  r'''User:           o.User,''', r'''User:           "",''')
+A("observe-start-workdir", "observe", "TestStartCreateOptions",
+  r'''WorkingDir:     o.WorkingDir,''', r'''WorkingDir:     "",''')
+A("observe-start-env", "observe", "TestStartCreateOptions",
+  r'''Env:            o.Env,''', r'''Env:            nil,''')
+A("observe-start-entrypoint", "observe", "TestStartCreateOptions",
+  r'''Entrypoint:     o.Entrypoint,''', r'''Entrypoint:     nil,''')
+A("observe-start-cmd", "observe", "TestStartCreateOptions",
+  r'''Cmd:            o.Cmd,''', r'''Cmd:            nil,''')
+A("observe-start-ready-when-ports-open", "observe", "TestStartReadyWhenEveryPortAccepts|TestStartNotReadyWithinWait",
+  r'''} else if r.portsOpen(ctx, id, ports, o) {''', r'''} else if true {''')
+A("observe-start-every-port", "observe", "TestStartReadyWhenEveryPortAccepts",
+  r'''if err := o.dial(ctx, net.JoinHostPort(host, strconv.Itoa(p))); err != nil {''', r'''if err := o.dial(ctx, net.JoinHostPort(host, strconv.Itoa(p))); err != nil && false {''')
+A("observe-start-stay-up-for", "observe", "TestStartImageWithoutPortsStaysUpThreeSeconds",
+  r'''stayUpFor = 3 * time.Second''', r'''stayUpFor = 1 * time.Second''')
+A("observe-start-stay-up-check", "observe", "TestStartImageWithoutPortsStaysUpThreeSeconds",
+  r'''if !o.now().Before(begin.Add(stayUpFor)) {''', r'''if true {''')
+A("observe-start-exits-before-ready", "observe", "TestStartExitsBeforeReady|TestStartImageWithoutPortsStaysUpThreeSeconds",
+  r'''if !up {''', r'''if !up && false {''')
+A("observe-start-deadline", "observe", "TestStartNotReadyWithinWait",
+  r'''deadline := begin.Add(o.Wait)''', r'''deadline := begin.Add(o.Wait + time.Second)''')
+A("observe-start-ports-in-the-error", "observe", "TestStartNotReadyWithinWait",
+  r'''what = "did not accept connections on " + portList(ports)''', r'''what = "did not accept connections"''')
+A("observe-start-log-bytes", "observe", "TestStartExitsBeforeReady",
+  r'''startLogBytes = 1024''', r'''startLogBytes = 4096''')
+A("observe-start-log-redacted", "observe", "TestStartExitsBeforeReady",
+  r'''text := strings.TrimSpace(r.redact(string(out)))⏎»if len(text) > startLogBytes {''', r'''text := strings.TrimSpace(string(out))⏎»if len(text) > startLogBytes {''')
+A("observe-start-failure-removes-the-container", "observe", "TestStartNotReadyWithinWait|TestStartExitsBeforeReady|TestStartCancelRemovesTheContainer",
+  r'''if err := r.ready(ctx, id, ports, o); err != nil {⏎»»return fail(err)''', r'''if err := r.ready(ctx, id, ports, o); err != nil {⏎»»return nil, err''')
+A("observe-start-stop-once", "observe", "TestRunningStopRemovesEvenWhenStopFails",
+  r'''r.id = ""''', r'''_ = r.id''')
+A("observe-start-stop-failure-still-removes", "observe", "TestRunningStopRemovesEvenWhenStopFails",
+  r'''errs = append(errs, fmt.Errorf("stopping container %s: %w", id, err))''', r'''return fmt.Errorf("stopping container %s: %w", id, err)''')
+A("observe-start-pull-rule", "observe", "TestStartImageMissingWithoutPull",
+  r'''if !o.Pull {''', r'''if false {''')
+A("observe-start-pulls", "observe", "TestStartImageMissingWithoutPull",
+  r'''if err := d.Pull(ctx, o.Image); err != nil {''', r'''if err := error(nil); err != nil {''')
+A("observe-start-default-wait", "observe", "TestStartReadyWhenEveryPortAccepts",
+  r'''defaultStartWait = 60 * time.Second''', r'''defaultStartWait = 1 * time.Second''')
+A("observe-start-poll-every", "observe", "TestStartReadyWhenEveryPortAccepts|TestStartNotReadyWithinWait",
+  r'''startPollEvery = time.Second''', r'''startPollEvery = 2 * time.Second''')
+# trace
+A("trace-whereis-skips-dotdot", "trace", "TestWhereIsSkipsPathEntriesThatClimbOut",
+  r'''if slices.Contains(strings.Split(dir, "/"), "..") {''', r'''if false && slices.Contains(strings.Split(dir, "/"), "..") {''')
+A("trace-whereis-dotdot-inside-an-entry", "trace", "TestWhereIsSkipsPathEntriesThatClimbOut",
+  r'''slices.Contains(strings.Split(dir, "/"), "..")''', r'''strings.HasPrefix(dir, "..")''')
+A("trace-child-failed-call", "trace", "TestChildProcessesCalls|TestChildProcessesUnfinished",
+  r'''if err != nil || pid <= 0 {''', r'''if err != nil {''')
+A("trace-child-parentage", "trace", "TestChildProcessesFromAndAncestry",
+  r'''parent[child] = caller''', r'''_ = child''')
+A("trace-child-thread-is-not-a-process", "trace", "TestChildProcessesCalls|TestChildProcessesUnfinished",
+  r'''isProcess := call == "fork" || call == "vfork" || !threadFlag.MatchString(callText)''', r'''isProcess := true''')
+A("trace-child-thread-flag-on-resumed-part", "trace", "TestChildProcessesUnfinished",
+  r'''!threadFlag.MatchString(callText)''', r'''!threadFlag.MatchString(text)''')
+A("trace-child-unfinished-join", "trace", "TestChildProcessesUnfinished",
+  r'''callText = pending[caller] + text''', r'''callText = text''')
+A("trace-child-unfinished-is-held", "trace", "TestChildProcessesUnfinished",
+  r'''} else if strings.HasSuffix(strings.TrimSpace(text), "<unfinished ...>") {''', r'''} else if false {''')
+A("trace-child-from-is-inclusive", "trace", "TestChildProcessesFromAndAncestry",
+  r'''c.child.Line < from {''', r'''c.child.Line <= from {''')
+A("trace-child-threads-are-left-out", "trace", "TestChildProcessesCalls",
+  r'''if !c.process || c.child.Line < from {''', r'''if c.child.Line < from {''')
+A("trace-child-descendants-only", "trace", "TestChildProcessesFromAndAncestry",
+  r'''if found && !reaches(parent, c.child.Parent, final.Pid) {''', r'''if false && found && !reaches(parent, c.child.Parent, final.Pid) {''')
+A("trace-reaches-target-itself", "trace", "TestChildProcessesFromAndAncestry",
+  r'''if pid == target {''', r'''if false {''')
+# gen
+A("gen-arch-checked", "gen", "TestArchIsChecked",
+  r'''if in.Arch != "amd64" && in.Arch != "arm64" {''', r'''if false {''')
+A("gen-arch-in-the-plan", "gen", "TestArchIsChecked",
+  r'''plan: &plan.Plan{Arch: in.Arch}''', r'''plan: &plan.Plan{Arch: "amd64"}''')
+A("gen-arch-in-the-compose-package", "gen", "TestArchIsChecked",
+  r'''Local: true, Arch: in.Arch})''', r'''Local: true, Arch: "amd64"})''')
+A("gen-cwd-unknown-is-root", "gen", "TestWorkingDirIsInTheManifest|TestEveryServiceHasACwd",
+  r'''if cwd == "" {⏎»»cwd = "/"''', r'''if false {⏎»»cwd = "/"''')
+A("gen-cwd-root-is-silent", "gen", "TestWorkingDirIsInTheManifest",
+  r'''case cwd == "/":''', r'''case false:''')
+A("gen-cwd-file-agrees-is-converted", "gen", "TestWorkingDirIsInTheManifest",
+  r'''case s.WorkingDir != "":⏎»»g.add(s.Name, plan.Converted''', r'''case false:⏎»»g.add(s.Name, plan.Converted''')
+A("gen-ports-remap-message", "gen", "TestPorts",
+  r'''p.Published, p.Target, p.Target, pkg, p.Published))''', r'''p.Published, p.Target, p.Published, pkg, p.Published))''')
+A("gen-ports-tcp-lists-the-target", "gen", "TestPorts",
+  r'''m.RunConfig.Ports = append(m.RunConfig.Ports, p.Target)''', r'''m.RunConfig.Ports = append(m.RunConfig.Ports, p.Published)''')
+A("gen-ports-range-message", "gen", "TestPorts",
+  r'''it is not published", p.Published, p.Target))''', r'''it is not published", p.Target, p.Published))''')
+A("gen-ports-host-ip-goes-on", "gen", "TestPortsTwoKindsAtOnce",
+  r'''on every address", p.HostIP, p.Published))⏎»»}''', r'''on every address", p.HostIP, p.Published))⏎»»»continue⏎»»}''')
+A("gen-stopped-early-item", "gen", "TestStoppedEarlyIsReported",
+  r'''if obs.StoppedEarly {''', r'''if false && obs.StoppedEarly {''')
+A("gen-stopped-early-exit-code", "gen", "TestStoppedEarlyIsReported",
+  r'''the last one it started", obs.ExitCode)''', r'''the last one it started", 0)''')
+A("gen-stopped-early-three-lines", "gen", "TestStoppedEarlyIsReported",
+  r'''firstLines(obs.StoppedLog, 3)''', r'''firstLines(obs.StoppedLog, 4)''')
+A("gen-first-lines-skips-empty", "gen", "TestStoppedEarlyIsReported",
+  r'''if l = strings.TrimSpace(l); l == "" {''', r'''if l = strings.TrimSpace(l); false {''')
+A("gen-child-processes-item", "gen", "TestChildProcessesAreUnsupported",
+  r'''if obs.Children > 0 {''', r'''if false && obs.Children > 0 {''')
+A("gen-child-processes-count", "gen", "TestChildProcessesAreUnsupported",
+  r'''see the documentation of the program", obs.Children))''', r'''see the documentation of the program", 1))''')
+A("gen-vanished-item", "gen", "TestVanishedFilesAreANote",
+  r'''if obs.Vanished > 0 {''', r'''if false && obs.Vanished > 0 {''')
+A("gen-vanished-count", "gen", "TestVanishedFilesAreANote",
+  r'''not in the package", obs.Vanished))''', r'''not in the package", 1))''')
+A("gen-vanished-is-a-note", "gen", "TestVanishedFilesAreANote",
+  r'''g.add(s.Name, plan.Note, "vanished",''', r'''g.add(s.Name, plan.Observed, "vanished",''')
+A("gen-argv0-stays", "gen", "TestArgv0StaysAsTheProgramSawIt",
+  r'''m.Args = slices.Clone(obs.Argv)''', r'''m.Args = slices.Clone(obs.Argv)⏎»if len(m.Args) > 0 {⏎»»m.Args[0] = obs.Program⏎»}''')
+# docker
+A("docker-passenv-last-value-wins", "docker", "TestCreateSecretsStayOffTheCommandLine",
+  r'''env[i] = name + "=" + val''', r'''_ = i''')
+A("docker-passenv-empty-name", "docker", "TestCreateBadEnvName",
+  r'''name == "" || strings.ContainsRune(name, 0)''', r'''strings.ContainsRune(name, 0)''')
+A("docker-passenv-nul-in-name", "docker", "TestCreateBadEnvName",
+  r'''strings.ContainsRune(name, 0) || strings.ContainsRune(val, 0)''', r'''strings.ContainsRune(val, 0)''')
+A("docker-passenv-nul-in-value", "docker", "TestCreateBadEnvName",
+  r'''|| strings.ContainsRune(val, 0) {''', r'''{''')
+A("docker-env-needs-env-runner", "docker", "TestEnvNeedsEnvRunner",
+  r'''if !ok {⏎»»return nil, nil, fmt.Errorf("%s: the runner cannot pass environment variables''', r'''if !ok && false {⏎»»return nil, nil, fmt.Errorf("%s: the runner cannot pass environment variables''')
+A("docker-plain-run-without-env", "docker", "TestEnvNeedsEnvRunner",
+  r'''if len(env) == 0 {⏎»»stdout, stderr, err := c.r.Run(ctx, nil, args...)''', r'''if false {⏎»»stdout, stderr, err := c.r.Run(ctx, nil, args...)''')
+A("docker-env-is-passed", "docker", "TestCreateSecretsStayOffTheCommandLine|TestBuildSecretsStayOffTheCommandLine",
+  r'''return er.RunEnv(ctx, env, nil, args...)''', r'''return er.RunEnv(ctx, nil, nil, args...)''')
+A("docker-build-arg-value-in-env", "docker", "TestBuildSecretsStayOffTheCommandLine",
+  r'''entries = append(entries, k+"="+o.Args[k])''', r'''entries = append(entries, k)''')
+A("docker-build-arg-name-equals", "docker", "TestBuildArgsBadName",
+  r'''strings.ContainsAny(k, "=\x00")''', r'''strings.ContainsAny(k, "\x00")''')
+A("docker-build-arg-empty-name", "docker", "TestBuild|TestBuildArgsBadName",
+  r'''if k == "" {''', r'''if false {''')
+A("docker-build-error-exit-error-redacted", "docker", "TestBuildErrorHidesArgumentValues",
+  r'''ee.Stderr = redactSecrets(ee.Stderr, vals)''', r'''_ = vals''')
+A("docker-build-error-stderr-redacted", "docker", "TestBuildErrorHidesArgumentValues",
+  r'''[]byte(redactSecrets(string(stderr), vals))''', r'''stderr''')
+A("docker-redact-short-values-kept", "docker", "TestBuildErrorHidesArgumentValues",
+  r'''if len(v) >= minSecret {''', r'''if len(v) >= 0 {''')
+A("docker-exec-runner-env-added-to-environment", "docker", "TestExecRunnerRunEnv",
+  r'''cmd.Env = append(os.Environ(), env...)''', r'''cmd.Env = env''')
+A("docker-exec-runner-env-set", "docker", "TestExecRunnerRunEnv",
+  r'''if len(env) > 0 {⏎»»cmd.Env''', r'''if false {⏎»»cmd.Env''')
+A("docker-network-aliases-need-network", "docker", "TestCreateArgsNetworkGuards",
+  r'''if len(o.NetworkAliases) > 0 && o.Network == "" {''', r'''if len(o.NetworkAliases) > 0 && o.Network == "" && false {''')
+A("docker-network-option-like", "docker", "TestCreateArgsNetworkGuards",
+  r'''if err := checkArg("docker create", "network", o.Network); err != nil {''', r'''if err := checkArg("docker create", "network", o.Network); err != nil && false {''')
+A("docker-network-alias-option-like", "docker", "TestCreateArgsNetworkGuards",
+  r'''if err := checkArg("docker create", "network alias", al); err != nil {''', r'''if err := checkArg("docker create", "network alias", al); err != nil && false {''')
+A("docker-network-flag", "docker", "TestCreateArgsNetworkAliases",
+  r'''args = append(args, "--network", o.Network)''', r'''args = append(args, "--net", o.Network)''')
+A("docker-network-alias-flag", "docker", "TestCreateArgsNetworkAliases",
+  r'''args = append(args, "--network-alias", al)''', r'''args = append(args, "--alias", al)''')
+A("docker-network-create-argv", "docker", "TestNetworkCommands",
+  r'''[]string{"network", "create", name}''', r'''[]string{"network", "create"}''')
+A("docker-network-rm-argv", "docker", "TestNetworkCommands",
+  r'''[]string{"network", "rm", name}''', r'''[]string{"network", "remove", name}''')
+A("docker-network-create-bad-name", "docker", "TestNetworkCommandsRefuseBadNames",
+  r'''if err := checkArg("docker network create", "network name", name); err != nil {''', r'''if err := checkArg("docker network create", "network name", name); err != nil && false {''')
+A("docker-network-rm-bad-name", "docker", "TestNetworkCommandsRefuseBadNames",
+  r'''if err := checkArg("docker network rm", "network name", name); err != nil {''', r'''if err := checkArg("docker network rm", "network name", name); err != nil && false {''')
+A("docker-network-create-failure-wrapped", "docker", "TestNetworkCreateFailureIsWrapped",
+  r'''_, err := c.do(ctx, "docker network create", []string{"network", "create", name})''', r'''_, _, err := c.r.Run(ctx, nil, "network", "create", name)''')
+# plan, output
+A("plan-passthrough-is-written", "plan", "TestManifestJSONFull",
+  r'''ManifestPassthrough map[string]any `json:",omitempty"`''', r'''ManifestPassthrough map[string]any `json:"-"`''')
+A("plan-passthrough-nil-is-omitted", "plan", "TestManifestJSONFull|TestManifestJSONAlwaysWritesWhatOpsKeepsBetweenPackages",
+  r'''ManifestPassthrough map[string]any `json:",omitempty"`''', r'''ManifestPassthrough map[string]any `json:"ManifestPassthrough"`''')
+# cmd
+A("cmd-arch-x86-64", "cmd", "TestPackageArch",
+  r'''case "amd64", "x86_64":''', r'''case "amd64":''')
+A("cmd-arch-aarch64", "cmd", "TestPackageArch",
+  r'''case "arm64", "aarch64":''', r'''case "arm64":''')
+A("cmd-arch-error-names-the-variant", "cmd", "TestUnsupportedImageArchitectureIsAnError",
+  r'''name += "/" + variant''', r'''name += variant''')
+A("cmd-arch-error-is-returned", "cmd", "TestUnsupportedImageArchitectureIsAnError",
+  r'''ia, err := packageArch(si.Image.Architecture, si.Image.Variant)⏎»»»if err != nil {''', r'''ia, err := packageArch(si.Image.Architecture, si.Image.Variant)⏎»»»if err != nil && false {''')
+A("cmd-observe-user", "cmd", "TestObserveOptions",
+  r'''oo.User = s.User''', r'''oo.User = ""''')
+A("cmd-observe-working-dir", "cmd", "TestObserveOptions",
+  r'''oo.WorkingDir = s.WorkingDir''', r'''oo.WorkingDir = ""''')
+A("cmd-observe-seconds", "cmd", "TestObserveOptions",
+  r'''oo.Seconds = o.seconds''', r'''oo.Seconds = 0''')
+A("cmd-observe-network", "cmd", "TestObserveOptions|TestNetworkCreatedOnceAndRemoved",
+  r'''oo.Network = rs.network''', r'''oo.Network = ""''')
+A("cmd-observe-network-alias", "cmd", "TestObserveOptions|TestNetworkCreatedOnceAndRemoved",
+  r'''oo.NetworkAliases = []string{s.Name}''', r'''oo.NetworkAliases = nil''')
+A("cmd-signal-sighup", "cmd", "TestSecondSignalTerminates",
+  r'''signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)''', r'''signal.Notify(ch, os.Interrupt, syscall.SIGTERM)''')
+A("cmd-signal-sigterm", "cmd", "TestSecondSignalTerminates",
+  r'''signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)''', r'''signal.Notify(ch, os.Interrupt, syscall.SIGHUP)''')
+A("cmd-signal-interrupt", "cmd", "TestSecondSignalTerminates",
+  r'''signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)''', r'''signal.Notify(ch, syscall.SIGTERM, syscall.SIGHUP)''')
+A("cmd-signal-stop-before-cancel", "cmd", "TestSecondSignalTerminates",
+  r'''case <-ch:⏎»»»signal.Stop(ch)⏎»»»cancel()''', r'''case <-ch:⏎»»»cancel()''')
+A("cmd-next-steps-ops-home-prefix", "cmd", "TestOutputAndNextSteps|TestOpsHomeIsAbsolute",
+  r'''if home != "" {''', r'''if false {''')
+A("cmd-next-steps-written", "cmd", "TestOutputAndNextSteps",
+  r'''fmt.Fprintln(a.Stdout, "Written:")''', r'''fmt.Fprintln(a.Stdout, "Wrote:")''')
+A("cmd-next-steps-compose-up", "cmd", "TestOutputAndNextSteps",
+  r'''ops compose up -f %s''', r'''ops compose up %s''')
+A("cmd-next-steps-dns-package", "cmd", "TestOutputAndNextSteps",
+  r'''const opsDNSPackage = "eyberg/ops-dns:0.0.1"''', r'''const opsDNSPackage = "eyberg/ops-dns:0.0.2"''')
+A("cmd-shell-quote-slash", "cmd", "TestOutputAndNextSteps",
+  r'''0123456789_-./:=+,@%''', r'''0123456789_-.:=+,@%''')
+A("cmd-ops-home-flag", "cmd", "TestOutputAndNextSteps|TestOpsHomeIsAbsolute",
+  r'''h := o.opsHome''', r'''h := ""''')
+A("cmd-ops-home-environment", "cmd", "TestOutputAndNextSteps|TestOpsHomeIsAbsolute",
+  r'''if v, ok := a.LookupEnv("OPS_HOME"); ok && v != "" {''', r'''if v, ok := a.LookupEnv("OPS_HOME"); false && ok && v != "" {''')
+A("cmd-ops-home-user-home", "cmd", "TestOutputAndNextSteps",
+  r'''if h == "" && a.UserHomeDir != nil {''', r'''if h == "" && a.UserHomeDir != nil && false {''')
+A("cmd-ops-home-is-absolute", "cmd", "TestOpsHomeIsAbsolute",
+  r'''return absPath(wd, h)''', r'''return h''')
+A("cmd-relative-current-directory", "cmd", "TestRelativeCurrentDirectoryIsRefused",
+  r'''if !filepath.IsAbs(wd) {''', r'''if false {''')
+A("cmd-bind-target-is-absolute", "cmd", "TestBindWithRelativeTargetIsNotPassed",
+  r'''if !filepath.IsAbs(host) || !strings.HasPrefix(v.Target, "/") {''', r'''if !filepath.IsAbs(host) {''')
+A("cmd-no-network-when-nothing-is-converted", "cmd", "TestNoNetworkWhenNothingIsConverted",
+  r'''if len(converted) > 0 {⏎»»name, err := networkName()''', r'''if true {⏎»»name, err := networkName()''')
+A("cmd-network-create-failure", "cmd", "TestNetworkCreateFailureStopsTheRun",
+  r'''if err := a.Docker.NetworkCreate(ctx, name); err != nil {''', r'''if err := a.Docker.NetworkCreate(ctx, name); err != nil && false {''')
+A("cmd-network-removed-with-its-own-context", "cmd", "TestNetworkAndDependenciesAreCleanedUpOnCancel",
+  r'''cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)⏎»»»defer cancel()⏎»»»if err := a.Docker.NetworkRemove(cctx, name)''',
+  r'''cctx, cancel := context.WithTimeout(ctx, cleanupTimeout)⏎»»»defer cancel()⏎»»»if err := a.Docker.NetworkRemove(cctx, name)''')
+A("cmd-network-removed-by-name", "cmd", "TestNetworkCreatedOnceAndRemoved",
+  r'''a.Docker.NetworkRemove(cctx, name)''', r'''a.Docker.NetworkRemove(cctx, name+"x")''')
+A("cmd-network-name-prefix", "cmd", "TestNetworkCreatedOnceAndRemoved",
+  r'''return "dock2nano-" + hex.EncodeToString(b), nil''', r'''return "d2n-" + hex.EncodeToString(b), nil''')
+A("cmd-dependencies-stopped", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd|TestNetworkAndDependenciesAreCleanedUpOnError",
+  r'''defer rs.stopAll(a)''', r'''_ = rs''')
+A("cmd-dependencies-stopped-in-reverse", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''for i := len(rs.order) - 1; i >= 0; i-- {''', r'''for i := 0; i < len(rs.order); i++ {''')
+A("cmd-dependencies-started-once", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''if rs.running[name] != nil {''', r'''if rs.running[name] != nil && false {''')
+A("cmd-dependencies-recorded-as-running", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''rs.order = append(rs.order, name)''', r'''_ = name''')
+A("cmd-dependencies-start-on-the-network", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''so.Network = rs.network''', r'''so.Network = ""''')
+A("cmd-dependencies-start-under-their-name", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''so.NetworkAliases = []string{name}''', r'''so.NetworkAliases = nil''')
+A("cmd-dependencies-start-env", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''Env: oo.Env, WorkingDir: oo.WorkingDir''', r'''WorkingDir: oo.WorkingDir''')
+A("cmd-dependencies-start-working-dir", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''WorkingDir: oo.WorkingDir, User: oo.User''', r'''User: oo.User''')
+A("cmd-dependencies-start-user", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
+  r'''User: oo.User, Binds: oo.Binds}''', r'''Binds: oo.Binds}''')
+A("cmd-dependency-failure-is-remembered", "cmd", "TestDependencyStartFailureIsANote",
+  r'''why := rs.failed[name]''', r'''why := ""''')
+A("cmd-dependency-note-reaches-the-observation", "cmd", "TestDependencyStartFailureIsANote|TestDependencyNotConvertedIsANote",
+  r'''res.Warnings = append(res.Warnings, notes...)''', r'''_ = notes''')
+A("cmd-dependency-not-converted-reason", "cmd", "TestDependencyNotConvertedIsANote",
+  r'''if reason, no := rs.skipped[name]; no {''', r'''if reason, no := rs.skipped[name]; no && false {''')
+A("cmd-dependency-cancel-is-an-error", "cmd", "TestCancelWhileStartingADependency",
+  r'''if cerr := ctx.Err(); cerr != nil {⏎»»»»»return nil, cerr''', r'''if cerr := ctx.Err(); cerr != nil && false {⏎»»»»»return nil, cerr''')
 
 
 def main():
