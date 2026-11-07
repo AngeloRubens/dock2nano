@@ -401,6 +401,7 @@ func newScene(t *testing.T) *scene {
 	d.exec["cat /proc/11/environ"] = "A=1\x00HOSTNAME=abc\x00PATH=/usr/bin\x00_=/x\x00"
 	d.exec["readlink /proc/11/cwd"] = "/srv\n"
 	d.exec["readlink /proc/11/exe"] = "/usr/bin/app\n"
+	d.exec["cat /proc/11/status"] = statusText(999, 999)
 	d.ip = "172.17.0.2"
 	o := Options{Image: "img:1", Pull: true, Probe: probe, now: clock.now, sleep: clock.sleep}
 	return &scene{d: d, clock: clock, probe: probe, o: o, start: start, tmp: tmp}
@@ -1196,6 +1197,84 @@ func TestObserveStoppedBeforeProcCouldBeRead(t *testing.T) {
 	equal(t, "users", s.d.users, []string(nil))
 }
 
+func statusText(uid, gid int) string {
+	return fmt.Sprintf("Name:\tmysqld\nUmask:\t0022\nState:\tS (sleeping)\nPid:\t11\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nGroups:\t\n", uid, uid, uid, uid, gid, gid, gid, gid)
+}
+
+func TestObserveUserAndGroup(t *testing.T) {
+	s := newScene(t)
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, 999)
+	equal(t, "gid", res.GID, 999)
+	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
+func TestObserveUserIsEffectiveColumn(t *testing.T) {
+	s := newScene(t)
+	s.d.exec["cat /proc/11/status"] = "Name:\tx\nUid:\t1\t2\t3\t4\nGid:\t5\t6\t7\t8\n"
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, 2)
+	equal(t, "gid", res.GID, 6)
+}
+
+func TestObserveUserRoot(t *testing.T) {
+	s := newScene(t)
+	s.d.exec["cat /proc/11/status"] = statusText(0, 0)
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, 0)
+	equal(t, "gid", res.GID, 0)
+}
+
+func TestObserveUserUnparsable(t *testing.T) {
+	s := newScene(t)
+	s.d.exec["cat /proc/11/status"] = "Name:\tx\nUid:\tabc\tdef\nGid:\t1\t1\t1\t1\n"
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, -1)
+	equal(t, "gid", res.GID, -1)
+	equal(t, "warnings", res.Warnings, []string{"could not read the user and group of the program from /proc: they are not known"})
+}
+
+func TestObserveUserUnreadable(t *testing.T) {
+	s := newScene(t)
+	delete(s.d.exec, "cat /proc/11/status")
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, -1)
+	equal(t, "gid", res.GID, -1)
+	equal(t, "warnings", res.Warnings, []string{"could not read the user and group of the program: fake exec: no answer for cat /proc/11/status"})
+}
+
+func TestObserveUserProgramGone(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	s.d.files["/app/rel.txt"] = entry{data: "relative"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "uid", res.UID, -1)
+	equal(t, "gid", res.GID, -1)
+}
+
 func TestObserveProcReadFailuresAreWarnings(t *testing.T) {
 	s := newScene(t)
 	for _, k := range []string{"cat /proc/11/cmdline", "cat /proc/11/environ", "readlink /proc/11/cwd", "readlink /proc/11/exe"} {
@@ -1609,8 +1688,8 @@ func TestObserveProbeFailureWarnsOncePerPort(t *testing.T) {
 
 func TestObserveRedactLeavesShortAndImageValuesAlone(t *testing.T) {
 	s := newScene(t)
-	s.d.cfg.Env = append(s.d.cfg.Env, "LANG=en_US.UTF-8")
-	s.o.Env = []string{"DEBUG=1", "LANG=en_US.UTF-8", "TOKEN=secret-token"}
+	s.d.cfg.Env = append(s.d.cfg.Env, "LANG_AUTH=en_US.UTF-8")
+	s.o.Env = []string{"DEBUG_KEY=1", "LANG_AUTH=en_US.UTF-8", "TOKEN=secret-token"}
 	s.d.traceTxt = ""
 	s.d.logs = "/lib/x1.so en_US.UTF-8 secret-token"
 	_, err := s.observe(t, context.Background())
@@ -1753,6 +1832,11 @@ type startFake struct {
 	// exitAt, when not zero, is the time from which Running answers false.
 	exitAt time.Time
 	clock  *fakeClock
+	// startErr fails Start of the container.
+	startErr error
+	// stopCtxErr and removeCtxErr are the errors of the contexts Stop and Remove were given.
+	stopCtxErr   []error
+	removeCtxErr []error
 }
 
 func (f *startFake) HasImage(ctx context.Context, image string) (bool, error) { return f.have, nil }
@@ -1773,16 +1857,18 @@ func (f *startFake) Create(ctx context.Context, o docker.CreateOptions) (string,
 
 func (f *startFake) Start(ctx context.Context, id string) error {
 	f.started = append(f.started, id)
-	return nil
+	return f.startErr
 }
 
 func (f *startFake) Stop(ctx context.Context, id string, seconds int) error {
 	f.stopped = append(f.stopped, id)
+	f.stopCtxErr = append(f.stopCtxErr, ctx.Err())
 	return errors.New("stop failed")
 }
 
 func (f *startFake) Remove(ctx context.Context, id string, force bool) error {
 	f.removed = append(f.removed, id)
+	f.removeCtxErr = append(f.removeCtxErr, ctx.Err())
 	return nil
 }
 
@@ -1968,6 +2054,9 @@ func TestRunningStopRemovesEvenWhenStopFails(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
+	// the context given to Stop was cancelled, the ones used for the calls were not
+	equal(t, "context errors at stop", s.d.stopCtxErr, []error{nil})
+	equal(t, "context errors at removal", s.d.removeCtxErr, []error{nil})
 	if err := r.Stop(context.Background()); err != nil {
 		t.Errorf("second Stop: %v", err)
 	}
@@ -2018,4 +2107,228 @@ func TestObserveRedactOnlyValuesOfSecretNames(t *testing.T) {
 	if got != want {
 		t.Errorf("redact = %q, want %q", got, want)
 	}
+}
+
+func TestObserveRedactHidesValuesFromSixBytes(t *testing.T) {
+	r := &run{o: Options{Env: []string{"API_KEY=abcde", "DB_PASSWORD=fghijk"}}}
+	equal(t, "redacted", r.redact("abcde fghijk"), "abcde ***")
+}
+
+func TestPasswdNameSkipsCommentLines(t *testing.T) {
+	data := []byte("#ghost:x:472:0:comment:/h:/bin/false\nreal:x:472:0:r:/h:/bin/sh\n")
+	equal(t, "name", passwdName(data, 472), "real")
+	equal(t, "only a comment", passwdName([]byte("#ghost:x:472:0\n"), 472), "")
+}
+
+func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
+	r := &run{once: map[string]bool{}}
+	for _, who := range []string{"99999999999", "4294967296:5"} {
+		got, err := r.resolveUser(context.Background(), "img:1", who)
+		if err != nil || got != "" {
+			t.Errorf("user %q: got %q, %v, want root", who, got, err)
+		}
+	}
+	equal(t, "warnings", r.warn, []string{
+		`the image runs as "99999999999", which is not a uid; it was observed as root`,
+		`the image runs as "4294967296", which is not a uid; it was observed as root`,
+	})
+
+	// a name that holds digits is a name
+	r = &run{once: map[string]bool{}}
+	got, err := r.resolveUser(context.Background(), "img:1", "12ab")
+	if err != nil || got != "12ab" || len(r.warn) != 0 {
+		t.Errorf("got %q, %v, warnings %q", got, err, r.warn)
+	}
+}
+
+// noIDDocker makes a container without giving its id.
+type noIDDocker struct {
+	Docker
+	removed []string
+}
+
+func (d *noIDDocker) Create(ctx context.Context, o docker.CreateOptions) (string, error) {
+	return "", nil
+}
+
+func (d *noIDDocker) Remove(ctx context.Context, id string, force bool) error {
+	d.removed = append(d.removed, id)
+	return nil
+}
+
+func TestCreateWithoutAnIDIsAnErrorAndIsRemovedByName(t *testing.T) {
+	d := &noIDDocker{}
+	r := &run{d: d}
+	id, err := r.create(context.Background(), docker.CreateOptions{Image: "img:1"})
+	if id != "" || err == nil || err.Error() != "Docker gave no container id" {
+		t.Fatalf("id = %q, err = %v", id, err)
+	}
+	if len(d.removed) != 1 || !containerName.MatchString(d.removed[0]) {
+		t.Errorf("removed = %q, want the name of the container", d.removed)
+	}
+}
+
+func TestObserveStoppedLogIsCutAtAWholeLine(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	var lines, want []string
+	for i := 0; i < 30; i++ {
+		line := fmt.Sprintf("L%02d", i) + strings.Repeat("x", 96)
+		lines = append(lines, line)
+		if i >= 20 {
+			want = append(want, line)
+		}
+	}
+	// 2999 bytes once trimmed: the last 1024 start inside line 19, which is dropped
+	s.d.logs = strings.Join(lines, "\n") + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "stopped log", res.StoppedLog, strings.Join(want, "\n"))
+}
+
+func TestObserveStoppedLogDropsABrokenCharacter(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	// 3001 bytes: the last 1024 start in the middle of a two-byte character
+	s.d.logs = strings.Repeat("\u00e9", 1500) + "b"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "stopped log", res.StoppedLog, strings.Repeat("\u00e9", 511)+"b")
+}
+
+func TestStartLogTailDropsABrokenCharacter(t *testing.T) {
+	s := newStartScene()
+	s.open = func(string) bool { return false }
+	s.d.exitAt = s.clock.now().Add(2 * time.Second)
+	s.d.logs = strings.Repeat("\u00e9", 1500) + "b"
+	r, err := Start(context.Background(), s.d, s.o)
+	if err == nil || r != nil {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	want := "stopped before it was ready: " + strings.Repeat("\u00e9", 511) + "b\n"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to hold the end of the log without the broken character", err)
+	}
+}
+
+// flakyProber fails its first request and answers the others.
+type flakyProber struct {
+	urls []string
+}
+
+func (p *flakyProber) Get(ctx context.Context, url string) error {
+	p.urls = append(p.urls, url)
+	if len(p.urls) == 1 {
+		return errors.New("connection refused")
+	}
+	return nil
+}
+
+func TestObserveAPortThatFailedAndWasAskedLaterDoesNotWarn(t *testing.T) {
+	s := newScene(t)
+	p := &flakyProber{}
+	s.o.Probe = p
+	s.o.Seconds = 6
+	s.d.cfg.ExposedPorts = []string{"8080/tcp"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "urls", p.urls, []string{"http://172.17.0.2:8080/", "http://172.17.0.2:8080/"})
+	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
+func TestObserveARepeatedWarningIsGivenOnce(t *testing.T) {
+	s := newScene(t)
+	s.o.Seconds = 6
+	// the table is asked for at every poll, and every poll fails
+	delete(s.d.exec, "cat /proc/net/tcp")
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "polls", s.clock.sleeps, 3)
+	equal(t, "warnings", res.Warnings, []string{"could not read /proc/net/tcp: fake exec: no answer for cat /proc/net/tcp"})
+}
+
+func TestStartFailureOfTheContainerRemovesIt(t *testing.T) {
+	s := newStartScene()
+	s.d.startErr = errors.New("cannot start")
+	r, err := Start(context.Background(), s.d, s.o)
+	if r != nil || err == nil || !strings.Contains(err.Error(), "observe: start: starting the container: cannot start") {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "stopped", s.d.stopped, []string{"dep-1"})
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+// noAddress is a Docker that cannot give the address of a container.
+type noAddress struct {
+	Docker
+}
+
+func TestStartWithoutAnAddresserIsNeverReady(t *testing.T) {
+	s := newStartScene()
+	s.o.Wait = 3 * time.Second
+	r, err := Start(context.Background(), noAddress{s.d}, s.o)
+	if r != nil || err == nil || !strings.Contains(err.Error(), "did not accept connections on 3306, 33060 within 3s") {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "dials", s.dials, []string(nil))
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartWithAnEmptyAddressIsNeverReady(t *testing.T) {
+	s := newStartScene()
+	s.d.ip = ""
+	s.o.Wait = 3 * time.Second
+	r, err := Start(context.Background(), s.d, s.o)
+	if r != nil || err == nil || !strings.Contains(err.Error(), "did not accept connections on 3306, 33060 within 3s") {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "dials", s.dials, []string(nil))
+	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartWithoutAnImageIsAnError(t *testing.T) {
+	s := newStartScene()
+	s.o.Image = ""
+	r, err := Start(context.Background(), s.d, s.o)
+	if r != nil || err == nil || err.Error() != "observe: start: no image given" {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "created", len(s.d.creates), 0)
+}
+
+func TestObserveForksBeforeTheProgramStartedAreNotChildren(t *testing.T) {
+	s := newScene(t)
+	// the process that is the program forks first and executes the program afterwards
+	s.d.traceTxt = strings.Replace(sceneTrace, "11 execve(", "11 fork() = 20\n11 execve(", 1)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "children", res.Children, 0)
+	equal(t, "child calls", res.ChildCalls, []string(nil))
+}
+
+func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
+	s := newScene(t)
+	// the paths are asked for in order: the file first, then the link that leads to it
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/aa-file", O_RDONLY) = 8` + "\n" + `11 openat(AT_FDCWD, "/zz-link", O_RDONLY) = 9` + "\n"
+	s.d.files["/aa-file"] = entry{data: "target"}
+	s.d.files["/zz-link"] = entry{link: "/aa-file"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(res.Sysroot, "zz-link"))
+	if err != nil || string(got) != "target" {
+		t.Errorf("zz-link = %q, %v", got, err)
+	}
+	equal(t, "warnings", res.Warnings, []string(nil))
 }

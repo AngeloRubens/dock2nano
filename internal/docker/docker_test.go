@@ -424,11 +424,48 @@ func TestEnvNeedsEnvRunner(t *testing.T) {
 }
 
 func TestCreateBadEnvName(t *testing.T) {
-	c := New(&envFake{})
 	for _, e := range []string{"=x", "A\x00B=1", "A=b\x00c"} {
-		if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{e}}); err == nil {
-			t.Errorf("env entry %q accepted", e)
+		f := &envFake{}
+		c := New(f)
+		_, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{e}})
+		if err == nil || !strings.Contains(err.Error(), "is not a valid variable name with a value") {
+			t.Errorf("env entry %q: err = %v", e, err)
 		}
+		if len(f.calls) != 0 {
+			t.Errorf("env entry %q: docker was called: %v", e, f.calls)
+		}
+	}
+}
+
+func TestEnvEntryWithoutAValueIsPassedByName(t *testing.T) {
+	// docker takes the value from its own environment: nothing is put in the environment given
+	f := &envFake{fake: fake{replies: []reply{{stdout: "cid\n"}}}}
+	if _, err := New(f).Create(context.Background(), CreateOptions{Image: "img", Env: []string{"FROM_HOST", "A=1"}}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, &f.fake, "create", "--env", "FROM_HOST", "--env", "A", "img")
+	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"A=1"}) {
+		t.Errorf("env passed = %q", f.envs)
+	}
+
+	// with nothing but names the plain Runner is enough
+	c, plain := newFake(reply{stdout: "cid\n"})
+	if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{"FROM_HOST"}}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, plain, "create", "--env", "FROM_HOST", "img")
+}
+
+func TestRedactSecretsHidesTheLongerValueWhole(t *testing.T) {
+	const text = "x secret-longer y"
+	for _, vals := range [][]string{{"secret", "secret-longer"}, {"secret-longer", "secret"}} {
+		if got := redactSecrets(text, vals); got != "x *** y" {
+			t.Errorf("values %q: got %q, want %q", vals, got, "x *** y")
+		}
+	}
+	// a value that is too short is left alone
+	if got := redactSecrets("a secret abcde", []string{"abcde", "secret"}); got != "a *** abcde" {
+		t.Errorf("got %q", got)
 	}
 }
 
@@ -454,12 +491,13 @@ func TestBuildErrorHidesArgumentValues(t *testing.T) {
 }
 
 func TestExecRunnerRunEnv(t *testing.T) {
+	t.Setenv("D2N_KEPT", "kept")
 	r := NewExecRunner("sh").(EnvRunner)
-	out, _, err := r.RunEnv(context.Background(), []string{"D2N_SECRET=xyz"}, nil, "-c", "echo $D2N_SECRET; command -v sh >/dev/null && echo path-ok")
+	out, _, err := r.RunEnv(context.Background(), []string{"D2N_SECRET=xyz"}, nil, "-c", `echo "$D2N_SECRET $D2N_KEPT"`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out) != "xyz\npath-ok\n" {
+	if string(out) != "xyz kept\n" {
 		t.Errorf("out = %q (the variable is passed and the environment of the process is kept)", out)
 	}
 }
@@ -1339,6 +1377,15 @@ func TestNetworkCommandsRefuseBadNames(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("docker was called: %v", f.calls)
+	}
+}
+
+func TestNetworkRemoveFailureIsWrapped(t *testing.T) {
+	cause := errors.New("in use")
+	c, _ := newFake(reply{err: cause, stderr: "network n has active endpoints"})
+	err := c.NetworkRemove(context.Background(), "n")
+	if !errors.Is(err, cause) || !strings.HasPrefix(err.Error(), "docker network rm: ") || !strings.Contains(err.Error(), "active endpoints") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

@@ -36,6 +36,8 @@ type fakeDocker struct {
 	netCreated []string
 	netRemoved []string
 	netErr     error
+	// netRemoveErr fails NetworkRemove.
+	netRemoveErr error
 	// removeCtxErr is the error of the context of each NetworkRemove.
 	removeCtxErr []error
 }
@@ -50,7 +52,7 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, name string) error {
 	*f.events = append(*f.events, "net rm")
 	f.netRemoved = append(f.netRemoved, name)
 	f.removeCtxErr = append(f.removeCtxErr, ctx.Err())
-	return nil
+	return f.netRemoveErr
 }
 
 // fakeStopper is a started dependency.
@@ -61,7 +63,7 @@ type fakeStopper struct {
 
 func (s *fakeStopper) Stop(ctx context.Context) error {
 	s.h.events = append(s.h.events, "stop "+s.name)
-	return nil
+	return s.h.stopErr[s.name]
 }
 
 func (f *fakeDocker) Build(ctx context.Context, o docker.BuildOptions) error {
@@ -123,6 +125,8 @@ type harness struct {
 	// started are the options of each Start; startErr fails the start of an image.
 	started  []observe.StartOptions
 	startErr map[string]error
+	// stopErr fails the Stop of a started container, by its image.
+	stopErr map[string]error
 	// onObserve runs at the start of each observation, with its options.
 	onObserve func(o observe.Options) error
 }
@@ -133,6 +137,7 @@ func newHarness(t *testing.T) *harness {
 	h.dock = &fakeDocker{have: map[string]bool{}, images: map[string]*docker.ImageConfig{}}
 	h.obsErr = map[string]error{}
 	h.startErr = map[string]error{}
+	h.stopErr = map[string]error{}
 	h.dock.events = &h.events
 	h.env = map[string]string{}
 	h.app = &App{Docker: h.dock, Stdout: h.stdout, Stderr: h.stderr}
@@ -1019,7 +1024,17 @@ func TestArch(t *testing.T) {
 }
 
 func TestShellQuote(t *testing.T) {
-	rows := [][2]string{{"/a/b-c_d.e", "/a/b-c_d.e"}, {"/my ops", "'/my ops'"}, {"it's", `'it'\''s'`}, {"", "''"}}
+	rows := [][2]string{
+		{"/a/b-c_d.e", "/a/b-c_d.e"},
+		{"/my ops", "'/my ops'"},
+		{"it's", `'it'\''s'`},
+		{"'", `''\'''`},
+		{"", "''"},
+		{"a:b=c+d,e@f%g", "a:b=c+d,e@f%g"},
+		{"$HOME", "'$HOME'"},
+		{"a;b", "'a;b'"},
+		{"~/x", "'~/x'"},
+	}
 	for _, r := range rows {
 		if got := shellQuote(r[0]); got != r[1] {
 			t.Errorf("%q: got %q, want %q", r[0], got, r[1])
@@ -1382,5 +1397,75 @@ func TestCancelWhileStartingADependency(t *testing.T) {
 	}
 	if want := []string{"stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-2:], want) {
 		t.Errorf("events %v", h.events)
+	}
+}
+
+func TestClosureHoldsTheDependenciesOfTheDependencies(t *testing.T) {
+	dep := func(names ...string) []compose.Dependency {
+		var out []compose.Dependency
+		for _, n := range names {
+			out = append(out, compose.Dependency{Service: n})
+		}
+		return out
+	}
+	svc := func(name string, deps ...string) *compose.Service {
+		return &compose.Service{Name: name, DependsOn: dep(deps...)}
+	}
+	// web needs api, api needs db, db needs cache; side is not needed by web
+	rs := &runState{ordered: []*compose.Service{svc("cache"), svc("side"), svc("db", "cache"), svc("api", "db"), svc("web", "api")}}
+	web := rs.ordered[4]
+	if got, want := rs.closure(web), []string{"cache", "db", "api"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("closure of web = %q, want %q", got, want)
+	}
+	if got, want := rs.closure(rs.ordered[3]), []string{"cache", "db"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("closure of api = %q, want %q", got, want)
+	}
+	if got := rs.closure(rs.ordered[0]); len(got) != 0 {
+		t.Errorf("closure of cache = %q, want none", got)
+	}
+}
+
+func TestNetworkRemoveFailureIsAWarning(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  one:\n    image: a\n")
+	h.haveAll("a")
+	h.dock.netRemoveErr = errors.New("network has active endpoints")
+	h.mustRun(0, "convert")
+	want := ToolName + ": warning: the docker network " + h.dock.netCreated[0] + " is not removed: network has active endpoints\n"
+	if !strings.Contains(h.stderr.String(), want) {
+		t.Errorf("stderr %q does not contain %q", h.stderr, want)
+	}
+}
+
+func TestStopFailureOfADependencyIsAWarning(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.stopErr["d"] = errors.New("container is busy")
+	h.mustRun(0, "convert")
+	want := ToolName + ": warning: stopping db: container is busy\n"
+	if !strings.Contains(h.stderr.String(), want) {
+		t.Errorf("stderr %q does not contain %q", h.stderr, want)
+	}
+	// the failure of one stop does not keep the others from running
+	if want := []string{"stop d", "stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-3:], want) {
+		t.Errorf("events %v", h.events)
+	}
+}
+
+func TestStartingADependencyIsAnnounced(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.mustRun(0, "convert")
+	out := h.stderr.String()
+	for _, want := range []string{"cache: starting c for db\n", "db: starting d for web\n"} {
+		if strings.Count(out, want) != 1 {
+			t.Errorf("stderr does not hold %q exactly once: %q", want, out)
+		}
+	}
+	// db is running by the time api is observed: it is not started again
+	if strings.Contains(out, "for api") {
+		t.Errorf("a dependency was started for api: %q", out)
 	}
 }

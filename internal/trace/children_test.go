@@ -151,3 +151,83 @@ func TestChildProcessesNone(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+func TestChildProcessesAResultOfZeroIsNotAChild(t *testing.T) {
+	raw := lines(
+		strings.TrimSuffix(childHead, "\n"),
+		`10 fork() = 0`,
+		`10 clone3({flags=CLONE_VM|CLONE_VFORK, exit_signal=SIGCHLD}, 88) = 0`,
+		`10 fork() = 11`,
+	)
+	got := ChildProcesses(raw, 0)
+	want := []Child{{Pid: "11", Parent: "10", Call: "fork", Line: 3}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("children %+v, want %+v", got, want)
+	}
+}
+
+func TestChildProcessesThreadFlagIsAWholeWord(t *testing.T) {
+	raw := lines(
+		strings.TrimSuffix(childHead, "\n"),
+		`10 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD_X|SIGCHLD) = 11`,
+		`10 clone(child_stack=NULL, flags=CLONE_VM|NOT_CLONE_THREAD|SIGCHLD) = 12`,
+		`10 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD|SIGCHLD) = 13`,
+	)
+	got := ChildProcesses(raw, 0)
+	want := []Child{
+		{Pid: "11", Parent: "10", Call: "clone", Line: 1},
+		{Pid: "12", Parent: "10", Call: "clone", Line: 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("children %+v, want %+v", got, want)
+	}
+}
+
+func TestChildProcessesPidReuseDoesNotLoop(t *testing.T) {
+	// 10 and 11 are each the parent of the other, as when a pid is reused; neither descends from
+	// the program (20), so the forks of 10 are not counted, and the walk ends
+	raw := lines(
+		`10 fork() = 11`,
+		`11 fork() = 10`,
+		`20 execve("/app", ["app"], 0x7ff /* 1 vars */) = 0`,
+		`10 fork() = 30`,
+		`20 fork() = 21`,
+	)
+	got := ChildProcesses(raw, 0)
+	want := []Child{{Pid: "21", Parent: "20", Call: "fork", Line: 4}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("children %+v, want %+v", got, want)
+	}
+}
+
+func TestChildProcessesResumedLineWithoutItsStartIsNotJoinedToAnOldOne(t *testing.T) {
+	// the first pair is a thread; a resumed line that comes later with no start of its own is not
+	// the end of that old call
+	raw := lines(
+		strings.TrimSuffix(childHead, "\n"),
+		`10 clone(child_stack=0x7f2, flags=CLONE_VM|CLONE_THREAD <unfinished ...>`,
+		`10 <... clone resumed>, parent_tid=[12], tls=0x7f3) = 12`,
+		`10 <... clone resumed>, child_tidptr=0x7f1) = 13`,
+	)
+	got := ChildProcesses(raw, 0)
+	want := []Child{{Pid: "13", Parent: "10", Call: "clone", Line: 3}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("children %+v, want %+v", got, want)
+	}
+}
+
+func TestChildProcessesUnfinishedAndResumedWithPidPrefix(t *testing.T) {
+	raw := lines(
+		strings.TrimSuffix(childHead, "\n"),
+		`[pid    10] clone(child_stack=0x7f2, flags=CLONE_VM|CLONE_THREAD <unfinished ...>`,
+		`[pid    11] getpid() = 11`,
+		`[pid    10] <... clone resumed>, parent_tid=[12], tls=0x7f3) = 12`,
+		`[pid    10] fork( <unfinished ...>`,
+		`[pid    10] <... fork resumed>) = 13`,
+	)
+	got := ChildProcesses(raw, 0)
+	want := []Child{{Pid: "13", Parent: "10", Call: "fork", Line: 5}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("children %+v, want %+v", got, want)
+	}
+}
