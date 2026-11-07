@@ -3,13 +3,20 @@
 ## Obiettivo
 Migrazione a zero impatto di CI/CD basate su Docker e docker compose verso nanos.
 L'utente non cambia il suo Dockerfile né il suo docker-compose.yml. Lo strumento
+funziona anche con un Dockerfile solo, senza compose (un servizio). Lo strumento
 li legge, costruisce i pacchetti e le immagini nanos, e genera un compose.yaml
 che "ops compose" esegue. Ciò che non si converte viene stampato, mai scartato
 in silenzio. Si punta allo zero impatto, non lo si garantisce.
 
 ## Confini
 - Strumento esterno a ops: non si modifica il core di ops. Si chiama ops
-  (ops pkg from-docker --observe, ops compose) per ciò che ops già fa.
+  (ops compose, la creazione di pacchetti e immagini) per ciò che ops già fa.
+- Docker vive nello strumento, non in ops: Ian probabilmente non vuole
+  dipendenze da Docker in ops. Costruire l'immagine, osservarla ed estrarne i
+  file sono compiti dello strumento; a ops si passa una directory di pacchetto
+  già pronta. L'osservazione sta dietro un'interfaccia (Observer), così il
+  lavoro di nanovms/ops#1802 si può portare dentro lo strumento. Il Dockerfile
+  si legge con un parser proprio (internal/dockerfile).
 - Linguaggio: Go. Il nome del tool vive in una sola costante.
 - Si chiama il binario "ops" (exec), senza importare i pacchetti Go di ops:
   nessuna dipendenza di ops entra in go.mod. Nella CI si installa ops prima.
