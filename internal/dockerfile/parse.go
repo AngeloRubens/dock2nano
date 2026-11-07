@@ -46,7 +46,7 @@ func Parse(r io.Reader) (*File, error) {
 	if len(data) > maxSize {
 		return nil, fmt.Errorf("the Dockerfile is too large (more than %d bytes)", maxSize)
 	}
-	lines := strings.Split(strings.TrimPrefix(string(data), "﻿"), "\n")
+	lines := strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n")
 	for i, l := range lines {
 		lines[i] = strings.TrimSuffix(l, "\r")
 	}
