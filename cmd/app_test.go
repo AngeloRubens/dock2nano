@@ -888,3 +888,131 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteBuildContextIsRefused(t *testing.T) {
+	for _, ctx := range []string{"git@github.com:example/repo.git", "https://example.com/repo.git", "git://example.com/repo.git"} {
+		h := newHarness(t)
+		h.write("compose.yaml", "services:\n  web:\n    build:\n      context: \""+ctx+"\"\n")
+		h.mustRun(1, "convert")
+		want := "service web: the build context \"" + ctx + "\" is not a local directory"
+		if !strings.Contains(h.stderr.String(), want) {
+			t.Errorf("%s: stderr %q does not contain %q", ctx, h.stderr, want)
+		}
+		if len(h.dock.builds) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
+			t.Errorf("%s: something ran: builds %v, observed %v", ctx, h.dock.builds, h.names())
+		}
+	}
+	// the short form of build is a context too
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    build: \"https://example.com/repo.git\"\n")
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "is not a local directory") || len(h.dock.builds) != 0 {
+		t.Errorf("short form: stderr %q, builds %v", h.stderr, h.dock.builds)
+	}
+}
+
+func TestOnlyBindVolumesWithASourceReachTheObservation(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", `services:
+  web:
+    image: w
+    volumes:
+      - db:/var/lib/db
+      - type: volume
+        source: cache
+        target: /cache
+      - /anonymous
+      - type: tmpfs
+        target: /run
+      - type: bind
+        target: /nosource
+      - ./real:/real
+`)
+	// a directory with the name of each named volume, and the one of the bind
+	for _, d := range []string{"db", "cache", "real"} {
+		if err := os.MkdirAll(filepath.Join(h.dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert")
+	want := []string{filepath.Join(h.dir, "real") + ":/real"}
+	if !reflect.DeepEqual(h.observed[0].Binds, want) {
+		t.Errorf("binds %v, want %v", h.observed[0].Binds, want)
+	}
+}
+
+func TestDependsOnMissingServiceIsAnError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    depends_on: [ghost]\n")
+	h.dock.have["w"] = true
+	h.mustRun(1, "convert")
+	want := `service "web" depends_on "ghost", which is not a service of the file`
+	if !strings.Contains(h.stderr.String(), want) {
+		t.Errorf("stderr %q does not contain %q", h.stderr, want)
+	}
+	if strings.Contains(h.stderr.String(), "cycle") {
+		t.Errorf("a missing service was reported as a cycle: %q", h.stderr)
+	}
+	if len(h.dock.calls) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
+		t.Errorf("something ran: %v", h.dock.calls)
+	}
+}
+
+func TestSysrootOfAnObservationThatFailedIsRemoved(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		return &observe.Result{Sysroot: "/sysroots/partial"}, errors.New("boom")
+	}
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "service web: boom") {
+		t.Errorf("stderr: %q", h.stderr)
+	}
+	if !reflect.DeepEqual(h.removed, []string{"/sysroots/partial"}) {
+		t.Errorf("sysroots removed: %v, want the one of the failed observation", h.removed)
+	}
+	if len(h.genIn) != 0 || len(h.wrote) != 0 {
+		t.Errorf("a result was produced: gen %d, write %d", len(h.genIn), len(h.wrote))
+	}
+
+	// a failed observation with no sysroot removes nothing
+	h = newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		return &observe.Result{}, errors.New("boom")
+	}
+	h.mustRun(1, "convert")
+	if len(h.removed) != 0 {
+		t.Errorf("sysroots removed: %v, want none", h.removed)
+	}
+}
+
+func TestDockerfileDefaultNameIsAppWhenTheFolderCleansToNothing(t *testing.T) {
+	for _, folder := range []string{"---", "___", "...", "-._"} {
+		h := newHarness(t)
+		h.write(folder+"/Dockerfile", "FROM alpine\n")
+		h.mustRun(0, "convert", "--dockerfile", folder+"/Dockerfile")
+		if len(h.wrote) != 1 || h.wrote[0].Services[0].Name != "app" {
+			t.Errorf("folder %q: services %+v, want the name app", folder, h.wrote)
+		}
+		if h.genIn[0].Project.Name != "app" {
+			t.Errorf("folder %q: project %q, want app", folder, h.genIn[0].Project.Name)
+		}
+	}
+}
+
+func TestEmptyOutputFlagIsAnError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(1, "convert", "-o", "")
+	if !strings.Contains(h.stderr.String(), ToolName+": -o is empty") {
+		t.Errorf("stderr: %q", h.stderr)
+	}
+	if len(h.dock.calls) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
+		t.Errorf("something ran: %v", h.dock.calls)
+	}
+}
