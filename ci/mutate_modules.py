@@ -787,7 +787,7 @@ A("cmd-dependency-cancel-is-an-error", "cmd", "TestCancelWhileStartingADependenc
 # ---------------------------------------------------------------- rules that had no test
 # observe
 A("observe-redact-only-secret-names", "observe", "TestObserveRedactOnlyValuesOfSecretNames",
-  r"""ok && secretName(k) && len(v)""", r"""ok && len(v)""")
+  r"""ok && secretName(k) && len(v)""", r"""ok && (secretName(k) || true) && len(v)""")
 A("observe-redact-boundary-is-six", "observe", "TestObserveRedactHidesValuesFromSixBytes",
   r"""secretName(k) && len(v) >= minSecret &&""", r"""secretName(k) && len(v) > minSecret &&""")
 A("observe-redact-min-secret-five", "observe", "TestObserveRedactHidesValuesFromSixBytes",
