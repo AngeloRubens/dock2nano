@@ -13,17 +13,23 @@
 //
 // Security. The tracer directory (strace, the musl loader and the list of files) is made with
 // os.MkdirTemp, so it is mode 0700, and so is the sysroot. The traced container starts as root;
-// strace writes the list as root and then runs the program as the user of the image (strace -u),
-// so the program cannot open the list. strace and its libraries are mounted a second time,
-// read-only, over the directory out. The residual risk is that anyone who can talk to the Docker
-// socket is root on this machine anyway, and that the program in the container runs with
-// SYS_PTRACE and without seccomp, which is what strace needs.
+// strace writes the list as root and then runs the program as the user of the image (strace -u).
+// For a user that is not root the program cannot open the list; for an image whose user is root
+// (or whose uid has no name in /etc/passwd, so that it is observed as root) it can, and could
+// replace the list with a symbolic link: the list is read only when it is still a regular file
+// (Lstat, then read; the check and the read are not one step, which the Docker socket owner could
+// race anyway). strace and its libraries are mounted a second time, read-only, over the directory
+// out. The residual risk is that anyone who can talk to the Docker socket is root on this machine
+// anyway, and that the program in the container runs with SYS_PTRACE and without seccomp, which
+// is what strace needs.
 package observe
 
 import (
 	"archive/tar"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +62,7 @@ type Docker interface {
 	ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error)
 	CopyFrom(ctx context.Context, id, containerPath, hostDir string) error
 	CopyTar(ctx context.Context, id, containerPath string, w io.Writer) error
-	Logs(ctx context.Context, id string) ([]byte, error)
+	LogsTail(ctx context.Context, id string, lines int) ([]byte, error)
 }
 
 var _ Docker = (*docker.Client)(nil)
@@ -102,11 +108,20 @@ type Options struct {
 	Env []string
 	// WorkingDir replaces the working directory of the image when not empty.
 	WorkingDir string
+	// User replaces the user of the image when not empty (the user: of a compose file). A name is
+	// used as it is; a uid, or uid:gid, is looked up in /etc/passwd of the image, because strace
+	// runs the program as a user name. A uid with no name is observed as root, with a warning.
+	User string
 	// Binds are bind mounts in docker syntax, "host:container" or "host:container:ro", with
 	// absolute paths. The traced container gets them in addition to its own, so that the program
 	// sees the files the user mounts; the files it opens under them are carried like any other.
 	// A container path under the directory of the tracer is an error.
 	Binds []string
+	// Network, when not empty, is the docker network the traced container joins, and
+	// NetworkAliases are its names on it. Other containers of the network (see Start) reach the
+	// program by them.
+	Network        string
+	NetworkAliases []string
 	// Seconds is how long the program is watched. The default is 30.
 	Seconds int
 	// Verbose logs what is found and decided, through Log.
@@ -145,15 +160,43 @@ type Result struct {
 	ExposedPorts []int
 
 	// CreatedAtRuntime are the files the program created while it ran (pid files, logs, a config
-	// an entrypoint script generated). They are carried when the program opened them, as they
-	// were at the end of the observation; Warnings lists them too.
+	// an entrypoint script generated) and that were still there at the end. They are carried when
+	// the program opened them, as they were at the end of the observation; Warnings lists the
+	// first ten. A created file that was gone at the end is not in it: see Vanished.
 	CreatedAtRuntime []string
+
+	// Vanished is how many files the program created while it ran that docker cp could not find at
+	// the end (temporary files that were renamed or deleted). They are not carried and not warned
+	// about one by one.
+	Vanished int
+
+	// Children is the number of child processes (fork, vfork, clone or clone3 without
+	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
+	// one process, so the caller reports a program that has any.
+	Children int
+
+	// ChildCalls are the distinct calls that started those processes, in the order they were first
+	// seen.
+	ChildCalls []string
 
 	// ConfigurationFiles are the carried files a user is likely to replace.
 	ConfigurationFiles []string
 
 	// Image is the configuration of the image.
 	Image *docker.ImageConfig
+
+	// StoppedEarly says the traced container was no longer running before Seconds had elapsed.
+	// The program chosen is then the last one it started, which is not necessarily a server (an
+	// entrypoint that refuses to start without a password ends this way).
+	StoppedEarly bool
+
+	// ExitCode is the exit status of the container; valid when StoppedEarly. It is -1 when the
+	// status could not be read.
+	ExitCode int
+
+	// StoppedLog is the end of the output of the container (at most 1 KiB, secrets hidden); set
+	// when StoppedEarly.
+	StoppedLog string
 
 	// Warnings are things that did not stop the run: files that could not be carried, cleanup
 	// that failed.
@@ -168,6 +211,20 @@ const (
 	cleanupTimeout = 2 * time.Minute
 	stopSeconds    = 2
 	logTail        = 2048
+	// logLines is how many lines of the output of a container are asked for.
+	logLines = 100
+	// stoppedLogBytes is the size of Result.StoppedLog.
+	stoppedLogBytes = 1024
+	// passwdLimit is the most that is read of /etc/passwd of an image.
+	passwdLimit = 1 << 20
+	// probeBodyLimit is the most that is read of the answer to a probe.
+	probeBodyLimit = 1 << 20
+	// namePrefix and ownLabel mark the containers of the tool.
+	namePrefix = "dock2nano-"
+	ownLabel   = "dock2nano=1"
+	// passwdProbeEntrypoint is the entrypoint of the container that is only created, to read
+	// /etc/passwd of the image from it. It never starts.
+	passwdProbeEntrypoint = "/dock2nano-not-started"
 )
 
 // tracerScript fetches strace, the musl loader and the libraries strace needs into /out.
@@ -184,6 +241,28 @@ type run struct {
 	warn    []string
 	cleanup []error
 	once    map[string]bool
+
+	// created are the paths the program created while it ran.
+	created map[string]bool
+	// gone are the created paths that docker cp could not find.
+	gone map[string]bool
+	// notCarried counts the paths that could not be carried and are warned about.
+	notCarried int
+	// imageValues are the values of the environment of the image, which redact leaves alone.
+	imageValues map[string]bool
+
+	stopped    bool
+	exitCode   int
+	stoppedLog string
+}
+
+// maxWarnedPaths is how many paths of one kind are named in the warnings; the rest is counted.
+const maxWarnedPaths = 10
+
+// isNotFound tells a path that docker cp could not find from another failure of docker cp.
+func isNotFound(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "Could not find the file") || strings.Contains(text, "No such container:path")
 }
 
 func (r *run) logf(format string, args ...any) {
@@ -192,15 +271,66 @@ func (r *run) logf(format string, args ...any) {
 	}
 }
 
-// redact hides the values of Options.Env in text that comes from outside (the output of the
-// container, errors of Docker). The names are not secret and are left alone.
+// redact hides the values of the variables of Options.Env whose name looks like a secret (see
+// secretNames) in text that comes from outside (the output of the container, errors of Docker).
+// The names are not secret and are left alone, and so are the values of the other variables
+// (DB_NAME=petclinic), which would garble the text around them.
 func (r *run) redact(text string) string {
 	for _, e := range r.o.Env {
-		if _, v, ok := strings.Cut(e, "="); ok && v != "" {
+		// a short value (DEBUG=1) or one the image has anyway is not a secret, and replacing it
+		// would damage the text around it
+		k, v, ok := strings.Cut(e, "=")
+		if ok && secretName(k) && len(v) >= minSecret && !r.imageValues[v] {
 			text = strings.ReplaceAll(text, v, "***")
 		}
 	}
 	return text
+}
+
+// secretNames are the parts of the name of a variable (compared in upper case) that make redact
+// hide its value.
+var secretNames = []string{"PASS", "SECRET", "TOKEN", "KEY", "CRED", "AUTH", "PRIVATE", "CERT", "SIGN", "SALT"}
+
+// secretName tells whether the name of a variable looks like the name of a secret.
+func secretName(name string) bool {
+	name = strings.ToUpper(name)
+	for _, part := range secretNames {
+		if strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// minSecret is the shortest value of Options.Env that redact hides.
+const minSecret = 6
+
+// containerName is a name for a container of the tool: dock2nano- and 8 random hex digits.
+func (r *run) containerName() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%s%08x", namePrefix, uint32(r.o.now().UnixNano()))
+	}
+	return namePrefix + hex.EncodeToString(b)
+}
+
+// create makes a container with a name and a label of the tool. When Create fails without giving
+// an id (a cancelled context can leave the container made), it is removed by name, as best effort,
+// with a context of its own; the answer of that is not an error, since usually nothing was made.
+func (r *run) create(ctx context.Context, o docker.CreateOptions) (string, error) {
+	o.Name = r.containerName()
+	o.Labels = []string{ownLabel}
+	id, err := r.d.Create(ctx, o)
+	if err != nil || id == "" {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_ = r.d.Remove(cctx, o.Name, true)
+		if err == nil {
+			err = errors.New("Docker gave no container id")
+		}
+		return "", err
+	}
+	return id, nil
 }
 
 func (r *run) vlogf(format string, args ...any) {
@@ -254,7 +384,7 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 	if err := checkBinds(o.Binds); err != nil {
 		return nil, err
 	}
-	r := &run{d: d, o: o, once: map[string]bool{}}
+	r := &run{d: d, o: o, once: map[string]bool{}, created: map[string]bool{}, gone: map[string]bool{}}
 
 	sysroot, err := os.MkdirTemp("", "dock2nano-sysroot-")
 	if err != nil {
@@ -369,6 +499,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: %s is an image for %s, and a unikernel here runs what was made for linux", image, cfg.OS)
 	}
 	exposed := exposedPorts(cfg.ExposedPorts)
+	r.imageValues = map[string]bool{}
+	for _, e := range cfg.Env {
+		if _, v, ok := strings.Cut(e, "="); ok {
+			r.imageValues[v] = true
+		}
+	}
 
 	var argv []string
 	if r.o.TargetExecutable != "" {
@@ -382,6 +518,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	workingDir := cfg.WorkingDir
 	if r.o.WorkingDir != "" {
 		workingDir = r.o.WorkingDir
+	}
+	// The trace is read from the directory the container starts in, and follows chdir from there.
+	// The directory /proc gives at the end is where the program ended up, not where it began.
+	startDir := workingDir
+	if startDir == "" {
+		startDir = "/"
 	}
 	env := mergeEnv(cfg.Env, r.o.Env)
 
@@ -407,8 +549,16 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// the second bind makes strace and its libraries read-only to everything in the container
 	binds := []string{tracerDir + ":" + trace.TraceMount, filepath.Join(tracerDir, "out") + ":" + trace.TraceMount + "/out:ro"}
 	binds = append(binds, r.o.Binds...)
-	wrapped := trace.WrapCommandAs(trace.TraceMount, loader, straceUser(cfg.User), argv)
-	id, err := r.d.Create(ctx, docker.CreateOptions{
+	imageUser := cfg.User
+	if r.o.User != "" {
+		imageUser = r.o.User
+	}
+	asUser, err := r.resolveUser(ctx, image, imageUser)
+	if err != nil {
+		return nil, err
+	}
+	wrapped := trace.WrapCommandAs(trace.TraceMount, loader, asUser, argv)
+	id, err := r.create(ctx, docker.CreateOptions{
 		Image:       image,
 		Entrypoint:  &wrapped,
 		Env:         r.o.Env,
@@ -417,6 +567,9 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		Binds:       binds,
 		CapAdd:      []string{"SYS_PTRACE"},
 		SecurityOpt: []string{"seccomp=unconfined"},
+
+		Network:        r.o.Network,
+		NetworkAliases: r.o.NetworkAliases,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("observe: creating the traced container: %w", err)
@@ -427,12 +580,18 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: starting the traced container: %w", err)
 	}
 
-	if err := r.watch(ctx, id, tracerDir, exposed); err != nil {
+	stopped, err := r.watch(ctx, id, tracerDir, exposed)
+	if err != nil {
 		return nil, err
+	}
+	if stopped {
+		if err := r.noteStopped(ctx, id); err != nil {
+			return nil, err
+		}
 	}
 
 	// the list is written as the program goes, so what it has opened so far is in it
-	raw, err := os.ReadFile(filepath.Join(tracerDir, "files"))
+	raw, err := r.readList(filepath.Join(tracerDir, "files"))
 	if err != nil {
 		return nil, fmt.Errorf("observe: reading the trace: %w", err)
 	}
@@ -504,11 +663,19 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 	}
 
-	touched, executed := trace.TouchedPaths(raw, cwd, from)
+	touched, executed := trace.TouchedPaths(raw, startDir, from)
 	r.vlogf("the program opened %d files\n", len(touched))
-	created := trace.CreatedPaths(raw, cwd, from)
-	if len(created) > 0 {
-		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(created, ", "))
+	created := trace.CreatedPaths(raw, startDir, from)
+	for _, c := range created {
+		r.created[c] = true
+	}
+
+	children := trace.ChildProcesses(raw, from)
+	var childCalls []string
+	for _, c := range children {
+		if !slices.Contains(childCalls, c.Call) {
+			childCalls = append(childCalls, c.Call)
+		}
 	}
 
 	if err := r.copyTouched(ctx, id, sysroot, touched); err != nil {
@@ -523,6 +690,27 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}, note)
 	if err != nil {
 		return nil, fmt.Errorf("observe: carrying interpreters: %w", err)
+	}
+
+	// the created files that were gone at the end are counted, not listed
+	var stillThere []string
+	for _, c := range created {
+		if !r.gone[c] {
+			stillThere = append(stillThere, c)
+		}
+	}
+	created = stillThere
+	if len(created) > 0 {
+		list := created
+		more := ""
+		if len(list) > maxWarnedPaths {
+			more = fmt.Sprintf(" and %d more", len(list)-maxWarnedPaths)
+			list = list[:maxWarnedPaths]
+		}
+		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(list, ", ") + more)
+	}
+	if r.notCarried > maxWarnedPaths {
+		r.warn = append(r.warn, fmt.Sprintf("and %d more paths were not carried", r.notCarried-maxWarnedPaths))
 	}
 
 	if !strings.HasPrefix(program, "/") {
@@ -547,20 +735,179 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		WorkingDir:         cwd,
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
+		Vanished:           len(r.gone),
+		Children:           len(children),
+		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),
 		Image:              cfg,
+		StoppedEarly:       r.stopped,
+		ExitCode:           r.exitCode,
+		StoppedLog:         r.stoppedLog,
 		Warnings:           r.warn,
 	}, nil
 }
 
-// straceUser is the user strace runs the program as (-u): the name part of the USER of the image,
-// or "" for root. strace looks the name up in /etc/passwd of the image.
-func straceUser(imageUser string) string {
-	name, _, _ := strings.Cut(imageUser, ":")
-	if name == "" || name == "root" || name == "0" {
-		return ""
+// resolveUser gives the user name strace -u runs the program as, or "" for root. strace looks the
+// name up in /etc/passwd of the image, so a uid (or uid:gid) is turned into a name by reading
+// that file out of a container that is created from the image and never started. A name is used as
+// it is. A uid with no name, or a file that cannot be read, means the program is observed as root,
+// and that is a warning. An error is only the end of ctx.
+func (r *run) resolveUser(ctx context.Context, image, user string) (string, error) {
+	who, _, _ := strings.Cut(user, ":")
+	if who == "" || who == "root" {
+		return "", nil
 	}
-	return name
+	uid, err := strconv.ParseUint(who, 10, 32)
+	if err != nil {
+		if strings.Trim(who, "0123456789") == "" {
+			// only digits, but too many for a uid
+			r.warnOnce(fmt.Sprintf("the image runs as %q, which is not a uid; it was observed as root", who))
+			return "", nil
+		}
+		return who, nil
+	}
+	if uid == 0 {
+		return "", nil
+	}
+
+	name, why := "", ""
+	ep := []string{passwdProbeEntrypoint}
+	probe, err := r.create(ctx, docker.CreateOptions{Image: image, Entrypoint: &ep})
+	if err == nil {
+		data, rerr := r.readFirstFile(ctx, probe, "/etc/passwd", passwdLimit)
+		r.discard(probe, false)
+		if rerr == nil {
+			name = passwdName(data, uid)
+		} else {
+			why = rerr.Error()
+		}
+	} else {
+		why = err.Error()
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return "", fmt.Errorf("observe: looking up the user %s of the image: %w", who, cerr)
+	}
+	if name != "" {
+		r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
+		return name, nil
+	}
+	text := fmt.Sprintf("the image runs as uid %d, which has no name in /etc/passwd; it was observed as root", uid)
+	if why != "" {
+		text += " (/etc/passwd could not be read: " + why + ")"
+	}
+	r.warnOnce(r.redact(text))
+	return "", nil
+}
+
+// passwdName is the first name in the text of /etc/passwd whose uid is uid.
+func passwdName(data []byte, uid uint64) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 3 || f[0] == "" || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		if n, err := strconv.ParseUint(strings.TrimSpace(f[2]), 10, 32); err == nil && n == uid {
+			return f[0]
+		}
+	}
+	return ""
+}
+
+// readFirstFile reads the first entry of the tar of docker cp for one path, which must be a
+// regular file of at most limit bytes. The stream is cancelled and waited for before it returns.
+func (r *run) readFirstFile(ctx context.Context, id, p string, limit int64) ([]byte, error) {
+	cctx, cancel := context.WithCancel(ctx)
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		err := r.d.CopyTar(cctx, id, p, pw)
+		pw.CloseWithError(err) // nil reads as the end of the stream
+		done <- err
+	}()
+	defer func() {
+		cancel()
+		pr.CloseWithError(errStopped)
+		<-done
+	}()
+
+	tr := tar.NewReader(pr)
+	hdr, err := tr.Next()
+	if err == io.EOF {
+		return nil, fmt.Errorf("docker cp made no entry for %s", p)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !hdr.FileInfo().Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", p)
+	}
+	data, err := io.ReadAll(io.LimitReader(tr, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes", p, limit)
+	}
+	return data, nil
+}
+
+// readList reads the list strace wrote. The program runs as root when the image does, and could
+// have put a link in the place of the file; only a regular file is read, and anything else is a
+// warning and an empty list.
+func (r *run) readList(p string) ([]byte, error) {
+	st, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		r.warnOnce("the trace file is not a regular file (mode " + st.Mode().String() + "): it was not read")
+		return nil, nil
+	}
+	return os.ReadFile(p)
+}
+
+// noteStopped records that the traced container ended before the time was up: its exit status, the
+// end of its output, and a warning that the program chosen is not necessarily a server.
+func (r *run) noteStopped(ctx context.Context, id string) error {
+	code, err := r.d.Wait(ctx, id)
+	status := strconv.Itoa(code)
+	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("observe: waiting for the traced container: %w", cerr)
+		}
+		code, status = -1, "unknown ("+r.redact(err.Error())+")"
+	}
+	r.stopped, r.exitCode = true, code
+
+	lctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	if out, lerr := r.d.LogsTail(lctx, id, logLines); lerr == nil {
+		text := strings.TrimSpace(r.redact(string(out)))
+		if len(text) > stoppedLogBytes {
+			text = text[len(text)-stoppedLogBytes:]
+			// the cut can fall inside a line: that line is dropped
+			if i := strings.Index(text, "\n"); i >= 0 && i < len(text)-1 {
+				text = text[i+1:]
+			}
+			text = strings.ToValidUTF8(text, "")
+		}
+		r.stoppedLog = text
+	}
+	var first []string
+	for _, line := range strings.Split(r.stoppedLog, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			first = append(first, line)
+		}
+		if len(first) == 3 {
+			break
+		}
+	}
+	text := fmt.Sprintf("the container stopped with status %s before the end of the observation; the program chosen is the last one it started, not necessarily a server", status)
+	if len(first) > 0 {
+		text += ": " + strings.Join(first, " | ")
+	}
+	r.warnOnce(text)
+	return nil
 }
 
 // procRead runs a command in the container, as root, to read /proc. A failure is a warning, since the
@@ -578,7 +925,7 @@ func (r *run) procRead(ctx context.Context, id string, what string, cmd []string
 func (r *run) logTail(id string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	out, err := r.d.Logs(ctx, id)
+	out, err := r.d.LogsTail(ctx, id, logLines)
 	if err != nil {
 		return fmt.Sprintf(" (the output of the container is not available: %s)", r.redact(err.Error()))
 	}
@@ -625,7 +972,7 @@ func (r *run) prepareTracer(ctx context.Context) (dir string, loader string, err
 			return dir, "", fmt.Errorf("observe: fetching %s for strace: %w", trace.StraceImage, err)
 		}
 	}
-	id, err := r.d.Create(ctx, docker.CreateOptions{Image: trace.StraceImage, Cmd: []string{"sh", "-c", tracerScript}})
+	id, err := r.create(ctx, docker.CreateOptions{Image: trace.StraceImage, Cmd: []string{"sh", "-c", tracerScript}})
 	if err != nil {
 		return dir, "", fmt.Errorf("observe: creating the strace container: %w", err)
 	}
@@ -664,9 +1011,9 @@ func (r *run) prepareTracer(ctx context.Context) (dir string, loader string, err
 // watch lets the program run for up to Seconds. A server opens some of what it needs only when it
 // answers, so every port it listens on, or the image says it does, is asked for its front page, and
 // the time is cut short once they have been asked, nothing new has shown up in the list and it has
-// not grown for a while. It returns when the container stops, the time is up, or ctx ends (an
-// error).
-func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []int) error {
+// not grown for a while. It returns when the container stops (stopped is true), the time is up, or
+// ctx ends (an error). A port that could not be asked is a warning that names it.
+func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []int) (stopped bool, err error) {
 	deadline := r.o.now().Add(time.Duration(r.o.Seconds) * time.Second)
 	asked := map[int]bool{}
 	var settled time.Time
@@ -674,18 +1021,32 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 	grew := r.o.now()
 	host := ""
 	hostTried := false
+	// ports that were not asked, and why
+	failed := map[int]string{}
+	defer func() {
+		var left []int
+		for port := range failed {
+			if !asked[port] {
+				left = append(left, port)
+			}
+		}
+		sort.Ints(left)
+		for _, port := range left {
+			r.warnOnce(r.redact(fmt.Sprintf("port %d could not be asked for /: %s", port, failed[port])))
+		}
+	}()
 
 	for r.o.now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("observe: watching the traced container: %w", err)
+			return false, fmt.Errorf("observe: watching the traced container: %w", err)
 		}
 		running, err := r.d.Running(ctx, id)
 		if err != nil {
-			return fmt.Errorf("observe: checking that the traced container runs: %w", err)
+			return false, fmt.Errorf("observe: checking that the traced container runs: %w", err)
 		}
 		if !running {
 			r.vlogf("the traced container stopped\n")
-			return nil
+			return true, nil
 		}
 
 		ports := append(r.listening(ctx, id), exposed...)
@@ -699,10 +1060,12 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 				host = r.address(ctx, id)
 			}
 			if host == "" {
-				break
+				failed[port] = "no address for the container"
+				continue
 			}
 			url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
 			if err := r.o.Probe.Get(ctx, url); err != nil {
+				failed[port] = err.Error()
 				continue
 			}
 			asked[port] = true
@@ -712,18 +1075,18 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 		if fresh {
 			settled = r.o.now().Add(settleFor)
 		}
-		if st, err := os.Stat(filepath.Join(tracerDir, "files")); err == nil && st.Size() != size {
+		if st, err := os.Lstat(filepath.Join(tracerDir, "files")); err == nil && st.Size() != size {
 			size = st.Size()
 			grew = r.o.now()
 		}
 		if len(asked) > 0 && r.o.now().After(settled) && r.o.now().Sub(grew) > quietFor {
-			return nil
+			return false, nil
 		}
 		if err := r.o.sleep(ctx, pollEvery); err != nil {
-			return fmt.Errorf("observe: watching the traced container: %w", err)
+			return false, fmt.Errorf("observe: watching the traced container: %w", err)
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // address is the IP of the container, or "" with a warning when it cannot be found.
@@ -810,6 +1173,9 @@ func (h *hostWriter) Write(p []byte) (int, error) {
 // path (it is not there, the stream broke): the caller makes it a warning. A path that makes no
 // entry at all (a socket) is kindNothing and no error.
 func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (fetched, error) {
+	if !path.IsAbs(p) {
+		return fetched{}, fmt.Errorf("the path %q is not absolute", p)
+	}
 	cctx, cancel := context.WithCancel(ctx)
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
@@ -894,13 +1260,18 @@ func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (f
 // error.
 func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths []string) error {
 	done := map[string]bool{}
+	// the paths that are in the sysroot now; done also holds the ones that Docker could not give
+	carried := map[string]bool{}
 	// the names a path was reached by, through links
 	aliases := map[string][]string{}
 	queue := slices.Clone(paths)
 
 	notCarried := func(p string, why string) {
 		text := r.redact(fmt.Sprintf("not carried %s: %s", p, why))
-		r.warn = append(r.warn, text)
+		r.notCarried++
+		if r.notCarried <= maxWarnedPaths {
+			r.warn = append(r.warn, text)
+		}
 		r.vlogf("%s\n", text)
 	}
 
@@ -921,6 +1292,12 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 			if ctx.Err() != nil {
 				return fmt.Errorf("observe: copying %s out of the container: %w", p, ctx.Err())
 			}
+			if r.created[p] && isNotFound(err) {
+				// a temporary file the program made and removed again
+				r.gone[p] = true
+				r.vlogf("gone at the end: %s\n", p)
+				continue
+			}
 			notCarried(p, err.Error())
 			continue
 		}
@@ -939,6 +1316,11 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 						return fmt.Errorf("observe: carrying the console link %s: %w", name, err)
 					}
 				}
+			case done[link] && !carried[link]:
+				// it was asked for and Docker could not give it
+				for _, name := range names {
+					notCarried(name, "it leads to "+link+", which was not carried")
+				}
 			case done[link]:
 				// it was carried already, under its own name
 				for _, name := range names {
@@ -950,6 +1332,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 				queue = append(queue, link)
 			}
 		case kindDir, kindFile:
+			carried[p] = true
 			for _, name := range aliases[p] {
 				if err := trace.CopyHostFile(sysroot, p, name); err != nil {
 					return fmt.Errorf("observe: copying %s to %s: %w", p, name, err)
@@ -1010,7 +1393,7 @@ func (httpProber) Get(ctx context.Context, url string) error {
 		return nil
 	}
 	if resp, err := client.Do(req); err == nil {
-		io.Copy(io.Discard, resp.Body)
+		io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
 		resp.Body.Close()
 	}
 	return nil

@@ -24,12 +24,14 @@ func TestManifestJSONFull(t *testing.T) {
 		RebootOnExit:    true,
 		DisableArgsCopy: true,
 		RunConfig:       RunConfig{Ports: []string{"80"}, UDPPorts: []string{"53"}},
+
+		ManifestPassthrough: map[string]any{"cwd": "/app"},
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"Program":"/web","Args":["/web","-x"],"Env":{"A":"1"},"RebootOnExit":true,"DisableArgsCopy":true,"RunConfig":{"Ports":["80"],"UDPPorts":["53"]}}`
+	want := `{"Program":"/web","Args":["/web","-x"],"Env":{"A":"1"},"RebootOnExit":true,"DisableArgsCopy":true,"RunConfig":{"Ports":["80"],"UDPPorts":["53"]},"ManifestPassthrough":{"cwd":"/app"}}`
 	if string(b) != want {
 		t.Errorf("manifest = %s, want %s", b, want)
 	}

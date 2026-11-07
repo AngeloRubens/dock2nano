@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -96,7 +97,7 @@ func (g *generator) add(service string, kind plan.Kind, key, msg string) {
 // Generate builds the plan. It returns an error for input that cannot be
 // converted at all: a depends_on cycle, a depends_on on a service that does
 // not exist, a service name that cannot be a package name, a service whose
-// observation found no program, or an architecture that is not known. When no
+// observation found no program, or an architecture that is not amd64 or arm64. When no
 // service could be converted it returns the plan, with the report filled, and
 // an error.
 func Generate(in Input) (*plan.Plan, error) {
@@ -110,6 +111,11 @@ func Generate(in Input) (*plan.Plan, error) {
 		default:
 			return nil, fmt.Errorf("the architecture %s of this machine is not supported; set the architecture to amd64 or arm64", goarch)
 		}
+	}
+	// ops maps every architecture but arm64 to amd64 and would look in the
+	// wrong folder, so whatever the source of the value, it is checked here.
+	if in.Arch != "amd64" && in.Arch != "arm64" {
+		return nil, fmt.Errorf("the architecture %q is not supported; it must be amd64 or arm64", in.Arch)
 	}
 	if in.HostEnv == nil {
 		in.HostEnv = os.LookupEnv
@@ -342,7 +348,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.dependencies(s, skipped)
 	g.healthcheck(s, si)
 	g.networks(s)
-	g.identity(s, obs)
+	g.identity(s, obs, &m)
 	g.unknown(s, si)
 	g.observed(s, obs)
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
@@ -401,13 +407,13 @@ func (g *generator) ports(s *compose.Service, si ServiceInput, m *plan.Manifest,
 			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("the host address %s is not supported; port %s is published on every address", p.HostIP, p.Published))
 		}
 		if p.Published != p.Target {
-			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("remapping a port is not supported by ops: %s is used, the container port is %s", p.Published, p.Target))
+			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("the port mapping %s:%s is not applied: the service is reachable on the container port %s, on the bridge ops0 at %s.service and at the address of the instance; the published port %s does not exist (ops does not forward ports in compose mode)", p.Published, p.Target, p.Target, pkg, p.Published))
 		}
 		g.add(s.Name, plan.Approximated, key, fmt.Sprintf("reachable at %s.service and at the address of the instance on the ops0 bridge; not forwarded to the host", pkg))
 		if proto == "udp" {
-			m.RunConfig.UDPPorts = append(m.RunConfig.UDPPorts, p.Published)
+			m.RunConfig.UDPPorts = append(m.RunConfig.UDPPorts, p.Target)
 		} else {
-			m.RunConfig.Ports = append(m.RunConfig.Ports, p.Published)
+			m.RunConfig.Ports = append(m.RunConfig.Ports, p.Target)
 		}
 	}
 	var exposed []string
@@ -497,12 +503,34 @@ func (g *generator) healthcheck(s *compose.Service, si ServiceInput) {
 	switch h := s.Healthcheck; {
 	case h != nil && h.Disable:
 	case h != nil:
-		g.add(s.Name, plan.Unsupported, "healthcheck", "ops compose runs no healthchecks; "+testSummary(h.Test.Shell, h.Test.Exec))
+		msg := "ops compose runs no healthchecks; " + testSummary(h.Test.Shell, h.Test.Exec)
+		if opts := healthcheckOptions(s); len(opts) > 0 {
+			msg += "; options not converted: " + strings.Join(opts, ", ")
+		}
+		g.add(s.Name, plan.Unsupported, "healthcheck", msg)
 	case si.Stage != nil && si.Stage.Healthcheck != nil && !si.Stage.Healthcheck.None:
 		t := si.Stage.Healthcheck.Test
 		g.add(s.Name, plan.Unsupported, "healthcheck", "the HEALTHCHECK of the Dockerfile is not run by ops compose; "+testSummary(t.Shell, t.Exec))
 	}
 }
+
+// healthcheckOptions are the options of the healthcheck of the service that the compose parser
+// recorded as not modelled, by name (interval, timeout...). They are named in the healthcheck item
+// when there is one, and have no item of their own then.
+func healthcheckOptions(s *compose.Service) []string {
+	if s.Healthcheck == nil || s.Healthcheck.Disable {
+		return nil
+	}
+	var out []string
+	for _, u := range s.Unknown {
+		if name, ok := strings.CutPrefix(u, "healthcheck."); ok && healthcheckOptionNames[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+var healthcheckOptionNames = map[string]bool{"interval": true, "timeout": true, "retries": true, "start_period": true, "start_interval": true}
 
 // testSummary describes a healthcheck test by its first word and the number of
 // words, because the rest may hold a password.
@@ -536,40 +564,75 @@ func (g *generator) networks(s *compose.Service) {
 	}
 }
 
-func (g *generator) identity(s *compose.Service, obs *observe.Result) {
+func (g *generator) identity(s *compose.Service, obs *observe.Result, m *plan.Manifest) {
 	if u, _, _ := strings.Cut(s.User, ":"); u != "" && u != "root" && u != "0" {
 		g.add(s.Name, plan.Unsupported, "user", "user "+s.User+" is not applied; nanos runs the program as one user")
 	}
-	// One item for the directory, whatever its source: nanos starts the
-	// program in "/".
-	var msg string
-	switch {
-	case obs.WorkingDir != "" && obs.WorkingDir != "/":
-		msg = "the program ran in " + obs.WorkingDir + " while observed; nanos starts it in /; relative paths may differ"
-		if s.WorkingDir != "" && s.WorkingDir != obs.WorkingDir {
-			msg += "; working_dir " + s.WorkingDir + " of the file is not applied"
-		}
-	case s.WorkingDir != "" && s.WorkingDir != obs.WorkingDir:
-		msg = "working_dir " + s.WorkingDir + " is not applied; the program was observed in " + obs.WorkingDir + " and nanos starts it in /"
+	// nanos reads "cwd" from the root of the manifest and changes to it before
+	// it starts the program; ops copies ManifestPassthrough into the manifest of
+	// the package. It is written for every service, "/" when the directory is
+	// not known: ops compose reads all manifests into one configuration, and a
+	// map merges, so the cwd of one service would stay set for the next.
+	cwd := obs.WorkingDir
+	if cwd == "" {
+		cwd = "/"
 	}
-	if msg != "" {
-		g.add(s.Name, plan.Unsupported, "working_dir", msg)
+	m.ManifestPassthrough = map[string]any{"cwd": cwd}
+	switch {
+	case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):
+		g.add(s.Name, plan.Unsupported, "working_dir", "working_dir "+s.WorkingDir+" of the file is not applied: the program was observed in "+cwd+", and cwd "+cwd+" is set in the package manifest")
+	case cwd == "/":
+	case s.WorkingDir != "":
+		g.add(s.Name, plan.Converted, "working_dir", "cwd "+cwd+" is set in the package manifest (working_dir of the file, as observed)")
+	default:
+		g.add(s.Name, plan.Approximated, "working_dir", "cwd "+cwd+" is set in the package manifest (the working directory of the image, as observed)")
 	}
 }
 
 // unknown reports what the parsers recorded as not modelled.
 func (g *generator) unknown(s *compose.Service, si ServiceInput) {
+	folded := map[string]bool{}
+	for _, name := range healthcheckOptions(s) {
+		folded["healthcheck."+name] = true
+	}
 	for _, u := range s.Unknown {
+		if folded[u] {
+			continue
+		}
 		g.add(s.Name, plan.Unsupported, u, "this key of the service is not converted")
 	}
 	if si.Stage != nil {
 		for _, u := range si.Stage.Unknown {
+			if what, ok := variableNote(u); ok {
+				g.add(s.Name, plan.Note, "dockerfile", what+" holds a variable; the value in the package is the one observed while the image ran")
+				continue
+			}
 			g.add(s.Name, plan.Unsupported, "dockerfile", "not converted: "+u)
 		}
 	}
 }
 
+// variableNote recognizes the entries of the Dockerfile parser of the form
+// "line N: <instruction> holds a variable (kept as written)" and returns the instruction.
+func variableNote(u string) (string, bool) {
+	rest := u
+	if strings.HasPrefix(rest, "line ") {
+		if _, after, ok := strings.Cut(rest, ": "); ok {
+			rest = after
+		}
+	}
+	what, ok := strings.CutSuffix(rest, " holds a variable (kept as written)")
+	return what, ok && what != ""
+}
+
 func (g *generator) observed(s *compose.Service, obs *observe.Result) {
+	if obs.StoppedEarly {
+		msg := fmt.Sprintf("the container stopped with status %d before the end of the observation, so what was observed is not a running server; the program chosen is the last one it started", obs.ExitCode)
+		if head := firstLines(obs.StoppedLog, 3); head != "" {
+			msg += ". Log: " + head
+		}
+		g.add(s.Name, plan.Unsupported, "observation", msg)
+	}
 	for _, w := range obs.Warnings {
 		g.add(s.Name, plan.Note, "observe", w)
 	}
@@ -579,6 +642,27 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if len(obs.CreatedAtRuntime) > 0 {
 		g.add(s.Name, plan.Observed, "created at runtime", "files the program created while it ran: "+listed(obs.CreatedAtRuntime))
 	}
+	if obs.Vanished > 0 {
+		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
+	}
+	if obs.Children > 0 {
+		g.add(s.Name, plan.Unsupported, "processes", fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children))
+	}
+}
+
+// firstLines returns the first n non-empty lines of s, trimmed, joined by " | ".
+func firstLines(s string, n int) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		out = append(out, l)
+		if len(out) == n {
+			break
+		}
+	}
+	return strings.Join(out, " | ")
 }
 
 func refersToOther(tokens []string, self string, services []plan.Service) bool {

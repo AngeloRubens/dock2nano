@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -28,6 +29,39 @@ type fakeDocker struct {
 	images map[string]*docker.ImageConfig
 
 	buildErr error
+
+	// events is shared with the harness: the order of what happened.
+	events *[]string
+	// netCreated and netRemoved are the names given to the network calls.
+	netCreated []string
+	netRemoved []string
+	netErr     error
+	// removeCtxErr is the error of the context of each NetworkRemove.
+	removeCtxErr []error
+}
+
+func (f *fakeDocker) NetworkCreate(ctx context.Context, name string) error {
+	*f.events = append(*f.events, "net create")
+	f.netCreated = append(f.netCreated, name)
+	return f.netErr
+}
+
+func (f *fakeDocker) NetworkRemove(ctx context.Context, name string) error {
+	*f.events = append(*f.events, "net rm")
+	f.netRemoved = append(f.netRemoved, name)
+	f.removeCtxErr = append(f.removeCtxErr, ctx.Err())
+	return nil
+}
+
+// fakeStopper is a started dependency.
+type fakeStopper struct {
+	h    *harness
+	name string
+}
+
+func (s *fakeStopper) Stop(ctx context.Context) error {
+	s.h.events = append(s.h.events, "stop "+s.name)
+	return nil
 }
 
 func (f *fakeDocker) Build(ctx context.Context, o docker.BuildOptions) error {
@@ -55,6 +89,8 @@ func (f *fakeDocker) Inspect(ctx context.Context, image string) (*docker.ImageCo
 	return &docker.ImageConfig{}, nil
 }
 
+var netName = regexp.MustCompile(`^dock2nano-[0-9a-f]{8}$`)
+
 type harness struct {
 	t *testing.T
 
@@ -81,6 +117,14 @@ type harness struct {
 	removed []string
 
 	env map[string]string
+
+	// events is the order of the network calls, starts, stops and observations.
+	events []string
+	// started are the options of each Start; startErr fails the start of an image.
+	started  []observe.StartOptions
+	startErr map[string]error
+	// onObserve runs at the start of each observation, with its options.
+	onObserve func(o observe.Options) error
 }
 
 func newHarness(t *testing.T) *harness {
@@ -88,14 +132,30 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{t: t, dir: t.TempDir(), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
 	h.dock = &fakeDocker{have: map[string]bool{}, images: map[string]*docker.ImageConfig{}}
 	h.obsErr = map[string]error{}
+	h.startErr = map[string]error{}
+	h.dock.events = &h.events
 	h.env = map[string]string{}
 	h.app = &App{Docker: h.dock, Stdout: h.stdout, Stderr: h.stderr}
 	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
 		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		if h.onObserve != nil {
+			if err := h.onObserve(o); err != nil {
+				return nil, err
+			}
+		}
 		if err := h.obsErr[o.Image]; err != nil {
 			return nil, err
 		}
 		return &observe.Result{Sysroot: "/sysroots/" + o.Image, Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}}, nil
+	}
+	h.app.Start = func(ctx context.Context, o observe.StartOptions) (Stopper, error) {
+		h.started = append(h.started, o)
+		if err := h.startErr[o.Image]; err != nil {
+			return nil, err
+		}
+		h.events = append(h.events, "start "+o.Image)
+		return &fakeStopper{h: h, name: o.Image}, nil
 	}
 	h.app.Generate = func(in gen.Input) (*plan.Plan, error) {
 		h.genIn = append(h.genIn, in)
@@ -433,6 +493,7 @@ const optionsCompose = `services:
       D: ${SET_LATER}
     env_file: web.env
     working_dir: /srv/app
+    user: "1000:1000"
     volumes:
       - ./conf:/etc/conf:ro
       - ./rw:/rw
@@ -468,8 +529,12 @@ func TestObserveOptions(t *testing.T) {
 		t.Errorf("the log is not prefixed with the service: %q", h.stderr)
 	}
 	got.Log = nil
+	if !netName.MatchString(got.Network) || !reflect.DeepEqual(got.NetworkAliases, []string{"web"}) {
+		t.Errorf("network %q, aliases %v", got.Network, got.NetworkAliases)
+	}
+	got.Network, got.NetworkAliases = "", nil
 	ep := []string{"/entry.sh"}
-	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app"}
+	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app", User: "1000:1000"}
 	want.Env = []string{"A=1", "B=hb", "C=c", "D=sl", "E=from-file", "Q=quoted", "R=raw", "S=keep # this"}
 	want.Binds = []string{filepath.Join(h.dir, "conf") + ":/etc/conf:ro", filepath.Join(h.dir, "rw") + ":/rw"}
 	if !reflect.DeepEqual(got, want) {
@@ -788,7 +853,7 @@ func TestOutputAndNextSteps(t *testing.T) {
 	if got := h.wrote[0].Services[0].PackageName; got != pkg {
 		t.Fatalf("package name %q, want %q", got, pkg)
 	}
-	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/" + pkg + "\n  " + composePath + "\n\nNext steps:\n  ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  ops compose up -f " + composePath + "\n"
+	want := gen.Render(h.wrote[0].Report) + "\nWritten:\n  /w/" + pkg + "\n  " + composePath + "\n\nNext steps:\n  OPS_HOME=/home/u ops pkg get eyberg/ops-dns:0.0.1    (once, if you do not have it yet)\n  sudo env OPS_HOME=/home/u PATH=\"$PATH\" ops compose up -f " + composePath + "\n"
 	if h.stdout.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", h.stdout, want)
 	}
@@ -801,7 +866,7 @@ func TestOutputAndNextSteps(t *testing.T) {
 	h.dock.have["w"] = true
 	h.env["OPS_HOME"] = "/from/env"
 	h.mustRun(0, "convert")
-	if h.wopts[0].OpsHome != "/from/env" || strings.Contains(h.stdout.String(), "OPS_HOME=") {
+	if h.wopts[0].OpsHome != "/from/env" || !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME=/from/env PATH=\"$PATH\" ops compose up -f ") {
 		t.Errorf("write options %+v, stdout:\n%s", h.wopts, h.stdout)
 	}
 
@@ -809,11 +874,84 @@ func TestOutputAndNextSteps(t *testing.T) {
 	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert", "-o", "/abs/dir", "--ops-home", "/my ops")
-	if !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops compose up -f /abs/dir/compose.yaml\n") || !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops pkg get eyberg/ops-dns:0.0.1") {
+	if !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME='/my ops' PATH=\"$PATH\" ops compose up -f /abs/dir/compose.yaml\n") || !strings.Contains(h.stdout.String(), "  OPS_HOME='/my ops' ops pkg get eyberg/ops-dns:0.0.1") {
 		t.Errorf("stdout:\n%s", h.stdout)
 	}
 	if h.wopts[0].ComposePath != "/abs/dir/compose.yaml" || h.wopts[0].OpsHome != "/my ops" {
 		t.Errorf("write options: %+v", h.wopts)
+	}
+}
+
+func TestOpsHomeIsAbsolute(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert", "--ops-home", "rel/home")
+	abs := filepath.Join(h.dir, "rel", "home")
+	if h.wopts[0].OpsHome != abs {
+		t.Errorf("OpsHome = %q, want %q", h.wopts[0].OpsHome, abs)
+	}
+	if !strings.Contains(h.stdout.String(), "  OPS_HOME="+abs+" ops pkg get ") || !strings.Contains(h.stdout.String(), "  sudo env OPS_HOME="+abs+" PATH=\"$PATH\" ops compose up -f ") {
+		t.Errorf("stdout:\n%s", h.stdout)
+	}
+
+	h = newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.env["OPS_HOME"] = "from/env"
+	h.mustRun(0, "convert")
+	if want := filepath.Join(h.dir, "from", "env"); h.wopts[0].OpsHome != want {
+		t.Errorf("OpsHome = %q, want %q", h.wopts[0].OpsHome, want)
+	}
+}
+
+func TestRelativeCurrentDirectoryIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.app.Getwd = func() (string, error) { return "rel/dir", nil }
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "not an absolute path") || len(h.observed) != 0 {
+		t.Errorf("stderr %q, observed %d", h.stderr, len(h.observed))
+	}
+}
+
+func TestBindWithRelativeTargetIsNotPassed(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    volumes:\n      - type: bind\n        source: ./ok\n        target: rel/target\n")
+	if err := os.MkdirAll(filepath.Join(h.dir, "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert")
+	if len(h.observed[0].Binds) != 0 || !strings.Contains(h.stderr.String(), "needs absolute paths") {
+		t.Errorf("binds %v, stderr %q", h.observed[0].Binds, h.stderr)
+	}
+}
+
+func TestPackageArch(t *testing.T) {
+	ok := []struct{ arch, variant, want string }{
+		{"amd64", "", "amd64"}, {"x86_64", "", "amd64"}, {"arm64", "", "arm64"}, {"arm64", "v8", "arm64"}, {"aarch64", "", "arm64"},
+	}
+	for _, tt := range ok {
+		if got, err := packageArch(tt.arch, tt.variant); err != nil || got != tt.want {
+			t.Errorf("packageArch(%q, %q) = %q, %v; want %q", tt.arch, tt.variant, got, err, tt.want)
+		}
+	}
+	for _, tt := range []struct{ arch, variant string }{{"arm", "v7"}, {"arm", ""}, {"386", ""}, {"riscv64", ""}, {"s390x", ""}} {
+		if _, err := packageArch(tt.arch, tt.variant); err == nil || !strings.Contains(err.Error(), tt.arch) {
+			t.Errorf("packageArch(%q, %q): err = %v", tt.arch, tt.variant, err)
+		}
+	}
+}
+
+func TestUnsupportedImageArchitectureIsAnError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.dock.images["w"] = &docker.ImageConfig{Architecture: "arm", Variant: "v7"}
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "arm/v7") || len(h.wrote) != 0 {
+		t.Errorf("stderr %q", h.stderr)
 	}
 }
 
@@ -1014,5 +1152,235 @@ func TestEmptyOutputFlagIsAnError(t *testing.T) {
 	}
 	if len(h.dock.calls) != 0 || len(h.observed) != 0 || len(h.wrote) != 0 {
 		t.Errorf("something ran: %v", h.dock.calls)
+	}
+}
+
+const depsCompose = `services:
+  cache:
+    image: c
+  db:
+    image: d
+    environment:
+      DB_PASSWORD: s3cret-value
+    command: ["mysqld", "--port=3306"]
+    working_dir: /var/lib/db
+    user: "999"
+    depends_on: [cache]
+  web:
+    image: w
+    depends_on: [db]
+  api:
+    image: a
+    depends_on: [db]
+`
+
+func (h *harness) haveAll(images ...string) {
+	for _, i := range images {
+		h.dock.have[i] = true
+	}
+}
+
+func TestNetworkCreatedOnceAndRemoved(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  one:\n    image: a\n  two:\n    image: b\n")
+	h.haveAll("a", "b")
+	h.mustRun(0, "convert")
+	if len(h.dock.netCreated) != 1 || !netName.MatchString(h.dock.netCreated[0]) {
+		t.Fatalf("networks created: %v", h.dock.netCreated)
+	}
+	name := h.dock.netCreated[0]
+	if !reflect.DeepEqual(h.dock.netRemoved, []string{name}) {
+		t.Errorf("networks removed: %v", h.dock.netRemoved)
+	}
+	if want := []string{"net create", "observe a", "observe b", "net rm"}; !reflect.DeepEqual(h.events, want) {
+		t.Errorf("events %v, want %v", h.events, want)
+	}
+	// a service without depends_on gets the network and its own name as an alias
+	for i, svc := range []string{"one", "two"} {
+		if h.observed[i].Network != name || !reflect.DeepEqual(h.observed[i].NetworkAliases, []string{svc}) {
+			t.Errorf("%s: network %q aliases %v", svc, h.observed[i].Network, h.observed[i].NetworkAliases)
+		}
+	}
+}
+
+func TestNoNetworkWhenNothingIsConverted(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  bare:\n    command: x\n")
+	// no service can be converted: the report is printed and the status is 1
+	h.mustRun(1, "convert")
+	if len(h.dock.netCreated) != 0 || len(h.dock.netRemoved) != 0 {
+		t.Errorf("network calls: %v %v", h.dock.netCreated, h.dock.netRemoved)
+	}
+}
+
+func TestNetworkCreateFailureStopsTheRun(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  one:\n    image: a\n")
+	h.haveAll("a")
+	h.dock.netErr = errors.New("no docker")
+	h.mustRun(1, "convert")
+	if !strings.Contains(h.stderr.String(), "no docker") || len(h.observed) != 0 || len(h.dock.netRemoved) != 0 {
+		t.Errorf("stderr %q, observed %v, removed %v", h.stderr, h.names(), h.dock.netRemoved)
+	}
+}
+
+func TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.mustRun(0, "convert")
+	want := []string{
+		"net create", "observe c", "start c", "observe d", "start d", "observe w", "observe a",
+		"stop d", "stop c", "net rm",
+	}
+	if !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events %v\nwant   %v", h.events, want)
+	}
+	net := h.dock.netCreated[0]
+	// cache has no dependency of its own and db is observed with cache running
+	if len(h.started) != 2 || h.started[0].Image != "c" || h.started[1].Image != "d" {
+		t.Fatalf("started: %+v", h.started)
+	}
+	for i, svc := range []string{"cache", "db"} {
+		so := h.started[i]
+		if so.Network != net || !reflect.DeepEqual(so.NetworkAliases, []string{svc}) {
+			t.Errorf("%s: network %q aliases %v", svc, so.Network, so.NetworkAliases)
+		}
+	}
+	// the options of the start are those of the observation of the same service
+	db := h.observed[1]
+	so := h.started[1]
+	if db.Image != "d" || !reflect.DeepEqual(db.Entrypoint, so.Entrypoint) || so.Entrypoint == nil || !reflect.DeepEqual(db.Cmd, so.Cmd) ||
+		!reflect.DeepEqual(db.Env, so.Env) || db.WorkingDir != so.WorkingDir || db.User != so.User || !reflect.DeepEqual(db.Binds, so.Binds) {
+		t.Errorf("observation %+v\nstart       %+v", db, so)
+	}
+	if !reflect.DeepEqual(so.Cmd, []string{"mysqld", "--port=3306"}) || !reflect.DeepEqual(so.Env, []string{"DB_PASSWORD=s3cret-value"}) || so.WorkingDir != "/var/lib/db" || so.User != "999" {
+		t.Errorf("start options %+v", so)
+	}
+	// web is observed with the network and under its own name
+	web := h.observed[2]
+	if web.Network != net || !reflect.DeepEqual(web.NetworkAliases, []string{"web"}) {
+		t.Errorf("web: network %q aliases %v", web.Network, web.NetworkAliases)
+	}
+	if strings.Contains(h.stderr.String(), "s3cret-value") {
+		t.Errorf("a secret was printed: %q", h.stderr)
+	}
+	if strings.Contains(h.stdout.String(), "was not started") {
+		t.Errorf("the report has a note about a dependency:\n%s", h.stdout)
+	}
+}
+
+func TestDependencyStartFailureIsANote(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.startErr["d"] = errors.New("exited at once")
+	h.mustRun(0, "convert")
+	if !reflect.DeepEqual(h.names(), []string{"c", "d", "w", "a"}) {
+		t.Fatalf("observed %v", h.names())
+	}
+	// not tried again for the second dependent
+	n := 0
+	for _, s := range h.started {
+		if s.Image == "d" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("db was started %d times", n)
+	}
+	for _, svc := range []string{"web", "api"} {
+		warns := h.genIn[0].Services[svc].Observed.Warnings
+		if len(warns) != 1 || !strings.Contains(warns[0], "the service db was not started") || !strings.Contains(warns[0], "exited at once") || !strings.Contains(warns[0], svc+" was observed without it") {
+			t.Errorf("%s: warnings %q", svc, warns)
+		}
+	}
+	if !strings.Contains(h.stdout.String(), "the service db was not started") {
+		t.Errorf("the report has no note:\n%s", h.stdout)
+	}
+	if !strings.Contains(h.stderr.String(), "web: warning: the service db was not started") {
+		t.Errorf("no warning on stderr: %q", h.stderr)
+	}
+	if want := []string{"stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-2:], want) {
+		t.Errorf("events %v", h.events)
+	}
+}
+
+func TestDependencyNotConvertedIsANote(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  db:\n    image: d\n    profiles: [debug]\n  web:\n    image: w\n    depends_on: [db]\n")
+	h.haveAll("w")
+	h.mustRun(0, "convert")
+	if len(h.started) != 0 || !reflect.DeepEqual(h.names(), []string{"w"}) {
+		t.Fatalf("started %v, observed %v", h.started, h.names())
+	}
+	warns := h.genIn[0].Services["web"].Observed.Warnings
+	if len(warns) != 1 || !strings.Contains(warns[0], "the service db was not started") || !strings.Contains(warns[0], "has profiles (debug)") {
+		t.Errorf("warnings %q", warns)
+	}
+}
+
+func TestNetworkAndDependenciesAreCleanedUpOnError(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.obsErr["w"] = errors.New("boom")
+	h.mustRun(1, "convert")
+	if want := []string{"stop d", "stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-3:], want) {
+		t.Errorf("events %v", h.events)
+	}
+	if len(h.dock.netRemoved) != 1 {
+		t.Errorf("networks removed: %v", h.dock.netRemoved)
+	}
+}
+
+func TestNetworkAndDependenciesAreCleanedUpOnCancel(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.onObserve = func(o observe.Options) error {
+		if o.Image == "w" {
+			cancel()
+			return ctx.Err()
+		}
+		return nil
+	}
+	if code := h.app.Run(ctx, []string{"convert"}); code != 1 {
+		t.Fatalf("exit status %d", code)
+	}
+	if want := []string{"stop d", "stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-3:], want) {
+		t.Errorf("events %v", h.events)
+	}
+	// the network is removed with a context that is not the cancelled one
+	if len(h.dock.removeCtxErr) != 1 || h.dock.removeCtxErr[0] != nil {
+		t.Errorf("context of the removal: %v", h.dock.removeCtxErr)
+	}
+}
+
+func TestCancelWhileStartingADependency(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.app.Start = func(c context.Context, o observe.StartOptions) (Stopper, error) {
+		if o.Image == "d" {
+			cancel()
+			return nil, c.Err()
+		}
+		h.events = append(h.events, "start "+o.Image)
+		return &fakeStopper{h: h, name: o.Image}, nil
+	}
+	if code := h.app.Run(ctx, []string{"convert"}); code != 1 {
+		t.Fatalf("exit status %d", code)
+	}
+	// the start that was cut short is an error of the run, not a note
+	if len(h.observed) != 2 || strings.Contains(h.stderr.String(), "was not started") {
+		t.Errorf("observed %v, stderr %q", h.names(), h.stderr)
+	}
+	if want := []string{"stop c", "net rm"}; !reflect.DeepEqual(h.events[len(h.events)-2:], want) {
+		t.Errorf("events %v", h.events)
 	}
 }

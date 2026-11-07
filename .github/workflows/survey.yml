@@ -1,0 +1,57 @@
+name: survey
+# Converts a list of public images, one per job, and keeps the report of each.
+# It runs on a push whose head commit message contains [survey], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[survey]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - nginx:1.27-alpine
+          - httpd:2.4-alpine
+          - caddy:2-alpine
+          - haproxy:3.0-alpine
+          - redis:7-alpine
+          - memcached:1.6-alpine
+          - mariadb:11
+          - rabbitmq:4-alpine
+          - registry:2
+          - python:3.12-alpine
+          - node:22-alpine
+          - eclipse-temurin:21-jre-alpine
+          - traefik:v3.1
+          - grafana/grafana:11.2.0
+          - prom/prometheus:v2.54.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: convert
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          go build -o /tmp/d2n .
+          mkdir -p /tmp/work /tmp/out
+          printf 'name: survey\nservices:\n  svc:\n    image: %s\n' "$IMAGE" > /tmp/work/docker-compose.yml
+          set +e
+          /tmp/d2n convert -f /tmp/work/docker-compose.yml --ops-home /tmp/home -o /tmp/out --pull --seconds 25 > /tmp/out/report.txt 2> /tmp/out/stderr.txt
+          echo "exit status $?" | tee /tmp/out/status.txt
+          echo "== $IMAGE"; cat /tmp/out/status.txt; head -c 6000 /tmp/out/report.txt; echo; tail -n 20 /tmp/out/stderr.txt | cut -c1-300
+          {
+            echo "### $IMAGE"
+            echo '```'
+            cat /tmp/out/status.txt
+            head -c 6000 /tmp/out/report.txt
+            echo '```'
+            du -sh /tmp/home/.ops/local_packages/*/survey_svc 2>/dev/null | sed 's/^/package size: /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q "exit status 0" /tmp/out/status.txt

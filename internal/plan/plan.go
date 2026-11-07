@@ -66,6 +66,13 @@ type Manifest struct {
 	DisableArgsCopy bool `json:",omitempty"`
 
 	RunConfig RunConfig `json:",omitempty"`
+
+	// ManifestPassthrough is copied by ops into the manifest of the package, at
+	// its root. nanos reads "cwd" from there and changes to that directory
+	// before it starts the program. The generator writes it for every service,
+	// because ops compose merges maps when it reads all the manifests into one
+	// configuration.
+	ManifestPassthrough map[string]any `json:",omitempty"`
 }
 
 // RunConfig is the part of types.RunConfig the converter sets.

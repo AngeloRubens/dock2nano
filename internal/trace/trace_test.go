@@ -1041,3 +1041,16 @@ func TestInSysrootStopsAtTheFortyFirstLink(t *testing.T) {
 		t.Errorf("InSysroot through 41 links = %q, want /l41 (the link it was about to follow)", got)
 	}
 }
+
+func TestWhereIsSkipsPathEntriesThatClimbOut(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	writeFile(t, base, "outside", []byte("x"))
+	writeFile(t, root, "bin/inside", []byte("x"))
+	if got := WhereIs(root, "outside", []string{"PATH=../"}); got != "outside" {
+		t.Errorf("WhereIs = %q, want outside", got)
+	}
+	if got := WhereIs(root, "inside", []string{"PATH=bin/../../root/bin:/bin"}); got != "/bin/inside" {
+		t.Errorf("WhereIs = %q, want /bin/inside", got)
+	}
+}

@@ -221,8 +221,9 @@ func TestIntegrationBuildFailureRedactsSecret(t *testing.T) {
 	if strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("the error shows the build argument value: %v", err)
 	}
-	if !strings.Contains(err.Error(), "SECRET=***") {
-		t.Errorf("the error does not show the redacted argument: %v", err)
+	// the value is not on the command line: only the name is
+	if !strings.Contains(err.Error(), "--build-arg SECRET") {
+		t.Errorf("the error does not show the name of the argument: %v", err)
 	}
 	var ee *docker.ExitError
 	if !errors.As(err, &ee) {

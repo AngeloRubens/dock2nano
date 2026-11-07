@@ -68,7 +68,7 @@ func TestBuildArgs(t *testing.T) {
 		"K9": "9", "K3": "3", "K7": "7", "K1": "a b", "K5": "", "K0": "0",
 		"K8": "8", "K2": "2", "K6": "6", "K4": "4", "KA": "10", "KB": "11",
 	}
-	got := buildArgs(BuildOptions{
+	got, env, err := buildArgs(BuildOptions{
 		Context:    "./app",
 		Dockerfile: "docker/Dockerfile.prod",
 		Target:     "runtime",
@@ -80,20 +80,35 @@ func TestBuildArgs(t *testing.T) {
 	want := []string{
 		"build", "--file", "docker/Dockerfile.prod", "--target", "runtime",
 		"--platform", "linux/amd64", "--tag", "app:latest", "--quiet",
-		"--build-arg", "K0=0", "--build-arg", "K1=a b", "--build-arg", "K2=2",
-		"--build-arg", "K3=3", "--build-arg", "K4=4", "--build-arg", "K5=",
-		"--build-arg", "K6=6", "--build-arg", "K7=7", "--build-arg", "K8=8",
-		"--build-arg", "K9=9", "--build-arg", "KA=10", "--build-arg", "KB=11",
+		"--build-arg", "K0", "--build-arg", "K1", "--build-arg", "K2",
+		"--build-arg", "K3", "--build-arg", "K4", "--build-arg", "K5",
+		"--build-arg", "K6", "--build-arg", "K7", "--build-arg", "K8",
+		"--build-arg", "K9", "--build-arg", "KA", "--build-arg", "KB",
 		"--", "./app",
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
 	}
-	if got := buildArgs(BuildOptions{Context: "."}); !reflect.DeepEqual(got, []string{"build", "--", "."}) {
-		t.Fatalf("minimal argv = %q", got)
+	wantEnv := []string{"K0=0", "K1=a b", "K2=2", "K3=3", "K4=4", "K5=", "K6=6", "K7=7", "K8=8", "K9=9", "KA=10", "KB=11"}
+	if !reflect.DeepEqual(env, wantEnv) {
+		t.Fatalf("env = %q, want %q", env, wantEnv)
 	}
-	if got := buildArgs(BuildOptions{Context: "-evil"}); !reflect.DeepEqual(got, []string{"build", "--", "-evil"}) {
+	if got, env, err := buildArgs(BuildOptions{Context: "."}); err != nil || env != nil || !reflect.DeepEqual(got, []string{"build", "--", "."}) {
+		t.Fatalf("minimal argv = %q, env %q, err %v", got, env, err)
+	}
+	if got, _, _ := buildArgs(BuildOptions{Context: "-evil"}); !reflect.DeepEqual(got, []string{"build", "--", "-evil"}) {
 		t.Fatalf("option-like context argv = %q", got)
+	}
+}
+
+func TestBuildArgsBadName(t *testing.T) {
+	for _, k := range []string{"A=B", "A\x00B", ""} {
+		if _, _, err := buildArgs(BuildOptions{Context: ".", Args: map[string]string{k: "v"}}); err == nil {
+			t.Errorf("build argument name %q accepted", k)
+		}
 	}
 }
 
@@ -269,7 +284,7 @@ func TestInspectErrors(t *testing.T) {
 
 func TestCreateArgsFull(t *testing.T) {
 	ep := []string{"/usr/bin/strace", "-f", "-o", "/trace/out"}
-	got := createArgs(CreateOptions{
+	got, env, err := createArgs(CreateOptions{
 		Image:       "app:1",
 		Name:        "probe",
 		Entrypoint:  &ep,
@@ -277,6 +292,7 @@ func TestCreateArgsFull(t *testing.T) {
 		Env:         []string{"B=2", "A=1"},
 		WorkingDir:  "/srv",
 		User:        "root",
+		Labels:      []string{"k=v", "tool=x"},
 		Binds:       []string{"/tmp/t:/trace", "/tmp/u:/u:ro"},
 		CapAdd:      []string{"SYS_PTRACE"},
 		SecurityOpt: []string{"seccomp=unconfined"},
@@ -286,32 +302,39 @@ func TestCreateArgsFull(t *testing.T) {
 	})
 	want := []string{
 		"create", "--name", "probe", "--entrypoint", "/usr/bin/strace",
-		"--user", "root", "--workdir", "/srv", "--env", "B=2", "--env", "A=1",
+		"--user", "root", "--workdir", "/srv", "--env", "B", "--env", "A",
+		"--label", "k=v", "--label", "tool=x",
 		"--volume", "/tmp/t:/trace", "--volume", "/tmp/u:/u:ro",
 		"--cap-add", "SYS_PTRACE", "--security-opt", "seccomp=unconfined",
 		"--publish", "8080:80", "--network", "net1", "--rm",
 		"app:1", "-f", "-o", "/trace/out", "/app", "--serve",
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if want := []string{"B=2", "A=1"}; !reflect.DeepEqual(env, want) {
+		t.Fatalf("env = %q, want %q", env, want)
 	}
 }
 
 func TestCreateArgsEntrypoint(t *testing.T) {
 	// nil keeps the entrypoint of the image: no flag at all.
-	got := createArgs(CreateOptions{Image: "img", Cmd: []string{"sh"}})
+	got, _, _ := createArgs(CreateOptions{Image: "img", Cmd: []string{"sh"}})
 	if want := []string{"create", "img", "sh"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("nil entrypoint: argv = %q, want %q", got, want)
 	}
 	// a pointer to an empty slice clears it.
 	empty := []string{}
-	got = createArgs(CreateOptions{Image: "img", Entrypoint: &empty, Cmd: []string{"sh"}})
+	got, _, _ = createArgs(CreateOptions{Image: "img", Entrypoint: &empty, Cmd: []string{"sh"}})
 	if want := []string{"create", "--entrypoint", "", "img", "sh"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("empty entrypoint: argv = %q, want %q", got, want)
 	}
 	// a pointer to a nil slice is also a clear, not a keep.
 	var nilSlice []string
-	got = createArgs(CreateOptions{Image: "img", Entrypoint: &nilSlice})
+	got, _, _ = createArgs(CreateOptions{Image: "img", Entrypoint: &nilSlice})
 	if want := []string{"create", "--entrypoint", "", "img"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pointer to nil slice: argv = %q, want %q", got, want)
 	}
@@ -336,6 +359,108 @@ func TestCreate(t *testing.T) {
 	_, err = c.Create(context.Background(), CreateOptions{Image: "img"})
 	if err == nil || !strings.Contains(err.Error(), "docker create") || !strings.Contains(err.Error(), "Unable to find image") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// envFake is a fake that is also an EnvRunner.
+type envFake struct {
+	fake
+	envs [][]string
+}
+
+func (e *envFake) RunEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, []byte, error) {
+	e.envs = append(e.envs, append([]string(nil), env...))
+	return e.fake.Run(ctx, stdin, args...)
+}
+
+func TestCreateSecretsStayOffTheCommandLine(t *testing.T) {
+	f := &envFake{fake: fake{replies: []reply{{stdout: "cid\n"}}}}
+	c := New(f)
+	if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{"DB_PASSWORD=hunter2", "A=1", "A=2"}}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, &f.fake, "create", "--env", "DB_PASSWORD", "--env", "A", "--env", "A", "img")
+	for _, a := range f.calls[0] {
+		if strings.Contains(a, "hunter2") {
+			t.Errorf("a secret is in the argument %q", a)
+		}
+	}
+	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"DB_PASSWORD=hunter2", "A=2"}) {
+		t.Errorf("env passed = %q", f.envs)
+	}
+}
+
+func TestBuildSecretsStayOffTheCommandLine(t *testing.T) {
+	f := &envFake{}
+	c := New(f)
+	if err := c.Build(context.Background(), BuildOptions{Context: ".", Args: map[string]string{"TOKEN": "s3cr3t-value"}}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, &f.fake, "build", "--build-arg", "TOKEN", "--", ".")
+	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"TOKEN=s3cr3t-value"}) {
+		t.Errorf("env passed = %q", f.envs)
+	}
+}
+
+// A Runner that cannot pass an environment is refused for a call that has
+// values: the values are not put on the command line instead.
+func TestEnvNeedsEnvRunner(t *testing.T) {
+	c, f := newFake()
+	_, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{"A=1"}})
+	if err == nil || !strings.Contains(err.Error(), "environment") {
+		t.Errorf("create: err = %v", err)
+	}
+	err = c.Build(context.Background(), BuildOptions{Context: ".", Args: map[string]string{"A": "1"}})
+	if err == nil || !strings.Contains(err.Error(), "environment") {
+		t.Errorf("build: err = %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("docker was called: %v", f.calls)
+	}
+	// Without values the plain Runner is fine.
+	if _, err := c.Create(context.Background(), CreateOptions{Image: "img"}); err != nil && !strings.Contains(err.Error(), "no container id") {
+		t.Errorf("create without env: %v", err)
+	}
+}
+
+func TestCreateBadEnvName(t *testing.T) {
+	c := New(&envFake{})
+	for _, e := range []string{"=x", "A\x00B=1", "A=b\x00c"} {
+		if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: []string{e}}); err == nil {
+			t.Errorf("env entry %q accepted", e)
+		}
+	}
+}
+
+func TestBuildErrorHidesArgumentValues(t *testing.T) {
+	stderr := "Step 3: RUN curl -H token=hunter-two-secret x; short=abc"
+	c := New(&envFake{fake: fake{replies: []reply{{stderr: stderr, err: &ExitError{Code: 1, Stderr: stderr}}}}})
+	err := c.Build(context.Background(), BuildOptions{Context: ".", Args: map[string]string{"T": "hunter-two-secret", "S": "abc"}})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if strings.Contains(err.Error(), "hunter-two-secret") {
+		t.Errorf("secret in error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "token=***") || !strings.Contains(err.Error(), "short=abc") {
+		t.Errorf("error = %v", err)
+	}
+	// An error that is not an ExitError carries the stderr tail.
+	c = New(&envFake{fake: fake{replies: []reply{{stderr: "oops hunter-two-secret", err: errors.New("boom")}}}})
+	err = c.Build(context.Background(), BuildOptions{Context: ".", Args: map[string]string{"T": "hunter-two-secret"}})
+	if err == nil || strings.Contains(err.Error(), "hunter-two-secret") || !strings.Contains(err.Error(), "oops ***") {
+		t.Errorf("plain error = %v", err)
+	}
+}
+
+func TestExecRunnerRunEnv(t *testing.T) {
+	r := NewExecRunner("sh").(EnvRunner)
+	out, _, err := r.RunEnv(context.Background(), []string{"D2N_SECRET=xyz"}, nil, "-c", "echo $D2N_SECRET; command -v sh >/dev/null && echo path-ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "xyz\npath-ok\n" {
+		t.Errorf("out = %q (the variable is passed and the environment of the process is kept)", out)
 	}
 }
 
@@ -1156,5 +1281,72 @@ func TestIPAddressNetworkOrder(t *testing.T) {
 				t.Fatalf("%s (try %d): got %q, %v, want %q", name, i, got, err, tt.want)
 			}
 		}
+	}
+}
+
+func TestCreateArgsNetworkAliases(t *testing.T) {
+	got, _, err := createArgs(CreateOptions{Image: "img", Network: "net1", NetworkAliases: []string{"db", "mysql"}, Cmd: []string{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"create", "--network", "net1", "--network-alias", "db", "--network-alias", "mysql", "img", "x"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
+
+func TestCreateArgsNetworkGuards(t *testing.T) {
+	tests := []struct {
+		name string
+		o    CreateOptions
+	}{
+		{"aliases without network", CreateOptions{Image: "img", NetworkAliases: []string{"db"}}},
+		{"option-like network", CreateOptions{Image: "img", Network: "--privileged"}},
+		{"option-like alias", CreateOptions{Image: "img", Network: "n", NetworkAliases: []string{"-x"}}},
+		{"empty alias", CreateOptions{Image: "img", Network: "n", NetworkAliases: []string{""}}},
+	}
+	for _, tt := range tests {
+		if _, _, err := createArgs(tt.o); err == nil {
+			t.Errorf("%s: accepted", tt.name)
+		}
+	}
+}
+
+func TestNetworkCommands(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake()
+	if err := c.NetworkCreate(ctx, "dock2nano-0a1b2c3d"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "network", "create", "dock2nano-0a1b2c3d")
+	c, f = newFake()
+	if err := c.NetworkRemove(ctx, "dock2nano-0a1b2c3d"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "network", "rm", "dock2nano-0a1b2c3d")
+}
+
+func TestNetworkCommandsRefuseBadNames(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake()
+	for _, n := range []string{"", "-x", "--driver=bridge"} {
+		if err := c.NetworkCreate(ctx, n); err == nil {
+			t.Errorf("create %q accepted", n)
+		}
+		if err := c.NetworkRemove(ctx, n); err == nil {
+			t.Errorf("rm %q accepted", n)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("docker was called: %v", f.calls)
+	}
+}
+
+func TestNetworkCreateFailureIsWrapped(t *testing.T) {
+	cause := errors.New("exists")
+	c, _ := newFake(reply{err: cause, stderr: "network with name n already exists"})
+	err := c.NetworkCreate(context.Background(), "n")
+	if !errors.Is(err, cause) || !strings.HasPrefix(err.Error(), "docker network create: ") {
+		t.Fatalf("err = %v", err)
 	}
 }

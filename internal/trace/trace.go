@@ -672,8 +672,9 @@ func CarryInterpreters(sysroot string, executed []string, carry func(interpreter
 }
 
 // WhereIs finds a program the way a shell would, among the files already carried. A name with a
-// slash in it ("/srv/run", "./srv", "bin/x") is not searched for on the PATH; it is given back as it is, and so is one that is nowhere on the path. The PATH is the last
-// PATH= entry of env, or a default one.
+// slash in it ("/srv/run", "./srv", "bin/x") is not searched for on the PATH; it is given back as it
+// is, and so is one that is nowhere on the path. The PATH is the last PATH= entry of env, or a
+// default one. An entry with a ".." element is skipped.
 func WhereIs(sysroot string, program string, env []string) string {
 	if strings.Contains(program, "/") {
 		return program
@@ -685,6 +686,10 @@ func WhereIs(sysroot string, program string, env []string) string {
 		}
 	}
 	for _, dir := range strings.Split(searched, ":") {
+		// a relative entry that climbs out (PATH=../..) would look outside the sysroot
+		if slices.Contains(strings.Split(dir, "/"), "..") {
+			continue
+		}
 		candidate := path.Join(dir, program)
 		if _, err := os.Stat(filepath.Join(sysroot, candidate)); err == nil {
 			return candidate

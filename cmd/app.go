@@ -70,6 +70,14 @@ type Docker interface {
 	Pull(ctx context.Context, image string) error
 	HasImage(ctx context.Context, image string) (bool, error)
 	Inspect(ctx context.Context, image string) (*docker.ImageConfig, error)
+	NetworkCreate(ctx context.Context, name string) error
+	NetworkRemove(ctx context.Context, name string) error
+}
+
+// Stopper is a container that was started for the observation of another
+// service. Stop removes it; it does not depend on the context of the run.
+type Stopper interface {
+	Stop(ctx context.Context) error
 }
 
 var _ Docker = (*docker.Client)(nil)
@@ -81,6 +89,9 @@ type App struct {
 	Docker Docker
 	// Observe runs an image and reports what it did.
 	Observe func(ctx context.Context, o observe.Options) (*observe.Result, error)
+	// Start runs the image of a service that another one needs while it is
+	// observed, and returns when it is ready.
+	Start func(ctx context.Context, o observe.StartOptions) (Stopper, error)
 	// Generate turns the project and the observations into a plan.
 	Generate func(in gen.Input) (*plan.Plan, error)
 	// Write puts the plan on disk.
@@ -107,9 +118,29 @@ type App struct {
 // real disk. args are the arguments after the program name. It returns the
 // exit status.
 func Run(args []string) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background())
 	defer stop()
 	return newApp().Run(ctx, args)
+}
+
+// notifyContext returns a context that ends at the first SIGINT, SIGTERM or
+// SIGHUP. The handler is removed BEFORE the context ends, so that a second
+// signal, which may come at once, ends the process in the default way even
+// when the cleanup is stuck.
+func notifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		select {
+		case <-ch:
+			signal.Stop(ch)
+			cancel()
+		case <-ctx.Done():
+			signal.Stop(ch)
+		}
+	}()
+	return ctx, cancel
 }
 
 // newApp is the App that works on this machine.
@@ -118,6 +149,13 @@ func newApp() *App {
 	a := &App{Docker: d, Generate: gen.Generate, Write: output.Write}
 	a.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
 		return observe.Observe(ctx, d, o)
+	}
+	a.Start = func(ctx context.Context, o observe.StartOptions) (Stopper, error) {
+		r, err := observe.Start(ctx, d, o)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
 	}
 	a.Stdout = os.Stdout
 	a.Stderr = os.Stderr
