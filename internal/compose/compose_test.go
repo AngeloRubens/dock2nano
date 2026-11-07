@@ -51,7 +51,7 @@ func TestParseTwoServices(t *testing.T) {
 	if !reflect.DeepEqual(app.Environment, wantEnv) {
 		t.Errorf("env %+v", app.Environment)
 	}
-	if app.Healthcheck == nil || len(app.Healthcheck.Test.Exec) != 4 {
+	if app.Healthcheck == nil || len(app.Healthcheck.Test.Exec) != 5 {
 		t.Errorf("healthcheck %+v", app.Healthcheck)
 	}
 	if !reflect.DeepEqual(app.Unknown, []string{"privileged"}) {
