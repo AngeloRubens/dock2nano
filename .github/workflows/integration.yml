@@ -17,7 +17,7 @@ jobs:
       - name: integration tests
         env:
           OBSERVE_TRACE_DIR: ${{ runner.temp }}/traces
-        run: go test -tags integration -p 1 -v -timeout 15m ./internal/docker ./internal/observe
+        run: go test -tags integration -p 1 -v -timeout 15m ./internal/docker ./internal/observe ./cmd
       - name: upload traces
         if: always()
         uses: actions/upload-artifact@v4
