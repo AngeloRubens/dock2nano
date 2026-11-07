@@ -159,10 +159,15 @@ func Parse(data []byte) (*Project, error) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil, fmt.Errorf("the file is empty")
 	}
+	if doc.Content[0].Tag == "!reset" {
+		return nil, errAt(doc.Content[0], "the top level cannot be reset")
+	}
+	if err := applyReset(&doc, map[*yaml.Node]bool{}); err != nil {
+		return nil, err
+	}
 	if err := checkSize(&doc); err != nil {
 		return nil, err
 	}
-	applyReset(&doc, map[*yaml.Node]bool{})
 	top, err := entries(doc.Content[0])
 	if err != nil {
 		return nil, err

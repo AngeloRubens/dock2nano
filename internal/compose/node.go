@@ -32,9 +32,9 @@ const maxMergeSteps = 100000
 
 // entries lists the keys of a mapping in file order. Aliases are followed and
 // merge keys ("<<") are expanded: an explicit key wins over a merged one, and
-// among merged mappings the first wins. A repeated key is an error, and so is
-// a second merge key. Parse has already refused any alias that leads back to
-// the node containing it (checkSize), so the expansion always ends.
+// among merged mappings the first wins. Parse has already refused repeated
+// keys, including a second merge key (applyReset), and any alias that leads
+// back to the node containing it (checkSize), so the expansion always ends.
 func entries(n *yaml.Node) ([]entry, error) {
 	steps := 0
 	return expand(n, &steps)
@@ -55,14 +55,9 @@ func expand(n *yaml.Node, steps *int) ([]entry, error) {
 	var out, merged []entry
 	seen := map[string]bool{}
 	mergedSeen := map[string]bool{}
-	hasMerge := false
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
 		if k.Kind == yaml.ScalarNode && k.Tag == "!!merge" && k.Value == "<<" {
-			if hasMerge {
-				return nil, errAt(k, "key %q appears twice", k.Value)
-			}
-			hasMerge = true
 			// A list of mappings is allowed only when written inline; an alias
 			// to a list is not, as in yaml.v3.
 			srcs := []*yaml.Node{v}
@@ -89,9 +84,6 @@ func expand(n *yaml.Node, steps *int) ([]entry, error) {
 		}
 		if k.Kind != yaml.ScalarNode {
 			return nil, errAt(k, "mapping keys must be plain strings")
-		}
-		if seen[k.Value] {
-			return nil, errAt(k, "key %q appears twice", k.Value)
 		}
 		seen[k.Value] = true
 		out = append(out, entry{k.Value, k, v})
@@ -176,40 +168,53 @@ func boolean(n *yaml.Node) (val, ok bool, err error) {
 
 // applyReset removes, at every level, the mapping pairs and the list items
 // whose value carries the Compose "!reset" tag, as Compose does when it loads
-// a file. It must run on a tree that checkSize has found acyclic.
-func applyReset(n *yaml.Node, seen map[*yaml.Node]bool) {
+// a file, also when the value is reached through an alias. A key that appears
+// twice in a mapping is an error even if one of its values is reset. The seen
+// set makes it end on any graph, cyclic ones included, so it runs before
+// checkSize: a cycle that only exists under a reset node is gone by then.
+func applyReset(n *yaml.Node, seen map[*yaml.Node]bool) error {
 	if n == nil {
-		return
+		return nil
 	}
 	if n.Kind == yaml.AliasNode {
-		applyReset(n.Alias, seen)
-		return
+		return applyReset(n.Alias, seen)
 	}
 	if seen[n] {
-		return
+		return nil
 	}
 	seen[n] = true
 	switch n.Kind {
 	case yaml.MappingNode:
+		keys := map[string]bool{}
 		var kept []*yaml.Node
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			if n.Content[i+1].Tag != "!reset" {
-				kept = append(kept, n.Content[i], n.Content[i+1])
+			k, v := n.Content[i], n.Content[i+1]
+			if k.Kind == yaml.ScalarNode {
+				if keys[k.Value] {
+					return errAt(k, "key %q appears twice", k.Value)
+				}
+				keys[k.Value] = true
+			}
+			if deref(v).Tag != "!reset" {
+				kept = append(kept, k, v)
 			}
 		}
 		n.Content = kept
 	case yaml.SequenceNode:
 		var kept []*yaml.Node
 		for _, c := range n.Content {
-			if c.Tag != "!reset" {
+			if deref(c).Tag != "!reset" {
 				kept = append(kept, c)
 			}
 		}
 		n.Content = kept
 	}
 	for _, c := range n.Content {
-		applyReset(c, seen)
+		if err := applyReset(c, seen); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // maxExpandedNodes bounds how large the file becomes once every alias and

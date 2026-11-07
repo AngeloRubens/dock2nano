@@ -614,7 +614,7 @@ networks:
 	}
 }
 
-func TestResetTagIsNull(t *testing.T) {
+func TestResetRemovesScalarAndList(t *testing.T) {
 	p := mustParse(t, "services:\n  a:\n    image: !reset null\n    ports: !reset [\"80:80\"]\n")
 	if p.Services[0].Image != "" || p.Services[0].Ports != nil {
 		t.Errorf("image %q ports %v", p.Services[0].Image, p.Services[0].Ports)
@@ -769,5 +769,37 @@ func TestMergeOfAnAliasedListIsRefused(t *testing.T) {
 	_, err := Parse([]byte("x-l: &l [{image: a}]\nservices:\n  s: {<<: *l}\n"))
 	if err == nil {
 		t.Error("an alias to a list was accepted as a merge")
+	}
+}
+
+func TestResetThroughAlias(t *testing.T) {
+	p := mustParse(t, "x-r: &r !reset null\nx-p: &p !reset [\"80:80\"]\nservices:\n  a:\n    image: x\n    user: *r\n    ports: *p\n    expose: [\"1\", *r]\n")
+	a := p.Services[0]
+	if a.User != "" || a.Ports != nil || !reflect.DeepEqual(a.Expose, []string{"1"}) {
+		t.Errorf("%+v", a)
+	}
+}
+
+func TestDuplicateKeyNextToReset(t *testing.T) {
+	_, err := Parse([]byte("services:\n  a:\n    image: x\n    image: !reset null\n"))
+	if err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestCycleUnderResetIsGone(t *testing.T) {
+	mustParse(t, "x-a: &a {b: !reset [*a]}\nservices: {s: {image: x}}\n")
+}
+
+func TestResetInsideRemovedSubtreeStillAppliesThroughAlias(t *testing.T) {
+	p := mustParse(t, "x-a: !reset {inner: &b {image: x, user: !reset y}}\nservices:\n  s: *b\n")
+	if s := p.Services[0]; s.Image != "x" || s.User != "" {
+		t.Errorf("service %+v", s)
+	}
+}
+
+func TestTopLevelCannotBeReset(t *testing.T) {
+	if _, err := Parse([]byte("!reset {services: {a: {image: x}}}\n")); err == nil {
+		t.Error("a reset top level was accepted")
 	}
 }
