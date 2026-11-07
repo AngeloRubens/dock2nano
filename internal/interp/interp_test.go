@@ -155,3 +155,59 @@ func TestParseEnvFileErrors(t *testing.T) {
 		t.Errorf("error = %v: it must not hold a value", err)
 	}
 }
+
+func TestExpandDigitsInNames(t *testing.T) {
+	look := env("A", "a", "A1", "one", "B2C", "bc")
+	tests := []struct{ in, want string }{
+		{"$A1", "one"},
+		{"${A1}", "one"},
+		{"$A1x", ""},
+		{"$B2C!", "bc!"},
+		{"${A1:-d}", "one"},
+	}
+	for _, tt := range tests {
+		got, _, err := Expand(tt.in, look)
+		if err != nil || got != tt.want {
+			t.Errorf("Expand(%q) = %q, %v; want %q", tt.in, got, err, tt.want)
+		}
+	}
+	got, unset, err := Expand("$A1x", look)
+	if err != nil || got != "" || !reflect.DeepEqual(unset, []string{"A1x"}) {
+		t.Errorf("Expand(\"$A1x\") = %q, %v, %v; want empty and A1x unset", got, unset, err)
+	}
+}
+
+func TestExpandDoubleDollarInsideBraces(t *testing.T) {
+	// A $$ in the body is skipped when the closing brace is looked for, so a
+	// "{" after it does not open a nested expression: the first "}" closes.
+	tests := []struct {
+		name, in, want string
+		vars           []string
+	}{
+		{"unset", "${A:-$${x}}", "${x}", nil},
+		{"set", "${A:-$${x}}", "a}", []string{"A", "a"}},
+		{"unset with text after", "${A:-$${x}z}", "${xz}", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := Expand(tt.in, env(tt.vars...))
+			if err != nil || got != tt.want {
+				t.Errorf("Expand(%q) = %q, %v; want %q", tt.in, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandInvalidBodyEmpty(t *testing.T) {
+	_, _, err := Expand("${}", env())
+	if err == nil || err.Error() != "invalid variable expression ${}" {
+		t.Errorf("error = %v, want %q", err, "invalid variable expression ${}")
+	}
+}
+
+func TestExpandInvalidBodyStartsWithDigit(t *testing.T) {
+	_, _, err := Expand("${1A}", env("1", "x"))
+	if err == nil || err.Error() != "invalid variable expression ${1A}" {
+		t.Errorf("error = %v, want %q", err, "invalid variable expression ${1A}")
+	}
+}
