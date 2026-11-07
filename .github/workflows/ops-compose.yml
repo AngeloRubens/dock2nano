@@ -1,0 +1,52 @@
+name: ops-compose
+on:
+  push:
+    branches: ['check/ops-compose']
+  workflow_dispatch:
+jobs:
+  up:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPS_HOME: /home/runner/.ops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: machine
+        run: |
+          ls -l /dev/kvm || echo "no /dev/kvm"
+          nproc; free -m; id
+          docker version --format '{{.Server.Version}}'
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils >/dev/null
+      - name: ops from source
+        run: |
+          git clone --depth 1 https://github.com/nanovms/ops /tmp/ops-src
+          cd /tmp/ops-src && git log --oneline | head -1
+          go build -o /tmp/ops .
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops version
+      - name: convert
+        run: |
+          mkdir -p /tmp/out
+          go run . convert -f examples/two-services/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 20 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+          find "$OPS_HOME/local_packages" -maxdepth 3 | head -20
+          cat "$OPS_HOME"/local_packages/*/demo_web/package.manifest
+      - name: dns package
+        run: ops pkg get eyberg/ops-dns:0.0.1
+      - name: compose up
+        run: |
+          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug 2>&1 | tee /tmp/out/up.log
+      - name: probe
+        if: always()
+        run: |
+          sleep 10
+          ip -br addr | head -20
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
+          ps aux | grep -c [q]emu || true
+      - name: down
+        if: always()
+        run: sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -5 || true
