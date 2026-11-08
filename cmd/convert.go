@@ -74,7 +74,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
-	rs.rwSources = rwSources(ordered, dir)
+	rs.rwSources = rwSources(ordered, skipped, dir)
 	if len(converted) > 0 {
 		name, err := networkName()
 		if err != nil {
@@ -785,10 +785,13 @@ func declaredPorts(s *compose.Service) []int {
 	return out
 }
 
-// rwSources are the host paths of the bind mounts that some service mounts read-write.
-func rwSources(services []*compose.Service, dir string) map[string]bool {
+// rwSources are the host paths of the bind mounts that some converted service mounts read-write.
+func rwSources(services []*compose.Service, skipped map[string]string, dir string) map[string]bool {
 	out := map[string]bool{}
 	for _, s := range services {
+		if _, no := skipped[s.Name]; no {
+			continue
+		}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" || v.ReadOnly || v.Source == "" || strings.ContainsAny(v.Source, "$:") {
 				continue

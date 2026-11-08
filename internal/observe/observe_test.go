@@ -2283,6 +2283,7 @@ func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
 		{"hash after digits", "DATABASE_URL=postgres://app:5#xyz12@db/x", "see postgres://app:5#xyz12@db/x", "see postgres://***@db/x"},
 		{"an at sign in a path is not a user", "REGISTRY=https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg"},
 		{"a user without a password", "REPO=https://abcdef123456@git.example/x", "clone https://abcdef123456@git.example/x", "clone https://***@git.example/x"},
+		{"a scope after a port is over-redacted", "REGISTRY=https://reg.example:443/@scope/pkg", "https://reg.example:443/@scope/pkg", "https://***@scope/pkg"},
 		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
 		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
 		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
@@ -2690,7 +2691,7 @@ func TestStartOneFailedReadDoesNotSkipTheWaitForTheOtherPorts(t *testing.T) {
 		}
 		return []int{3306}
 	}
-	// the exec fails once, at 5 seconds, after 3306 was seen
+	// the exec fails once, at 3 seconds (when the container would be taken as ready), after 3306 was seen
 	d := &failOnceAt{startFake: s.d, clock: s.clock, at: start.Add(3 * time.Second)}
 	r, err := Start(context.Background(), d, s.o)
 	if err != nil {

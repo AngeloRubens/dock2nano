@@ -329,7 +329,9 @@ func urlUserinfo(value string) string {
 		return authority[:at]
 	}
 	// A password with a '#', a '/', a '?' or a bad '%' escape ends the authority early: take
-	// everything up to the last '@' of the value when it looks like user:password.
+	// everything up to the last '@' of the value when it looks like user:password. The price is
+	// that "https://host:443/@scope/pkg" loses its host in the log: the two cannot be told apart
+	// by their syntax, and hiding too much is the safer mistake.
 	if at := strings.LastIndex(rest, "@"); at > 0 && strings.Contains(rest[:at], ":") {
 		return rest[:at]
 	}
