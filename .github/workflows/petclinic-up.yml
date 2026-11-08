@@ -135,7 +135,9 @@ jobs:
             sleep 15
             sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
           done
-          for u in home.jsf owner.jsf petType.jsf veterinarian.jsf; do echo "=== GET $u"; curl -s -m 120 -o /tmp/out/$u.html -w '%{http_code}\\n' "http://$app:8080/$u" || true; sed -e 's/<[^>]*>/ /g' /tmp/out/$u.html | tr -s ' \n' | head -c 500; echo; done
+          for u in home.jsf owner.jsf petType.jsf veterinarian.jsf; do echo "=== GET $u"; curl -s -m 120 -o /tmp/out/$u.html -w '%{http_code}\\n' "http://$app:8080/$u" || true; sed -e 's/<[^>]*>/ /g' /tmp/out/$u.html | tr -s ' \n' | head -c 2500; echo; done
+          sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
+          echo "=== errors in the console after the requests"; grep -n -B2 -A12 'Communications\|UnknownHost\|Access denied\|PersistenceException\|SQLException\|jakarta.persistence' /tmp/out/console-petclinic.txt | tail -60 | cut -c1-300
           echo "=== last answer"; cat /tmp/out/http-code.txt 2>/dev/null; head -c 600 /tmp/out/index.html 2>/dev/null
           echo "=== console of petclinic, last 60 lines"; tail -60 /tmp/out/console-petclinic.txt | cut -c1-300
           echo "=== console of db, last 30 lines"; sudo env OPS_HOME="$OPS_HOME" ops instance logs db 2>&1 | tail -30 | cut -c1-300
