@@ -946,7 +946,7 @@ A("docker-cli-proxy-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceI
 A("docker-cli-reads-home", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
   r'''u == "HOME", u == "PATH", u == "USERPROFILE":''', r'''u == "PATH", u == "USERPROFILE":''')
 A("observe-start-unreadable", "observe", "TestStartWithoutAWayToReadTheSocketsIsReadyByStayingUpAndSaysSo",
-  r"""case rerr != nil && !readable:""", r"""case false:""")
+  r"""case rerr != nil && !readable:""", r"""case rerr != nil && !readable && false:""")
 A("observe-start-partial-at-deadline", "observe", "TestStartGraceEndsAtTheDeadlineWithTheMissingPorts",
   r"""case len(partial) > 0:""", r"""case false:""")
 A("observe-start-ports-of-the-file", "observe", "TestStartWaitsForThePortsOfTheFileToo",
@@ -985,7 +985,7 @@ A("docker-cli-secret-prefix", "docker", "TestVariablesTheCLIReadsDoNotReplaceIts
 A("observe-start-ctx-after-read", "observe", "TestStartCancelledWhileSocketsCannotBeReadIsAnError",
   r'''got, rerr := r.listeningTables(ctx, id)⏎»»»if err := ctx.Err(); err != nil {''', r'''got, rerr := r.listeningTables(ctx, id)⏎»»»if false {''')
 A("observe-start-readable-once", "observe", "TestStartOneFailedReadDoesNotSkipTheWaitForTheOtherPorts",
-  r'''case rerr != nil && !readable:''', r'''case rerr != nil:''')
+  r'''case rerr != nil && !readable:''', r'''case rerr != nil && (readable || true):''')
 A("observe-start-reset-when-ports-go", "observe", "TestStartServerForTheSetUpThatEndsDoesNotUseUpTheGrace",
   r'''first, partial = time.Time{}, nil''', r'''first, partial = first, partial''')
 A("observe-url-needs-colon", "observe", "TestObserveRedactSecretsByNameAndByShape",
