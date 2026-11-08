@@ -329,12 +329,10 @@ func urlUserinfo(value string) string {
 	if at := strings.LastIndex(authority, "@"); at > 0 {
 		return authority[:at]
 	}
-	// A password with a '#', a '/' or a bad '%' escape makes the URL unparseable and ends the
-	// authority early: take everything up to the last '@' of the value.
-	if _, err := url.Parse(value); err != nil {
-		if at := strings.LastIndex(rest, "@"); at > 0 {
-			return rest[:at]
-		}
+	// A password with a '#', a '/', a '?' or a bad '%' escape ends the authority early: take
+	// everything up to the last '@' of the value when it looks like user:password.
+	if at := strings.LastIndex(rest, "@"); at > 0 && strings.Contains(rest[:at], ":") {
+		return rest[:at]
 	}
 	return ""
 }
@@ -1171,6 +1169,9 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 				continue
 			}
 			url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
+			if !r.o.now().Before(deadline) {
+				break
+			}
 			// the question may not take the observation past its end
 			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
 			err := r.o.Probe.Get(pctx, url)

@@ -2041,13 +2041,13 @@ func TestStartReadyWhenAPortListens(t *testing.T) {
 	if !slices.Contains(s.d.execs, "root cat /proc/net/tcp") {
 		t.Errorf("execs = %q", s.d.execs)
 	}
-	equal(t, "notes", r.Notes, []string{"the container listens on 3306 but not on 33060, which the image exposes"})
+	equal(t, "notes", r.Notes, []string{"the container listens on 3306 but not on 33060, which the image or the file declares"})
 	equal(t, "removed before Stop", s.d.removed, []string(nil))
 	_ = r.Stop(context.Background())
 	equal(t, "removed after Stop", s.d.removed, []string{"dep-1"})
 }
 
-func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
+func TestStartAnExposedPortThatNeverListensEndsTheWaitWithANote(t *testing.T) {
 	s := newStartScene()
 	// rabbitmq: 5671 listens only with TLS, 5672 listens
 	s.d.cfg.ExposedPorts = []string{"5671/tcp", "5672/tcp"}
@@ -2057,7 +2057,7 @@ func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "slept", s.clock.sleeps, 10)
-	equal(t, "notes", r.Notes, []string{"the container listens on 5672 but not on 5671, which the image exposes"})
+	equal(t, "notes", r.Notes, []string{"the container listens on 5672 but not on 5671, which the image or the file declares"})
 }
 
 func TestStartWaitsForEveryExposedPort(t *testing.T) {
@@ -2090,7 +2090,7 @@ func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "notes", r.Notes, []string{"the container listens on 8080 but not on 80, which the image exposes"})
+	equal(t, "notes", r.Notes, []string{"the container listens on 8080 but not on 80, which the image or the file declares"})
 	equal(t, "slept", s.clock.sleeps, 10)
 }
 
@@ -2279,6 +2279,9 @@ func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
 		{"jdbc url with a user", "JDBC_URL=jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://***@db/x"},
 		{"password with a hash", "DATABASE_URL=postgres://app:p#ss1234@db/x", "see postgres://app:p#ss1234@db/x end", "see postgres://***@db/x end"},
 		{"password with a bad escape", "DATABASE_URL=postgres://app:100%zz@db/x", "see postgres://app:100%zz@db/x", "see postgres://***@db/x"},
+		{"password that starts with digits", "DATABASE_URL=postgres://app:2024/spring@db/x", "see postgres://app:2024/spring@db/x", "see postgres://***@db/x"},
+		{"hash after digits", "DATABASE_URL=postgres://app:5#xyz12@db/x", "see postgres://app:5#xyz12@db/x", "see postgres://***@db/x"},
+		{"an at sign in a path is not a user", "REGISTRY=https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg"},
 		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
 		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
 		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
@@ -2523,7 +2526,7 @@ func TestStartGraceEndsAtTheDeadlineWithTheMissingPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image exposes"})
+	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image or the file declares"})
 }
 
 func TestStartWaitsForThePortsOfTheFileToo(t *testing.T) {
@@ -2623,5 +2626,124 @@ func TestObserveProbeIsBoundedByTheEndOfTheObservation(t *testing.T) {
 		if l <= 0 || l > 5*time.Minute {
 			t.Errorf("a question was given %v", l)
 		}
+	}
+}
+
+func TestStartCancelledWhileSocketsCannotBeReadIsAnError(t *testing.T) {
+	s := newStartScene()
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &cancelOnExec{startFake: s.d, cancel: cancel}
+	if r, err := Start(ctx, d, s.o); err == nil || r != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+}
+
+// cancelOnExec cancels the context at the first exec and fails it.
+type cancelOnExec struct {
+	*startFake
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnExec) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	c.cancel()
+	return nil, context.Canceled
+}
+
+func TestStartServerForTheSetUpThatEndsDoesNotUseUpTheGrace(t *testing.T) {
+	s := newStartScene()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// a temporary server on 3306 from 2 s to 4 s, then the real one: 3306 at 20 s, 33060 at 22 s
+	s.listening = func() []int {
+		d := s.clock.now().Sub(start)
+		switch {
+		case d >= 22*time.Second:
+			return []int{3306, 33060}
+		case d >= 20*time.Second:
+			return []int{3306}
+		case d >= 2*time.Second && d < 4*time.Second:
+			return []int{3306}
+		}
+		return nil
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "slept", s.clock.sleeps, 22)
+}
+
+func TestStartOneFailedReadDoesNotSkipTheWaitForTheOtherPorts(t *testing.T) {
+	s := newStartScene()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 4*time.Second {
+			return []int{3306, 33060}
+		}
+		return []int{3306}
+	}
+	// the exec fails once, at 5 seconds, after 3306 was seen
+	d := &failOnceAt{startFake: s.d, clock: s.clock, at: start.Add(3 * time.Second)}
+	r, err := Start(context.Background(), d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "notes", r.Notes, []string(nil))
+}
+
+// failOnceAt fails every exec of one poll: the first ones at or after the time at.
+type failOnceAt struct {
+	*startFake
+	clock  *fakeClock
+	at     time.Time
+	failed int
+}
+
+func (f *failOnceAt) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	if f.failed < 2 && !f.clock.now().Before(f.at) {
+		f.failed++
+		return nil, errors.New("exec failed")
+	}
+	return f.startFake.ExecUser(ctx, id, user, cmd)
+}
+
+func TestObserveTracerDirectoryThatStaysIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes any directory")
+	}
+	s := newScene(t)
+	var locked string
+	s.d.createErr = func(o docker.CreateOptions) error {
+		if o.Image == "img:1" && len(o.Binds) > 0 && locked == "" {
+			dir, _, _ := strings.Cut(o.Binds[0], ":")
+			locked = filepath.Join(dir, "locked")
+			if err := os.MkdirAll(locked, 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644); err != nil {
+				return err
+			}
+			return os.Chmod(locked, 0o500)
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		if locked != "" {
+			os.Chmod(locked, 0o755)
+			os.RemoveAll(filepath.Dir(locked))
+		}
+	})
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "cleanup: the directory of the tracer") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings %q", res.Warnings)
 	}
 }

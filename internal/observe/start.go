@@ -91,14 +91,17 @@ func (r *Running) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Start runs the image as a plain container (no tracing) and returns when it is ready: when the
-// container runs and every tcp port that the image exposes is in the listening state inside it (or, after 10 seconds with some port listening, the report says which exposed ports did not) (read from
-// /proc/net/tcp and tcp6 of the container, so nothing is dialed from this machine), or, for an
-// image that exposes no port, when the container is still running after 3 seconds. If the
-// deadline o.Wait comes while the container still runs, it is returned as running with a note in
-// Running.Notes. A container that stops before it is ready is an error that includes the end of
-// its output (1 KiB, the values of o.Env hidden), and so is an image that exposes no port and does
-// not stay up within o.Wait. The container is removed on every error.
+// Start runs the image as a plain container (no tracing) and returns when it is ready. The ports
+// waited for are the tcp ports that the image exposes and o.Ports (the ones the file declares).
+// With such ports the container is ready when all of them are in the listening state inside it
+// (read from /proc/net/tcp and tcp6 of the container, so nothing is dialed from this machine);
+// when only some of them listen for 10 seconds, it is ready with a note that names the others;
+// when the sockets cannot be read, it is ready after 3 seconds of running, with a note. With no
+// port at all it is ready when it is still running after 3 seconds. If the deadline o.Wait
+// comes while the container still runs, it is returned as running with a note in Running.Notes,
+// except that a container with no port that did not stay up within o.Wait is an error. A
+// container that stops before it is ready is an error that includes the end of its output (1 KiB,
+// the values of o.Env hidden). The container is removed on every error.
 func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	if o.Image == "" {
 		return nil, errors.New("observe: start: no image given")
@@ -182,6 +185,7 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 	var first time.Time
 	var unreadable error
 	var partial []int
+	readable := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
@@ -199,9 +203,15 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			}
 		} else {
 			got, rerr := r.listeningTables(ctx, id)
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
+			}
 			unreadable = rerr
+			if rerr == nil {
+				readable = true
+			}
 			switch {
-			case rerr != nil:
+			case rerr != nil && !readable:
 				// no way to see the sockets (an image without cat): the container that stays up
 				// is taken as ready, and the report says so
 				if !o.now().Before(begin.Add(stayUpFor)) {
@@ -209,19 +219,22 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 					r.logf("%s\n", note)
 					return []string{note}, nil
 				}
-			case len(got) > 0:
+			case rerr == nil && len(got) == 0:
+				// the ports went away (a server for the set-up that ended): count again
+				first, partial = time.Time{}, nil
+			case rerr == nil:
 				// a server may open one port before the one a client uses (mysqld opens its
-				// X port first): wait for every port the image exposes, but not for ever
+				// X port first): wait for every port that is declared, but not for ever
 				missing := missingPorts(got, ports)
-				partial = got
 				if len(missing) == 0 {
 					return nil, nil
 				}
+				partial = got
 				if first.IsZero() {
 					first = o.now()
 				}
 				if !o.now().Before(first.Add(otherPortsGrace)) {
-					note := fmt.Sprintf("the container listens on %s but not on %s, which the image exposes", portNumbers(got), portNumbers(missing))
+					note := fmt.Sprintf("the container listens on %s but not on %s, which the image or the file declares", portNumbers(got), portNumbers(missing))
 					r.logf("%s\n", note)
 					return []string{note}, nil
 				}
@@ -236,7 +249,7 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			case unreadable != nil:
 				note = fmt.Sprintf("%v; whether it listens is not known", unreadable)
 			case len(partial) > 0:
-				note = fmt.Sprintf("the container listens on %s but not on %s, which the image exposes", portNumbers(partial), portNumbers(missingPorts(partial, ports)))
+				note = fmt.Sprintf("the container listens on %s but not on %s, which the image or the file declares", portNumbers(partial), portNumbers(missingPorts(partial, ports)))
 			}
 			r.logf("%s\n", note)
 			return []string{note}, nil

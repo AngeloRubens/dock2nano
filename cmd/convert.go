@@ -74,6 +74,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
+	rs.rwSources = rwSources(ordered, dir)
 	if len(converted) > 0 {
 		name, err := networkName()
 		if err != nil {
@@ -498,6 +499,8 @@ type runState struct {
 	// that the observation and the started services share. tmpRoot is the
 	// private directory with the copies; copies counts them.
 	binds   map[string]*bindMount
+	// rwSources are the host paths that some service mounts read-write.
+	rwSources map[string]bool
 	tmpRoot string
 	copies  int
 }
@@ -777,7 +780,21 @@ func declaredPorts(s *compose.Service) []int {
 	}
 	for _, e := range s.Expose {
 		number, proto, _ := strings.Cut(e, "/")
-		add(number, proto)
+		add(number, strings.ToLower(proto))
+	}
+	return out
+}
+
+// rwSources are the host paths of the bind mounts that some service mounts read-write.
+func rwSources(services []*compose.Service, dir string) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range services {
+		for _, v := range s.Volumes {
+			if v.Type != "bind" || v.ReadOnly || v.Source == "" || strings.ContainsAny(v.Source, "$:") {
+				continue
+			}
+			out[absPath(dir, v.Source)] = true
+		}
 	}
 	return out
 }

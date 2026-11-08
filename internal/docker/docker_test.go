@@ -395,12 +395,12 @@ func TestCreateSecretsStayOffTheCommandLine(t *testing.T) {
 func TestVariablesTheCLIReadsDoNotReplaceItsEnvironment(t *testing.T) {
 	f := &envFake{fake: fake{replies: []reply{{stdout: "cid\n"}}}}
 	c := New(f)
-	env := []string{"DOCKER_HOST=tcp://proxy:2375", "HOME=/var/lib/app", "https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123"}
+	env := []string{"DOCKER_HOST=tcp://proxy:2375", "HOME=/var/lib/app", "https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123", "DOCKER_PASSWORD=hunter2hunter2", "DOCKER_AUTH_CONFIG={\"auths\":{}}", "DOCKER_HOST_ALT=tcp://u:pw@h:1"}
 	if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: env}); err != nil {
 		t.Fatal(err)
 	}
-	wantCall(t, &f.fake, "create", "--env", "DOCKER_HOST=tcp://proxy:2375", "--env", "HOME=/var/lib/app", "--env", "https_proxy", "--env", "APP_TOKEN", "img")
-	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123"}) {
+	wantCall(t, &f.fake, "create", "--env", "DOCKER_HOST=tcp://proxy:2375", "--env", "HOME=/var/lib/app", "--env", "https_proxy", "--env", "APP_TOKEN", "--env", "DOCKER_PASSWORD", "--env", "DOCKER_AUTH_CONFIG", "--env", "DOCKER_HOST_ALT", "img")
+	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123", "DOCKER_PASSWORD=hunter2hunter2", "DOCKER_AUTH_CONFIG={\"auths\":{}}", "DOCKER_HOST_ALT=tcp://u:pw@h:1"}) {
 		t.Errorf("env passed = %q", f.envs)
 	}
 }
