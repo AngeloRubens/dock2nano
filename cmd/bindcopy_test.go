@@ -356,3 +356,50 @@ func TestNetworkIsRemovedWhenCreateIsCancelled(t *testing.T) {
 		t.Errorf("context of the removal: %v", h.dock.removeCtxErr)
 	}
 }
+
+// A service that mounts a source read-only reads the copy that another service writes, not the
+// original that no one writes to.
+func TestReadOnlyBindOfASourceThatIsCopiedReadsTheCopy(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", `services:
+  db:
+    image: d
+    volumes:
+      - ./data:/var/lib/data
+  app:
+    image: a
+    volumes:
+      - ./data:/data:ro
+`)
+	h.haveAll("d", "a")
+	data := h.dataTree()
+	h.mustRun(0, "convert")
+	if len(h.observed) != 2 {
+		t.Fatalf("observed %v", h.names())
+	}
+	rw := h.wantCopy(h.observed[0].Binds[0], data, "/var/lib/data")
+	ro, ok := strings.CutSuffix(h.observed[1].Binds[0], ":/data:ro")
+	if !ok || ro != rw {
+		t.Errorf("read-only bind %q, want the copy %q", h.observed[1].Binds[0], rw)
+	}
+}
+
+// A directory copied with a mode that does not let the owner write cannot be emptied until it is
+// writable: the copies are still removed.
+func TestBindCopyOfAReadOnlyDirectoryIsRemoved(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", dataCompose)
+	h.haveAll("w")
+	data := h.dataTree()
+	if err := os.Chmod(filepath.Join(data, "sub"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(data, "sub"), 0o755) })
+	h.mustRun(0, "convert")
+	if left, _ := os.ReadDir(h.tmp); len(left) != 0 {
+		t.Errorf("the copies were left: %v", left)
+	}
+	if strings.Contains(h.stderr.String(), "are not removed") {
+		t.Errorf("stderr: %s", h.stderr.String())
+	}
+}

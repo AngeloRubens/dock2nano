@@ -2052,7 +2052,7 @@ func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "slept", s.clock.sleeps, 10)
-	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "notes", r.Notes, []string{"the container listens on 5672 but not on 5671, which the image exposes"})
 }
 
 func TestStartWaitsForEveryExposedPort(t *testing.T) {
@@ -2081,9 +2081,11 @@ func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
 	// nginx with a user configuration on 8080 never opens the exposed 80
 	s.d.cfg.ExposedPorts = []string{"80/tcp"}
 	s.listening = func() []int { return []int{8080} }
-	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
 		t.Fatal(err)
 	}
+	equal(t, "notes", r.Notes, []string{"the container listens on 8080 but not on 80, which the image exposes"})
 	equal(t, "slept", s.clock.sleeps, 10)
 }
 
@@ -2270,6 +2272,8 @@ func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
 	}{
 		{"url with a user", "DATABASE_URL=postgres://app:s3cr3tpw@db/app", "connect postgres://app:s3cr3tpw@db/app failed", "connect postgres://***@db/app failed"},
 		{"jdbc url with a user", "JDBC_URL=jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://***@db/x"},
+		{"password with a hash", "DATABASE_URL=postgres://app:p#ss1234@db/x", "see postgres://app:p#ss1234@db/x end", "see postgres://***@db/x end"},
+		{"password with a bad escape", "DATABASE_URL=postgres://app:100%zz@db/x", "see postgres://app:100%zz@db/x", "see postgres://***@db/x"},
 		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
 		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
 		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
@@ -2476,6 +2480,45 @@ func TestStartDeadlineOfAContainerThatExitedIsAnError(t *testing.T) {
 		t.Fatalf("r = %v, err = %v", r, err)
 	}
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
+}
+
+func TestStartWithoutAWayToReadTheSocketsIsReadyByStayingUpAndSaysSo(t *testing.T) {
+	s := newStartScene()
+	// an image without cat: every docker exec fails
+	s.d.tcp = func() string { panic("not used") }
+	d := &noCat{startFake: s.d}
+	r, err := Start(context.Background(), d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "could not read /proc/net/tcp6") || strings.Contains(r.Notes[0], "listens on no port") || !strings.Contains(r.Notes[0], "stayed up for 3 seconds") {
+		t.Errorf("notes = %q", r.Notes)
+	}
+	equal(t, "slept", s.clock.sleeps, 3)
+}
+
+// noCat is a startFake whose exec cannot run cat.
+type noCat struct{ *startFake }
+
+func (n *noCat) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	return nil, errors.New("exec: \"cat\": executable file not found in $PATH")
+}
+
+func TestStartGraceEndsAtTheDeadlineWithTheMissingPorts(t *testing.T) {
+	s := newStartScene()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// 33060 listens at 55 seconds, 3306 never: the deadline of 60 seconds comes before the grace
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 55*time.Second {
+			return []int{33060}
+		}
+		return nil
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image exposes"})
 }
 
 func TestStartWithoutAnImageIsAnError(t *testing.T) {

@@ -320,6 +320,19 @@ func (c *Client) doEnv(ctx context.Context, op string, args, env []string) ([]by
 	return er.RunEnv(ctx, env, nil, args...)
 }
 
+// cliReads says whether the docker CLI itself reads the variable name from its environment. A
+// proxy address with a user name in it is not one: it may hold a password.
+func cliReads(name, val string) bool {
+	u := strings.ToUpper(name)
+	switch {
+	case strings.HasPrefix(u, "DOCKER_"), strings.HasPrefix(u, "XDG_"), u == "HOME", u == "PATH", u == "USERPROFILE":
+		return true
+	case strings.HasSuffix(u, "_PROXY"):
+		return !strings.Contains(val, "@")
+	}
+	return false
+}
+
 // passEnv turns entries "NAME=value" into the arguments "flag NAME" and the
 // environment "NAME=value" that carries the values. An entry without '=' is
 // "flag NAME" alone: docker then takes the value from its own environment. A
@@ -331,6 +344,14 @@ func passEnv(op, flag string, entries []string) (args, env []string, err error) 
 		name, val, has := strings.Cut(e, "=")
 		if name == "" || strings.ContainsRune(name, 0) || strings.ContainsRune(val, 0) {
 			return nil, nil, fmt.Errorf("%s: %q is not a valid variable name with a value", op, name)
+		}
+		if has && cliReads(name, val) {
+			// The docker CLI reads this name from its own environment (where its daemon,
+			// configuration and certificates are): a value in that environment would
+			// replace the tool's own. It is a setting, not a secret, so it goes on the
+			// command line.
+			args = append(args, flag, name+"="+val)
+			continue
 		}
 		args = append(args, flag, name)
 		if !has {

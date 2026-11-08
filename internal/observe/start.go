@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +89,7 @@ func (r *Running) Stop(ctx context.Context) error {
 }
 
 // Start runs the image as a plain container (no tracing) and returns when it is ready: when the
-// container runs and every tcp port that the image exposes is in the listening state inside it (or, after 10 seconds with one of them listening, whatever listens) (read from
+// container runs and every tcp port that the image exposes is in the listening state inside it (or, after 10 seconds with some port listening, the report says which exposed ports did not) (read from
 // /proc/net/tcp and tcp6 of the container, so nothing is dialed from this machine), or, for an
 // image that exposes no port, when the container is still running after 3 seconds. If the
 // deadline o.Wait comes while the container still runs, it is returned as running with a note in
@@ -170,25 +172,13 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 // image exposes.
 const otherPortsGrace = 10 * time.Second
 
-// hasAll says whether every port of want is in got.
-func hasAll(got, want []int) bool {
-	have := map[int]bool{}
-	for _, p := range got {
-		have[p] = true
-	}
-	for _, p := range want {
-		if !have[p] {
-			return false
-		}
-	}
-	return true
-}
-
 // ready waits for the container to be ready, as Start describes, and gives the notes to keep.
 func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions) ([]string, error) {
 	begin := o.now()
 	deadline := begin.Add(o.Wait)
 	var first time.Time
+	var unreadable error
+	var partial []int
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
@@ -204,17 +194,34 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			if !o.now().Before(begin.Add(stayUpFor)) {
 				return nil, nil
 			}
-		} else if got := r.listening(ctx, id); len(got) > 0 {
-			// a server may open one port before the one a client uses (mysqld opens its
-			// X port first): wait for every port the image exposes, but not for ever
-			if hasAll(got, ports) {
-				return nil, nil
-			}
-			if first.IsZero() {
-				first = o.now()
-			}
-			if !o.now().Before(first.Add(otherPortsGrace)) {
-				return nil, nil
+		} else {
+			got, rerr := r.listeningTables(ctx, id)
+			unreadable = rerr
+			switch {
+			case rerr != nil:
+				// no way to see the sockets (an image without cat): the container that stays up
+				// is taken as ready, and the report says so
+				if !o.now().Before(begin.Add(stayUpFor)) {
+					note := fmt.Sprintf("%v; the container was taken as ready because it stayed up for %d seconds, not because a port listens", rerr, int(stayUpFor.Seconds()))
+					r.logf("%s\n", note)
+					return []string{note}, nil
+				}
+			case len(got) > 0:
+				// a server may open one port before the one a client uses (mysqld opens its
+				// X port first): wait for every port the image exposes, but not for ever
+				missing := missingPorts(got, ports)
+				partial = got
+				if len(missing) == 0 {
+					return nil, nil
+				}
+				if first.IsZero() {
+					first = o.now()
+				}
+				if !o.now().Before(first.Add(otherPortsGrace)) {
+					note := fmt.Sprintf("the container listens on %s but not on %s, which the image exposes", portNumbers(got), portNumbers(missing))
+					r.logf("%s\n", note)
+					return []string{note}, nil
+				}
 			}
 		}
 		if !o.now().Before(deadline) {
@@ -222,6 +229,12 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 				return nil, fmt.Errorf("observe: start: the container of %s did not stay up within %s%s", o.Image, o.Wait, r.startLogTail(id))
 			}
 			note := fmt.Sprintf("the container was running but listens on no port after %d seconds", int(o.Wait.Seconds()))
+			switch {
+			case unreadable != nil:
+				note = fmt.Sprintf("%v; whether it listens is not known", unreadable)
+			case len(partial) > 0:
+				note = fmt.Sprintf("the container listens on %s but not on %s, which the image exposes", portNumbers(partial), portNumbers(missingPorts(partial, ports)))
+			}
 			r.logf("%s\n", note)
 			return []string{note}, nil
 		}
@@ -229,6 +242,39 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
 		}
 	}
+}
+
+// missingPorts are the ports of want that are not in got.
+func missingPorts(got, want []int) []int {
+	have := map[int]bool{}
+	for _, p := range got {
+		have[p] = true
+	}
+	var out []int
+	for _, p := range want {
+		if !have[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// portNumbers is the ports as a list "80, 443", sorted and without repeats.
+func portNumbers(ports []int) string {
+	seen := map[int]bool{}
+	var list []int
+	for _, p := range ports {
+		if !seen[p] {
+			seen[p] = true
+			list = append(list, p)
+		}
+	}
+	sort.Ints(list)
+	text := make([]string, len(list))
+	for i, p := range list {
+		text[i] = strconv.Itoa(p)
+	}
+	return strings.Join(text, ", ")
 }
 
 // startLogTail is ": " and the last 1 KiB of the output of the container, secrets hidden, or a
