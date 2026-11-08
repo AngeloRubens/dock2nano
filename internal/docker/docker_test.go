@@ -390,6 +390,21 @@ func TestCreateSecretsStayOffTheCommandLine(t *testing.T) {
 	}
 }
 
+// A variable that the docker CLI reads (its daemon, its configuration) would replace the one of the
+// tool if it went in the environment of the process: it goes on the command line.
+func TestVariablesTheCLIReadsDoNotReplaceItsEnvironment(t *testing.T) {
+	f := &envFake{fake: fake{replies: []reply{{stdout: "cid\n"}}}}
+	c := New(f)
+	env := []string{"DOCKER_HOST=tcp://proxy:2375", "HOME=/var/lib/app", "https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123"}
+	if _, err := c.Create(context.Background(), CreateOptions{Image: "img", Env: env}); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, &f.fake, "create", "--env", "DOCKER_HOST=tcp://proxy:2375", "--env", "HOME=/var/lib/app", "--env", "https_proxy", "--env", "APP_TOKEN", "img")
+	if len(f.envs) != 1 || !reflect.DeepEqual(f.envs[0], []string{"https_proxy=http://u:pw@p:3128", "APP_TOKEN=abcdef123"}) {
+		t.Errorf("env passed = %q", f.envs)
+	}
+}
+
 func TestBuildSecretsStayOffTheCommandLine(t *testing.T) {
 	f := &envFake{}
 	c := New(f)

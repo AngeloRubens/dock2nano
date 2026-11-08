@@ -1508,3 +1508,24 @@ func TestNotesOfAStartedDependencyReachTheReport(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclaredPorts(t *testing.T) {
+	s := &compose.Service{
+		Ports:  []compose.Port{{Target: "8080", Protocol: "tcp"}, {Target: "53", Protocol: "udp"}, {Target: "9000-9010"}, {Target: "3000"}},
+		Expose: []string{"5432", "6000/udp", "7000/tcp", "x"},
+	}
+	equal := reflect.DeepEqual
+	if got, want := declaredPorts(s), []int{8080, 3000, 5432, 7000}; !equal(got, want) {
+		t.Errorf("declaredPorts = %v, want %v", got, want)
+	}
+}
+
+func TestPortsOfTheFileReachTheStartOfADependency(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  db:\n    image: d\n    expose: ['5432']\n    ports: ['3307:3306']\n  web:\n    image: w\n    depends_on: [db]\n")
+	h.haveAll("d", "w")
+	h.mustRun(0, "convert")
+	if len(h.started) != 1 || !reflect.DeepEqual(h.started[0].Ports, []int{3306, 5432}) {
+		t.Errorf("started: %+v", h.started)
+	}
+}

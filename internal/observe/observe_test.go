@@ -359,10 +359,15 @@ func (c *fakeClock) sleep(ctx context.Context, d time.Duration) error {
 
 type fakeProber struct {
 	urls []string
+	// limits are the time left that the context of each question had.
+	limits []time.Duration
 }
 
 func (p *fakeProber) Get(ctx context.Context, url string) error {
 	p.urls = append(p.urls, url)
+	if dl, ok := ctx.Deadline(); ok {
+		p.limits = append(p.limits, time.Until(dl))
+	}
 	return nil
 }
 
@@ -2036,7 +2041,7 @@ func TestStartReadyWhenAPortListens(t *testing.T) {
 	if !slices.Contains(s.d.execs, "root cat /proc/net/tcp") {
 		t.Errorf("execs = %q", s.d.execs)
 	}
-	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "notes", r.Notes, []string{"the container listens on 3306 but not on 33060, which the image exposes"})
 	equal(t, "removed before Stop", s.d.removed, []string(nil))
 	_ = r.Stop(context.Background())
 	equal(t, "removed after Stop", s.d.removed, []string{"dep-1"})
@@ -2052,7 +2057,7 @@ func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "slept", s.clock.sleeps, 10)
-	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "notes", r.Notes, []string{"the container listens on 5672 but not on 5671, which the image exposes"})
 }
 
 func TestStartWaitsForEveryExposedPort(t *testing.T) {
@@ -2081,9 +2086,11 @@ func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
 	// nginx with a user configuration on 8080 never opens the exposed 80
 	s.d.cfg.ExposedPorts = []string{"80/tcp"}
 	s.listening = func() []int { return []int{8080} }
-	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
 		t.Fatal(err)
 	}
+	equal(t, "notes", r.Notes, []string{"the container listens on 8080 but not on 80, which the image exposes"})
 	equal(t, "slept", s.clock.sleeps, 10)
 }
 
@@ -2270,6 +2277,8 @@ func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
 	}{
 		{"url with a user", "DATABASE_URL=postgres://app:s3cr3tpw@db/app", "connect postgres://app:s3cr3tpw@db/app failed", "connect postgres://***@db/app failed"},
 		{"jdbc url with a user", "JDBC_URL=jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://***@db/x"},
+		{"password with a hash", "DATABASE_URL=postgres://app:p#ss1234@db/x", "see postgres://app:p#ss1234@db/x end", "see postgres://***@db/x end"},
+		{"password with a bad escape", "DATABASE_URL=postgres://app:100%zz@db/x", "see postgres://app:100%zz@db/x", "see postgres://***@db/x"},
 		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
 		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
 		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
@@ -2478,6 +2487,65 @@ func TestStartDeadlineOfAContainerThatExitedIsAnError(t *testing.T) {
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
 }
 
+func TestStartWithoutAWayToReadTheSocketsIsReadyByStayingUpAndSaysSo(t *testing.T) {
+	s := newStartScene()
+	// an image without cat: every docker exec fails
+	s.d.tcp = func() string { panic("not used") }
+	d := &noCat{startFake: s.d}
+	r, err := Start(context.Background(), d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "could not read /proc/net/tcp6") || strings.Contains(r.Notes[0], "listens on no port") || !strings.Contains(r.Notes[0], "stayed up for 3 seconds") {
+		t.Errorf("notes = %q", r.Notes)
+	}
+	equal(t, "slept", s.clock.sleeps, 3)
+}
+
+// noCat is a startFake whose exec cannot run cat.
+type noCat struct{ *startFake }
+
+func (n *noCat) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	return nil, errors.New("exec: \"cat\": executable file not found in $PATH")
+}
+
+func TestStartGraceEndsAtTheDeadlineWithTheMissingPorts(t *testing.T) {
+	s := newStartScene()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// 33060 listens at 55 seconds, 3306 never: the deadline of 60 seconds comes before the grace
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 55*time.Second {
+			return []int{33060}
+		}
+		return nil
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image exposes"})
+}
+
+func TestStartWaitsForThePortsOfTheFileToo(t *testing.T) {
+	s := newStartScene()
+	// an image that exposes nothing; the file says the service listens on 8080, which opens at 4 s
+	s.d.cfg.ExposedPorts = nil
+	s.o.Ports = []int{8080}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 4*time.Second {
+			return []int{8080}
+		}
+		return nil
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 4)
+	equal(t, "notes", r.Notes, []string(nil))
+}
+
 func TestStartWithoutAnImageIsAnError(t *testing.T) {
 	s := newStartScene()
 	s.o.Image = ""
@@ -2515,4 +2583,44 @@ func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
 		t.Errorf("zz-link = %q, %v", got, err)
 	}
 	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
+func TestParseStatusIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		text     string
+		uid, gid int
+		ok       bool
+	}{
+		{"both", "Uid:\t1\t2\t3\t4\nGid:\t5\t6\t7\t8\n", 2, 6, true},
+		{"root", "Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n", 0, 0, true},
+		{"no gid line", "Uid:\t1\t2\t3\t4\n", -1, -1, false},
+		{"no uid line", "Gid:\t1\t2\t3\t4\n", -1, -1, false},
+		{"negative", "Uid:\t1\t-2\t3\t4\nGid:\t5\t6\t7\t8\n", -1, -1, false},
+		{"one field", "Uid:\t1\nGid:\t5\t6\n", -1, -1, false},
+		{"not a number", "Uid:\ta\tb\nGid:\t1\t1\n", -1, -1, false},
+		{"empty", "", -1, -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, gid, ok := parseStatusIDs(tc.text)
+			if uid != tc.uid || gid != tc.gid || ok != tc.ok {
+				t.Errorf("got %d %d %v, want %d %d %v", uid, gid, ok, tc.uid, tc.gid, tc.ok)
+			}
+		})
+	}
+}
+
+func TestObserveProbeIsBoundedByTheEndOfTheObservation(t *testing.T) {
+	s := newScene(t)
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.probe.urls) == 0 || len(s.probe.limits) != len(s.probe.urls) {
+		t.Fatalf("urls %v, limits %v", s.probe.urls, s.probe.limits)
+	}
+	for _, l := range s.probe.limits {
+		if l <= 0 || l > 5*time.Minute {
+			t.Errorf("a question was given %v", l)
+		}
+	}
 }

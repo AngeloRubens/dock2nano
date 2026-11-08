@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -439,7 +440,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	}
 	// The same command, environment and binds start the service when another
 	// one needs it.
-	rs.starts[s.Name] = observe.StartOptions{Image: image, Entrypoint: ep, Cmd: cmd, Env: oo.Env, WorkingDir: oo.WorkingDir, User: oo.User, Binds: oo.Binds}
+	rs.starts[s.Name] = observe.StartOptions{Image: image, Entrypoint: ep, Cmd: cmd, Env: oo.Env, WorkingDir: oo.WorkingDir, User: oo.User, Binds: oo.Binds, Ports: declaredPorts(s)}
 
 	notes, err := rs.startDependencies(ctx, a, s)
 	if err != nil {
@@ -755,6 +756,28 @@ func (a *App) binds(s *compose.Service, dir string) []string {
 			b += ":ro"
 		}
 		out = append(out, b)
+	}
+	return out
+}
+
+// declaredPorts are the tcp ports that the file says the service listens on: the targets of ports
+// and the entries of expose. A range, a port that is not a number and a udp port are left out.
+func declaredPorts(s *compose.Service) []int {
+	var out []int
+	add := func(text, proto string) {
+		if proto != "" && proto != "tcp" {
+			return
+		}
+		if n, err := strconv.Atoi(text); err == nil && n > 0 && n < 65536 {
+			out = append(out, n)
+		}
+	}
+	for _, p := range s.Ports {
+		add(p.Target, p.Protocol)
+	}
+	for _, e := range s.Expose {
+		number, proto, _ := strings.Cut(e, "/")
+		add(number, proto)
 	}
 	return out
 }

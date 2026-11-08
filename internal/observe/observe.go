@@ -315,22 +315,28 @@ var passwordPair = regexp.MustCompile(`(?i)(password|pwd)=([^&;\s"']+)`)
 // value is not a URL with a user. A leading jdbc: is dropped first.
 func urlUserinfo(value string) string {
 	value = strings.TrimPrefix(value, "jdbc:")
-	u, err := url.Parse(value)
-	if err != nil || u.User == nil {
-		return ""
-	}
 	_, rest, found := strings.Cut(value, "://")
 	if !found {
 		return ""
 	}
-	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+	if end := strings.IndexAny(rest, " \t\r\n\"'<>"); end >= 0 {
 		rest = rest[:end]
 	}
-	at := strings.LastIndex(rest, "@")
-	if at <= 0 {
-		return ""
+	authority := rest
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
 	}
-	return rest[:at]
+	if at := strings.LastIndex(authority, "@"); at > 0 {
+		return authority[:at]
+	}
+	// A password with a '#', a '/' or a bad '%' escape makes the URL unparseable and ends the
+	// authority early: take everything up to the last '@' of the value.
+	if _, err := url.Parse(value); err != nil {
+		if at := strings.LastIndex(rest, "@"); at > 0 {
+			return rest[:at]
+		}
+	}
+	return ""
 }
 
 // secretNames are the parts of the name of a variable (compared in upper case) that make redact
@@ -579,7 +585,11 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 
 	tracerDir, loader, err := r.prepareTracer(ctx)
 	if tracerDir != "" {
-		defer os.RemoveAll(tracerDir)
+		defer func() {
+			if rerr := os.RemoveAll(tracerDir); rerr != nil {
+				r.cleanup = append(r.cleanup, fmt.Errorf("the directory of the tracer %s was not removed: %w", tracerDir, rerr))
+			}
+		}()
 	}
 	if err != nil {
 		return nil, err
@@ -1160,7 +1170,11 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 				continue
 			}
 			url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
-			if err := r.o.Probe.Get(ctx, url); err != nil {
+			// the question may not take the observation past its end
+			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
+			err := r.o.Probe.Get(pctx, url)
+			stop()
+			if err != nil {
 				failed[port] = err.Error()
 				continue
 			}
@@ -1202,10 +1216,21 @@ func (r *run) address(ctx context.Context, id string) string {
 
 // listening are the tcp ports the container has a server on.
 func (r *run) listening(ctx context.Context, id string) []int {
+	ports, _ := r.listeningTables(ctx, id)
+	return ports
+}
+
+// listeningTables is listening, and says whether neither table of /proc could be read (an
+// image without cat), with the error of the last one.
+func (r *run) listeningTables(ctx context.Context, id string) ([]int, error) {
 	var ports []int
+	var last error
+	failed := 0
 	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
 		out, err := r.d.ExecUser(ctx, id, "root", []string{"cat", table})
 		if err != nil {
+			failed++
+			last = fmt.Errorf("could not read %s: %s", table, r.redact(err.Error()))
 			if ctx.Err() == nil {
 				r.warnOnce(r.redact(fmt.Sprintf("could not read %s: %v", table, err)))
 			}
@@ -1213,7 +1238,10 @@ func (r *run) listening(ctx context.Context, id string) []int {
 		}
 		ports = append(ports, trace.ListeningPorts(string(out))...)
 	}
-	return ports
+	if failed < 2 {
+		last = nil
+	}
+	return ports, last
 }
 
 type fetchKind int

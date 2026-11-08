@@ -61,6 +61,10 @@ func (rs *runState) mountBinds(a *App, service string, binds []string) ([]string
 // bindMountOf returns the mount of one source, making the copy the first time.
 func (rs *runState) bindMountOf(a *App, service, host string, ro bool) *bindMount {
 	if ro {
+		// the copy that a service writes is what the others must read
+		if m := rs.binds[host]; m != nil && m.path != "" {
+			return &bindMount{path: m.path, readOnly: true}
+		}
 		return &bindMount{path: host, readOnly: true}
 	}
 	if m := rs.binds[host]; m != nil {
@@ -138,6 +142,13 @@ func (rs *runState) removeCopies(a *App) {
 	if rs.tmpRoot == "" {
 		return
 	}
+	// a directory copied with a mode like 0555 cannot be emptied until it is writable
+	filepath.WalkDir(rs.tmpRoot, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o700)
+		}
+		return nil
+	})
 	if err := os.RemoveAll(rs.tmpRoot); err != nil {
 		fmt.Fprintf(a.Stderr, "%s: warning: the copies of the binds in %s are not removed: %v\n", ToolName, rs.tmpRoot, err)
 	}
