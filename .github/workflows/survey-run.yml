@@ -32,7 +32,7 @@ jobs:
           - {image: "minio/minio:latest", port: 9000, kind: http, cmd: "server /data"}
           - {image: "victoriametrics/victoria-metrics:v1.103.0", port: 8428, kind: http}
           - {image: "influxdb:2", port: 8086, kind: http}
-          - {image: "redis:7-alpine", port: 6379, kind: tcp, cmd: "redis-server --save \"\" --appendonly no"}
+          - {image: "redis:7-alpine", port: 6379, kind: tcp, cmd: "redis-server --bind 0.0.0.0 --protected-mode no --save \"\" --appendonly no"}
           - {image: "memcached:1.6-alpine", port: 11211, kind: tcp}
           - {image: "mysql:8.4", port: 3306, kind: tcp, env: "MYSQL_ROOT_PASSWORD=rootpass"}
           - {image: "mariadb:11", port: 3306, kind: tcp, env: "MARIADB_ROOT_PASSWORD=rootpass"}
