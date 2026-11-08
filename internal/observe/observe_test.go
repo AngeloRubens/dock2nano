@@ -1579,16 +1579,20 @@ func TestObserveNetworkFilesOfTheRuntimeAreNotCarried(t *testing.T) {
 11 openat(AT_FDCWD, "/etc/app.conf", O_RDONLY) = 3
 `
 	s.d.files["/etc/resolv.conf"] = entry{data: "nameserver 127.0.0.11\n"}
-	s.d.files["/etc/hosts"] = entry{data: "127.0.0.1 localhost\n"}
+	s.d.files["/etc/hosts"] = entry{data: "172.18.0.2 abc\n"}
 	s.d.files["/etc/hostname"] = entry{data: "abc\n"}
 	res, err := s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"etc/resolv.conf", "etc/hosts", "etc/hostname"} {
+	for _, f := range []string{"etc/resolv.conf", "etc/hostname"} {
 		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err == nil {
 			t.Errorf("%s is in the sysroot", f)
 		}
+	}
+	// the hosts file of the container is not carried: the package has one of its own
+	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts")); err != nil || strings.Contains(string(b), "abc") || !strings.Contains(string(b), "localhost") {
+		t.Errorf("etc/hosts = %q, %v", b, err)
 	}
 	equal(t, "configuration files", res.ConfigurationFiles, []string{"/etc/app.conf"})
 	if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "resolv.conf") }) {
