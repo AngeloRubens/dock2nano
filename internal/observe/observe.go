@@ -838,9 +838,10 @@ func parseStatusIDs(text string) (uid, gid int, ok bool) {
 			return -1, -1, false
 		}
 		n, err := strconv.Atoi(fields[1])
-		if err != nil || n < 0 {
+		if err != nil {
 			return -1, -1, false
 		}
+		// a negative number is left in uid or gid, and the check below refuses it
 		if name == "Uid" {
 			uid = n
 		} else {

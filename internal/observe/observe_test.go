@@ -2612,6 +2612,7 @@ func TestParseStatusIDs(t *testing.T) {
 
 func TestObserveProbeIsBoundedByTheEndOfTheObservation(t *testing.T) {
 	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
 	if _, err := s.observe(t, context.Background()); err != nil {
 		t.Fatal(err)
 	}
