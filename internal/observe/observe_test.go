@@ -359,10 +359,15 @@ func (c *fakeClock) sleep(ctx context.Context, d time.Duration) error {
 
 type fakeProber struct {
 	urls []string
+	// limits are the time left that the context of each question had.
+	limits []time.Duration
 }
 
 func (p *fakeProber) Get(ctx context.Context, url string) error {
 	p.urls = append(p.urls, url)
+	if dl, ok := ctx.Deadline(); ok {
+		p.limits = append(p.limits, time.Until(dl))
+	}
 	return nil
 }
 
@@ -2602,5 +2607,20 @@ func TestParseStatusIDs(t *testing.T) {
 				t.Errorf("got %d %d %v, want %d %d %v", uid, gid, ok, tc.uid, tc.gid, tc.ok)
 			}
 		})
+	}
+}
+
+func TestObserveProbeIsBoundedByTheEndOfTheObservation(t *testing.T) {
+	s := newScene(t)
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.probe.urls) == 0 || len(s.probe.limits) != len(s.probe.urls) {
+		t.Fatalf("urls %v, limits %v", s.probe.urls, s.probe.limits)
+	}
+	for _, l := range s.probe.limits {
+		if l <= 0 || l > 5*time.Minute {
+			t.Errorf("a question was given %v", l)
+		}
 	}
 }
