@@ -2756,3 +2756,39 @@ func TestObserveTracerDirectoryThatStaysIsReported(t *testing.T) {
 		t.Errorf("warnings %q", res.Warnings)
 	}
 }
+
+func TestStartDeadlineAfterAFailedReadKeepsTheOtherPortsNote(t *testing.T) {
+	s := newStartScene()
+	s.o.Wait = 20 * time.Second
+	// 33060 listens from 18 seconds and 3306 never; the reads fail from 19 seconds on, so the
+	// grace is not over when the deadline comes
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 18*time.Second {
+			return []int{33060}
+		}
+		return nil
+	}
+	d := &failFrom{startFake: s.d, clock: s.clock, from: start.Add(19 * time.Second)}
+	s.o.Ports = []int{3306}
+	s.d.cfg.ExposedPorts = nil
+	r, err := Start(context.Background(), d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image or the file declares"})
+}
+
+// failFrom fails every exec from the time from.
+type failFrom struct {
+	*startFake
+	clock *fakeClock
+	from  time.Time
+}
+
+func (f *failFrom) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	if !f.clock.now().Before(f.from) {
+		return nil, errors.New("exec failed")
+	}
+	return f.startFake.ExecUser(ctx, id, user, cmd)
+}
