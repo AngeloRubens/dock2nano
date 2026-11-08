@@ -66,8 +66,9 @@ jobs:
           import json, sys
           p = sys.argv[1]
           m = json.load(open(p))
-          if "--user=root" not in m["Args"]:
-              m["Args"].append("--user=root")
+          for extra in ("--user=root", "--skip-name-resolve"):
+              if extra not in m["Args"]:
+                  m["Args"].append(extra)
           json.dump(m, open(p, "w"), indent=2)
           PY
           grep -n -A3 '"Args"' "$pk/petclinic-glassfish_db/package.manifest" | head -8
