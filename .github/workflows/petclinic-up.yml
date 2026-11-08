@@ -150,7 +150,13 @@ jobs:
           # try again, from a clean state
           for attempt in 1 2 3; do
             if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
-              break
+              # ops adds the dns record of a service even when it did not find its address in ten
+              # seconds, with an empty address: the name then never resolves
+              if grep -q "^adding record .* for *$" /tmp/out/up.log; then
+                echo "a dns record was added without an address (attempt $attempt)"
+              else
+                break
+              fi
             fi
             echo "ops compose up failed (attempt $attempt)"
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | tail -8 | cut -c1-200
