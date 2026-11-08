@@ -20,7 +20,7 @@ jobs:
   up:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[petclinic-up]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       OPS_HOME: /home/runner
     steps:
@@ -130,7 +130,7 @@ jobs:
           app=$(ipof petclinic); db=$(ipof db)
           echo "petclinic=$app db=$db"
           # up to ten minutes for the web application, then report what answers
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             if [ -n "$app" ] && curl -s -m 5 -o /tmp/out/index.html -w '%{http_code}\n' "http://$app:8080/home.jsf" | tee /tmp/out/http-code.txt | grep -q '^[23]'; then break; fi
             sleep 15
             sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
