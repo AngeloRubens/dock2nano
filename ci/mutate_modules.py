@@ -22,7 +22,7 @@ PKG = {
     "trace": ("internal/trace", ["trace.go", "children.go"]),
     "docker": ("internal/docker", ["docker.go"]),
     "dockerfile": ("internal/dockerfile", ["parse.go", "dockerfile.go"]),
-    "cmd": ("cmd", ["convert.go", "app.go"]),
+    "cmd": ("cmd", ["convert.go", "app.go", "bindcopy.go"]),
 }
 
 M = {}
@@ -210,7 +210,7 @@ A("observe-stop-before-remove", "observe", "TestObserveSuccess|TestObserveStartF
 A("observe-cleanup-warning", "observe", "TestObserveCleanupErrorIsAWarning",
   r'''res.Warnings = append(res.Warnings, "cleanup: "+c.Error())''', r'''_ = c''')
 A("observe-tracer-dir-removed", "observe", "TestObserveSuccess",
-  r'''defer os.RemoveAll(tracerDir)''', r'''_ = tracerDir''')
+  r'''if rerr := os.RemoveAll(tracerDir); rerr != nil {''', r'''if rerr := error(nil); rerr != nil {''')
 A("observe-env-values-redacted", "observe", "TestObserveSecretsStayOutOfErrorsAndLogs",
   r'''text = strings.ReplaceAll(text, v, "***")''', r'''_ = v''')
 A("observe-lines-before-the-program", "observe", "TestObserveSuccess",
@@ -550,7 +550,7 @@ A("observe-start-every-port", "observe", "TestStartReadyWhenEveryPortAccepts",
 A("observe-start-stay-up-for", "observe", "TestStartImageWithoutPortsStaysUpThreeSeconds",
   r'''stayUpFor = 3 * time.Second''', r'''stayUpFor = 1 * time.Second''')
 A("observe-start-stay-up-check", "observe", "TestStartImageWithoutPortsStaysUpThreeSeconds",
-  r'''if !o.now().Before(begin.Add(stayUpFor)) {''', r'''if true {''')
+  r'''if len(ports) == 0 {⏎»»»if !o.now().Before(begin.Add(stayUpFor)) {''', r'''if len(ports) == 0 {⏎»»»if true {''')
 A("observe-start-exits-before-ready", "observe", "TestStartExitsBeforeReady|TestStartImageWithoutPortsStaysUpThreeSeconds",
   r'''if !up {''', r'''if !up && false {''')
 A("observe-start-deadline", "observe", "TestStartNotReadyWithinWait",
@@ -774,7 +774,7 @@ A("cmd-dependencies-start-env", "cmd", "TestDependenciesStartedOnceInOrderAndSto
 A("cmd-dependencies-start-working-dir", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
   r'''WorkingDir: oo.WorkingDir, User: oo.User''', r'''User: oo.User''')
 A("cmd-dependencies-start-user", "cmd", "TestDependenciesStartedOnceInOrderAndStoppedAtTheEnd",
-  r'''User: oo.User, Binds: oo.Binds}''', r'''Binds: oo.Binds}''')
+  r'''User: oo.User, Binds: oo.Binds, Ports''', r'''Binds: oo.Binds, Ports''')
 A("cmd-dependency-failure-is-remembered", "cmd", "TestDependencyStartFailureIsANote",
   r'''why := rs.failed[name]''', r'''why := ""''')
 A("cmd-dependency-note-reaches-the-observation", "cmd", "TestDependencyStartFailureIsANote|TestDependencyNotConvertedIsANote",
@@ -875,11 +875,11 @@ A("cmd-starting-is-announced", "cmd", "TestStartingADependencyIsAnnounced",
 
 # ------------------------------------------------ rules added after the third review
 A("observe-start-all-exposed-ports", "observe", "TestStartWaitsForEveryExposedPort",
-  r"""if hasAll(got, ports) {""", r"""if len(got) > 0 {""")
+  r"""if len(missing) == 0 {""", r"""if len(got) > 0 {""")
 A("observe-start-grace", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
   r"""if !o.now().Before(first.Add(otherPortsGrace)) {""", r"""if true {""")
 A("observe-start-grace-from-first", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
-  r"""if first.IsZero() {⏎»»»»first = o.now()⏎»»»}""", r"""first = o.now()""")
+  r"""if first.IsZero() {⏎»»»»»first = o.now()⏎»»»»}""", r"""first = o.now()""")
 A("cmd-notes-reach-later-services", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
   r"""if rs.running[name] != nil {⏎»»»for _, n := range rs.noted[name] {""", r"""if rs.running[name] != nil {⏎»»»for _, n := range []string(nil) {""")
 A("cmd-notes-of-start", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
@@ -932,6 +932,43 @@ A("cmd-network-removed-by-name", "cmd", "TestNetworkCreatedOnceAndRemoved",
   r"""if err := a.Docker.NetworkRemove(cctx, name); err != nil {""", r"""if err := a.Docker.NetworkRemove(cctx, name+"x"); err != nil {""")
 A("cmd-network-create-failure", "cmd", "TestNetworkCreateFailureStopsTheRun",
   r"""if err := a.Docker.NetworkCreate(ctx, name, "dock2nano=1"); err != nil {""", r"""if err := a.Docker.NetworkCreate(ctx, name, "dock2nano=1"); err != nil && false {""")
+
+
+# ------------------------------------------------ rules added with the fourth review
+M.pop("observe-status-gid-needed", None)
+M.pop("observe-status-negative-id", None)
+A("observe-status-gid-needed", "observe", "TestParseStatusIDs",
+  r"""if uid < 0 || gid < 0 {""", r"""if uid < 0 {""")
+A("observe-status-negative-id", "observe", "TestParseStatusIDs",
+  r"""if err != nil || n < 0 {""", r"""if err != nil {""")
+A("docker-cli-reads-env", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r"""if has && cliReads(name, val) {""", r"""if false && cliReads(name, val) {""")
+A("docker-cli-proxy-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r"""return !strings.Contains(val, "@")""", r"""return true""")
+A("docker-cli-reads-home", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''u == "HOME", u == "PATH", u == "USERPROFILE":''', r'''u == "PATH", u == "USERPROFILE":''')
+A("observe-start-unreadable", "observe", "TestStartWithoutAWayToReadTheSocketsIsReadyByStayingUpAndSaysSo",
+  r"""case rerr != nil:""", r"""case false:""")
+A("observe-start-partial-at-deadline", "observe", "TestStartGraceEndsAtTheDeadlineWithTheMissingPorts",
+  r"""case len(partial) > 0:""", r"""case false:""")
+A("observe-start-ports-of-the-file", "observe", "TestStartWaitsForThePortsOfTheFileToo",
+  r"""mergePorts(exposedPorts(cfg.ExposedPorts), o.Ports)""", r"""exposedPorts(cfg.ExposedPorts)""")
+A("observe-url-unparseable", "observe", "TestObserveRedactSecretsByNameAndByShape",
+  r"""if _, err := url.Parse(value); err != nil {""", r"""if false {""")
+A("observe-url-authority-first", "observe", "TestObserveRedactSecretsByNameAndByShape",
+  r"""if at := strings.LastIndex(authority, "@"); at > 0 {""", r"""if at := strings.LastIndex(authority, "@"); at > 100 {""")
+A("observe-probe-bounded", "observe", "TestObserveProbeIsBoundedByTheEndOfTheObservation",
+  r"""context.WithTimeout(ctx, deadline.Sub(r.o.now()))""", r"""context.WithTimeout(ctx, time.Hour)""")
+A("cmd-ro-bind-reads-copy", "cmd", "TestReadOnlyBindOfASourceThatIsCopiedReadsTheCopy",
+  r"""return &bindMount{path: m.path, readOnly: true}""", r"""return &bindMount{path: host, readOnly: true}""")
+A("cmd-copies-made-writable", "cmd", "TestBindCopyOfAReadOnlyDirectoryIsRemoved",
+  r"""os.Chmod(p, 0o700)""", r"""_ = p""")
+A("cmd-declared-ports-to-start", "cmd", "TestPortsOfTheFileReachTheStartOfADependency",
+  r"""Binds: oo.Binds, Ports: declaredPorts(s)}""", r"""Binds: oo.Binds}""")
+A("cmd-declared-ports-tcp-only", "cmd", "TestDeclaredPorts",
+  r"""if proto != "" && proto != "tcp" {""", r"""if false {""")
+A("cmd-declared-ports-range", "cmd", "TestDeclaredPorts",
+  r"""err == nil && n > 0 && n < 65536 {""", r"""err == nil {""")
 
 
 def main():
