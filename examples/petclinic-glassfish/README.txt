@@ -50,8 +50,10 @@ Verified (GitHub Actions, run of .github/workflows/petclinic-up.yml)
          petclinic package) the host db became db.service: on ops a service is
          reached as <pkg>.service, which the report notes.
   - The JVM crashes at random places (SIGSEGV in compiled code or in libjvm)
-    on nanos unless it runs with -Xint (interpreter only): 4 of 5 runs without
-    it crashed or failed to start, 3 of 3 with it started. -Xint is added to
+    on nanos unless it runs with -Xint (interpreter only). With the database up,
+    5 of 5 runs with the default options crashed (4) or failed to start (1), and
+    so did the runs with -XX:TieredStopAtLevel=1 and with -Xshare:off; 5 of 5
+    runs with -Xint kept running. Fewer CPUs did not help. -Xint is added to
     the arguments of the petclinic package in the same step. It is slow.
   - The schema is shipped as initdb/schema.sql, mounted in
     /docker-entrypoint-initdb.d. The application creates its tables when it is
