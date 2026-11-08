@@ -432,3 +432,28 @@ func TestReadOnlyBindPreparedBeforeTheWriterReadsTheCopy(t *testing.T) {
 		t.Errorf("read-only bind %q, want the copy %q", h.observed[0].Binds[0], rw)
 	}
 }
+
+// A writer that is not converted does not make a copy for the reader.
+func TestReadOnlyBindIsMountedWithoutACopyWhenTheWriterIsSkipped(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", `services:
+  reader:
+    image: a
+    volumes:
+      - ./data:/data:ro
+  writer:
+    image: d
+    profiles: [debug]
+    volumes:
+      - ./data:/var/lib/data
+`)
+	h.haveAll("a")
+	data := h.dataTree()
+	h.mustRun(0, "convert")
+	if want := []string{data + ":/data:ro"}; len(h.observed) != 1 || !reflect.DeepEqual(h.observed[0].Binds, want) {
+		t.Errorf("observed %v, want binds %v", h.observed, want)
+	}
+	if left, _ := os.ReadDir(h.tmp); len(left) != 0 {
+		t.Errorf("a copy was made: %v", left)
+	}
+}
