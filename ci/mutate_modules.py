@@ -14,7 +14,7 @@ TAB = "»"
 NL = "⏎"
 
 PKG = {
-    "gen": ("internal/gen", ["gen.go", "command.go", "env.go", "names.go", "report.go"]),
+    "gen": ("internal/gen", ["gen.go", "command.go", "env.go", "names.go", "report.go", "volume.go"]),
     "interp": ("internal/interp", ["interp.go"]),
     "output": ("internal/output", ["output.go"]),
     "plan": ("internal/plan", ["plan.go"]),
@@ -606,7 +606,7 @@ A("gen-arch-checked", "gen", "TestArchIsChecked",
 A("gen-arch-in-the-plan", "gen", "TestArchIsChecked",
   r'''plan: &plan.Plan{Arch: in.Arch}''', r'''plan: &plan.Plan{Arch: "amd64"}''')
 A("gen-arch-in-the-compose-package", "gen", "TestArchIsChecked",
-  r'''Local: true, Arch: in.Arch})''', r'''Local: true, Arch: "amd64"})''')
+  r'''Local: true, Arch: in.Arch, BaseVolumeSz''', r'''Local: true, Arch: "amd64", BaseVolumeSz''')
 A("gen-cwd-unknown-is-root", "gen", "TestWorkingDirIsInTheManifest|TestEveryServiceHasACwd",
   r'''if cwd == "" {⏎»»cwd = "/"''', r'''if false {⏎»»cwd = "/"''')
 A("gen-cwd-root-is-silent", "gen", "TestWorkingDirIsInTheManifest",
@@ -881,7 +881,7 @@ A("observe-start-grace", "observe", "TestStartAnExposedPortThatNeverListensEndsT
 A("observe-start-grace-from-first", "observe", "TestStartAnExposedPortThatNeverListensEndsTheWaitWithANote|TestStartReadyWhenAPortListens",
   r"""if first.IsZero() {⏎»»»»»first = o.now()⏎»»»»}""", r"""first = o.now()""")
 A("cmd-notes-reach-later-services", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
-  r"""if rs.running[name] != nil {⏎»»»for _, n := range rs.noted[name] {""", r"""if rs.running[name] != nil {⏎»»»for _, n := range []string(nil) {""")
+  r"""rs.served[name] = append(rs.served[name], s.Name)⏎»»»for _, n := range rs.noted[name] {""", r"""rs.served[name] = append(rs.served[name], s.Name)⏎»»»for _, n := range []string(nil) {""")
 A("cmd-notes-of-start", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
   r"""rs.noted[name] = nl.NoteList()""", r"""_ = nl""")
 A("gen-observed-uid-item", "gen", "TestObservedUser.*",
@@ -1005,6 +1005,19 @@ A("observe-start-deadline-note-after-reads", "observe", "TestStartDeadlineAfterA
   r'''case unreadable != nil && !readable:''', r'''case unreadable != nil:''')
 A("cmd-rw-sources-skipped", "cmd", "TestReadOnlyBindIsMountedWithoutACopyWhenTheWriterIsSkipped",
   r'''if _, no := skipped[s.Name]; no {⏎»»»continue⏎»»}⏎»»for _, v := range s.Volumes {⏎»»»if v.Type != "bind" || v.ReadOnly''', r'''for _, v := range s.Volumes {⏎»»»if v.Type != "bind" || v.ReadOnly''')
+
+
+# ------------------------------------------------ rules added with the nanos runs of PetClinic
+A("gen-volume-headroom", "gen", "TestVolumeSizeGivesRoomToWrite",
+  r'''const volumeHeadroom = 256''', r'''const volumeHeadroom = 0''')
+A("gen-volume-quarter", "gen", "TestVolumeSizeGivesRoomToWrite",
+  r'''return fmt.Sprintf("%dm", mb+mb/4+volumeHeadroom)''', r'''return fmt.Sprintf("%dm", mb+volumeHeadroom)''')
+A("gen-volume-set", "gen", "TestEveryPackageOfTheComposeFileHasAVolumeSize",
+  r'''Arch: in.Arch, BaseVolumeSz: volumeSize(svc.Sysroot)})''', r'''Arch: in.Arch})''')
+A("cmd-served-warning", "cmd", "TestADependencyReportsThatItsDependentsWroteIntoIt",
+  r'''rs.served[name] = append(rs.served[name], s.Name)⏎»»»for _, n := range rs.noted[name] {''', r'''for _, n := range rs.noted[name] {''')
+A("cmd-served-warning-started", "cmd", "TestADependencyReportsThatItsDependentsWroteIntoIt",
+  r'''rs.served[name] = append(rs.served[name], s.Name)⏎»»»»rs.order = append(rs.order, name)''', r'''rs.order = append(rs.order, name)''')
 
 
 def main():
