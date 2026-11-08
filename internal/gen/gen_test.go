@@ -1021,8 +1021,8 @@ func TestObservedUserIsSetInTheManifest(t *testing.T) {
 	}
 	wantNone(t, p, "web", plan.Unsupported, "user")
 	pass := p.Services[0].Manifest.ManifestPassthrough
-	if pass["uid"] != 999 || pass["gid"] != 998 {
-		t.Errorf("passthrough = %v, want uid 999 and gid 998", pass)
+	if pass["uid"] != "999" || pass["gid"] != "998" {
+		t.Errorf("passthrough = %v, want uid \"999\" and gid \"998\" (strings: ops cannot encode numbers)", pass)
 	}
 }
 
@@ -1537,9 +1537,9 @@ func TestNumericUserWhenTheObservedOneIsUnknownGoesInTheManifest(t *testing.T) {
 		name, file, image string
 		uid, gid          any
 	}{
-		{"image uid and gid", "", "999:998", 999, 998},
-		{"image uid only", "", "999", 999, nil},
-		{"the file wins", "1000", "999:999", 1000, nil},
+		{"image uid and gid", "", "999:998", "999", "998"},
+		{"image uid only", "", "999", "999", nil},
+		{"the file wins", "1000", "999:999", "1000", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			web := svc("web")

@@ -634,9 +634,11 @@ func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.R
 	}
 	m.ManifestPassthrough = map[string]any{"cwd": cwd}
 	if uid > 0 {
-		m.ManifestPassthrough["uid"] = uid
+		// strings: the writer of the file system in ops encodes strings, vectors and tuples, and
+		// nanos reads the number from the text
+		m.ManifestPassthrough["uid"] = strconv.Itoa(uid)
 		if gid >= 0 {
-			m.ManifestPassthrough["gid"] = gid
+			m.ManifestPassthrough["gid"] = strconv.Itoa(gid)
 		}
 	}
 	switch {
