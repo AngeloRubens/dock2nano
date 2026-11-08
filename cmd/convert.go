@@ -501,7 +501,7 @@ type runState struct {
 	noted map[string][]string
 	// served holds, by service name, the services that were observed while it was running.
 	served map[string][]string
-	order []string
+	order  []string
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
 	failed map[string]string
