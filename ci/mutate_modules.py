@@ -874,7 +874,7 @@ A("cmd-starting-is-announced", "cmd", "TestStartingADependencyIsAnnounced",
   r"""fmt.Fprintf(a.Stderr, "%s: starting %s for %s\n", name, so.Image, s.Name)""", r"""_ = so.Image""")
 
 # ------------------------------------------------ rules added after the third review
-A("observe-start-every-port", "observe", "TestStartWaitsForEveryExposedPort",
+A("observe-start-all-exposed-ports", "observe", "TestStartWaitsForEveryExposedPort",
   r"""if hasAll(got, ports) {""", r"""if len(got) > 0 {""")
 A("observe-start-grace", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
   r"""if !o.now().Before(first.Add(otherPortsGrace)) {""", r"""if true {""")
