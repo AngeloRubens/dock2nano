@@ -1519,3 +1519,13 @@ func TestDeclaredPorts(t *testing.T) {
 		t.Errorf("declaredPorts = %v, want %v", got, want)
 	}
 }
+
+func TestPortsOfTheFileReachTheStartOfADependency(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  db:\n    image: d\n    expose: ['5432']\n    ports: ['3307:3306']\n  web:\n    image: w\n    depends_on: [db]\n")
+	h.haveAll("d", "w")
+	h.mustRun(0, "convert")
+	if len(h.started) != 1 || !reflect.DeepEqual(h.started[0].Ports, []int{3306, 5432}) {
+		t.Errorf("started: %+v", h.started)
+	}
+}

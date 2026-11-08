@@ -2579,3 +2579,28 @@ func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
 	}
 	equal(t, "warnings", res.Warnings, []string(nil))
 }
+
+func TestParseStatusIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		text     string
+		uid, gid int
+		ok       bool
+	}{
+		{"both", "Uid:\t1\t2\t3\t4\nGid:\t5\t6\t7\t8\n", 2, 6, true},
+		{"root", "Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n", 0, 0, true},
+		{"no gid line", "Uid:\t1\t2\t3\t4\n", -1, -1, false},
+		{"no uid line", "Gid:\t1\t2\t3\t4\n", -1, -1, false},
+		{"negative", "Uid:\t1\t-2\t3\t4\nGid:\t5\t6\t7\t8\n", -1, -1, false},
+		{"one field", "Uid:\t1\nGid:\t5\t6\n", -1, -1, false},
+		{"not a number", "Uid:\ta\tb\nGid:\t1\t1\n", -1, -1, false},
+		{"empty", "", -1, -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, gid, ok := parseStatusIDs(tc.text)
+			if uid != tc.uid || gid != tc.gid || ok != tc.ok {
+				t.Errorf("got %d %d %v, want %d %d %v", uid, gid, ok, tc.uid, tc.gid, tc.ok)
+			}
+		})
+	}
+}
