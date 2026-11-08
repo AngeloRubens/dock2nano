@@ -876,9 +876,9 @@ A("cmd-starting-is-announced", "cmd", "TestStartingADependencyIsAnnounced",
 # ------------------------------------------------ rules added after the third review
 A("observe-start-all-exposed-ports", "observe", "TestStartWaitsForEveryExposedPort",
   r"""if len(missing) == 0 {""", r"""if len(got) > 0 {""")
-A("observe-start-grace", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
+A("observe-start-grace", "observe", "TestStartAnExposedPortThatNeverListensEndsTheWaitWithANote|TestStartReadyWhenAPortListens",
   r"""if !o.now().Before(first.Add(otherPortsGrace)) {""", r"""if true {""")
-A("observe-start-grace-from-first", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
+A("observe-start-grace-from-first", "observe", "TestStartAnExposedPortThatNeverListensEndsTheWaitWithANote|TestStartReadyWhenAPortListens",
   r"""if first.IsZero() {⏎»»»»»first = o.now()⏎»»»»}""", r"""first = o.now()""")
 A("cmd-notes-reach-later-services", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
   r"""if rs.running[name] != nil {⏎»»»for _, n := range rs.noted[name] {""", r"""if rs.running[name] != nil {⏎»»»for _, n := range []string(nil) {""")
@@ -946,7 +946,7 @@ A("docker-cli-proxy-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceI
 A("docker-cli-reads-home", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
   r'''u == "HOME", u == "PATH", u == "USERPROFILE":''', r'''u == "PATH", u == "USERPROFILE":''')
 A("observe-start-unreadable", "observe", "TestStartWithoutAWayToReadTheSocketsIsReadyByStayingUpAndSaysSo",
-  r"""case rerr != nil:""", r"""case false:""")
+  r"""case rerr != nil && !readable:""", r"""case false:""")
 A("observe-start-partial-at-deadline", "observe", "TestStartGraceEndsAtTheDeadlineWithTheMissingPorts",
   r"""case len(partial) > 0:""", r"""case false:""")
 A("observe-start-ports-of-the-file", "observe", "TestStartWaitsForThePortsOfTheFileToo",
@@ -967,6 +967,35 @@ A("cmd-declared-ports-tcp-only", "cmd", "TestDeclaredPorts",
   r"""if proto != "" && proto != "tcp" {""", r"""if false {""")
 A("cmd-declared-ports-range", "cmd", "TestDeclaredPorts",
   r"""err == nil && n > 0 && n < 65536 {""", r"""err == nil {""")
+
+
+# ------------------------------------------------ rules added with the fifth review
+M.pop("observe-url-unparseable", None)
+M.pop("docker-cli-reads-home", None)
+M.pop("docker-cli-reads-env", None)
+M.pop("docker-cli-proxy-with-user", None)
+A("docker-cli-reads-env", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''case "DOCKER_HOST", ''', r'''case "DOCKER_HOSTX", ''')
+A("docker-cli-reads-home", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''"DOCKER_CONTENT_TRUST_SERVER", "HOME", "PATH", "USERPROFILE":''', r'''"DOCKER_CONTENT_TRUST_SERVER", "PATH", "USERPROFILE":''')
+A("docker-cli-value-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''if strings.Contains(val, "@") {''', r'''if false {''')
+A("docker-cli-secret-prefix", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''strings.HasPrefix(u, "DOCKER_CLI_")''', r'''strings.HasPrefix(u, "DOCKER_")''')
+A("observe-start-ctx-after-read", "observe", "TestStartCancelledWhileSocketsCannotBeReadIsAnError",
+  r'''got, rerr := r.listeningTables(ctx, id)⏎»»»if err := ctx.Err(); err != nil {''', r'''got, rerr := r.listeningTables(ctx, id)⏎»»»if false {''')
+A("observe-start-readable-once", "observe", "TestStartOneFailedReadDoesNotSkipTheWaitForTheOtherPorts",
+  r'''case rerr != nil && !readable:''', r'''case rerr != nil:''')
+A("observe-start-reset-when-ports-go", "observe", "TestStartServerForTheSetUpThatEndsDoesNotUseUpTheGrace",
+  r'''first, partial = time.Time{}, nil''', r'''first, partial = first, partial''')
+A("observe-url-needs-colon", "observe", "TestObserveRedactSecretsByNameAndByShape",
+  r'''strings.Contains(rest[:at], ":")''', r'''true''')
+A("observe-tracer-dir-reported", "observe", "TestObserveTracerDirectoryThatStaysIsReported",
+  r'''if rerr := os.RemoveAll(tracerDir); rerr != nil {''', r'''if rerr := os.RemoveAll(tracerDir); rerr != nil && false {''')
+A("cmd-rw-sources", "cmd", "TestReadOnlyBindPreparedBeforeTheWriterReadsTheCopy",
+  r'''if rs.rwSources[host] {''', r'''if false {''')
+A("cmd-declared-expose-case", "cmd", "TestDeclaredPorts",
+  r'''add(number, strings.ToLower(proto))''', r'''add(number, proto)''')
 
 
 def main():
