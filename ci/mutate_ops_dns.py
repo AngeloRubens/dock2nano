@@ -23,22 +23,19 @@ M = {
 	if err != nil {
 		fmt.Println(err)
 	}'''),
-    "adddns-ignores-do-error": (
+    "adddns-ignores-newrequest-error": (
         '''	req, err := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+host+".service&ip="+ip, nil)
 	if err != nil {
 		return err
 	}
 ''', '''	req, _ := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+host+".service&ip="+ip, nil)
 '''),
-    # UP goes on without the address of the dns: not covered by a test (UP starts qemu), the job
-    # says SURVIVED for it and that is the finding
-    "dns-without-address-goes-on": (
-        '''		fmt.Println(err)
-		return
-	}
-''', '''		fmt.Println(err)
-	}
-'''),
+    # the client waits for ever for a dns that does not answer
+    "adddns-no-timeout": ("http.Client{Timeout: dnsTimeout}", "http.Client{}"),
+    # no sleep-skip is not tested; the service that failed does not make the up fail
+    "failed-service-is-not-an-error": (
+        '''		exitWithError("not registered in the dns: " + strings.Join(failed, ", "))''',
+        '''		fmt.Println("not registered in the dns: " + strings.Join(failed, ", "))'''),
 }
 
 name = sys.argv[1]
