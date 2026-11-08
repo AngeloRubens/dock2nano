@@ -498,11 +498,11 @@ type runState struct {
 	// binds holds, by host path, the mount of each read-write bind: the copy
 	// that the observation and the started services share. tmpRoot is the
 	// private directory with the copies; copies counts them.
-	binds   map[string]*bindMount
+	binds map[string]*bindMount
 	// rwSources are the host paths that some service mounts read-write.
 	rwSources map[string]bool
-	tmpRoot string
-	copies  int
+	tmpRoot   string
+	copies    int
 }
 
 // closure returns the services that s depends on, directly or not, in
