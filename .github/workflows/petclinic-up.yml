@@ -18,6 +18,10 @@ on:
         description: 'add --user=root to mysqld by hand (not needed when the kernel reads the uid)'
         required: false
         default: 'false'
+      nouid:
+        description: 'remove uid and gid from the manifest of the db package (to compare)'
+        required: false
+        default: 'false'
       jvmflags:
         description: 'extra JVM options for the petclinic package (space separated); -Xint because the compiled code crashes the JVM on nanos'
         required: false
@@ -80,6 +84,7 @@ jobs:
         env:
           JVMFLAGS: ${{ github.event.inputs.jvmflags }}
           ROOTFIX: ${{ github.event.inputs.rootfix }}
+          NOUID: ${{ github.event.inputs.nouid }}
           CPUS: ${{ github.event.inputs.cpus }}
         run: |
           # What the report names, done by hand: mysqld looks up the names of its clients (the DNS of
@@ -96,6 +101,9 @@ jobs:
           for extra in extras:
               if extra not in m["Args"]:
                   m["Args"].append(extra)
+          if os.environ.get("NOUID") == "true":
+              for k in ("uid", "gid"):
+                  m.get("ManifestPassthrough", {}).pop(k, None)
           json.dump(m, open(p, "w"), indent=2)
           PY
           grep -n -A3 '"Args"' "$pk/petclinic-glassfish_db/package.manifest" | head -8
