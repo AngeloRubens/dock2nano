@@ -87,7 +87,7 @@ func (r *Running) Stop(ctx context.Context) error {
 }
 
 // Start runs the image as a plain container (no tracing) and returns when it is ready: when the
-// container runs and at least one tcp socket is in the listening state inside it (read from
+// container runs and every tcp port that the image exposes is in the listening state inside it (or, after 10 seconds with one of them listening, whatever listens) (read from
 // /proc/net/tcp and tcp6 of the container, so nothing is dialed from this machine), or, for an
 // image that exposes no port, when the container is still running after 3 seconds. If the
 // deadline o.Wait comes while the container still runs, it is returned as running with a note in
@@ -166,10 +166,29 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	return started, nil
 }
 
+// otherPortsGrace is how long Start waits, after one port listens, for the other ports that the
+// image exposes.
+const otherPortsGrace = 10 * time.Second
+
+// hasAll says whether every port of want is in got.
+func hasAll(got, want []int) bool {
+	have := map[int]bool{}
+	for _, p := range got {
+		have[p] = true
+	}
+	for _, p := range want {
+		if !have[p] {
+			return false
+		}
+	}
+	return true
+}
+
 // ready waits for the container to be ready, as Start describes, and gives the notes to keep.
 func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions) ([]string, error) {
 	begin := o.now()
 	deadline := begin.Add(o.Wait)
+	var first time.Time
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
@@ -185,8 +204,18 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			if !o.now().Before(begin.Add(stayUpFor)) {
 				return nil, nil
 			}
-		} else if len(r.listening(ctx, id)) > 0 {
-			return nil, nil
+		} else if got := r.listening(ctx, id); len(got) > 0 {
+			// a server may open one port before the one a client uses (mysqld opens its
+			// X port first): wait for every port the image exposes, but not for ever
+			if hasAll(got, ports) {
+				return nil, nil
+			}
+			if first.IsZero() {
+				first = o.now()
+			}
+			if !o.now().Before(first.Add(otherPortsGrace)) {
+				return nil, nil
+			}
 		}
 		if !o.now().Before(deadline) {
 			if len(ports) == 0 {

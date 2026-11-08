@@ -2029,8 +2029,9 @@ func TestStartReadyWhenAPortListens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.clock.sleeps != 3 {
-		t.Errorf("slept %d times, want 3", s.clock.sleeps)
+	// 3306 opens at 3 seconds; 33060 never does: the grace of 10 seconds ends the wait
+	if s.clock.sleeps != 13 {
+		t.Errorf("slept %d times, want 13", s.clock.sleeps)
 	}
 	if !slices.Contains(s.d.execs, "root cat /proc/net/tcp") {
 		t.Errorf("execs = %q", s.d.execs)
@@ -2050,8 +2051,29 @@ func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "slept", s.clock.sleeps, 0)
+	equal(t, "slept", s.clock.sleeps, 10)
 	equal(t, "notes", r.Notes, []string(nil))
+}
+
+func TestStartWaitsForEveryExposedPort(t *testing.T) {
+	s := newStartScene()
+	// mysqld opens its X port (33060) first and 3306 five seconds later: a client
+	// that connects when only 33060 listens is refused
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		d := s.clock.now().Sub(start)
+		switch {
+		case d >= 5*time.Second:
+			return []int{3306, 33060}
+		case d >= 2*time.Second:
+			return []int{33060}
+		}
+		return nil
+	}
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 5)
 }
 
 func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
@@ -2062,12 +2084,13 @@ func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
 	if _, err := Start(context.Background(), s.d, s.o); err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "slept", s.clock.sleeps, 0)
+	equal(t, "slept", s.clock.sleeps, 10)
 }
 
 func TestStartListeningOnTcp6IsReady(t *testing.T) {
 	s := newStartScene()
 	s.listening = func() []int { return nil }
+	s.d.cfg.ExposedPorts = []string{"3306/tcp"}
 	s.d.tcp6 = func() string { return tcpTable(3306) }
 	if _, err := Start(context.Background(), s.d, s.o); err != nil {
 		t.Fatal(err)

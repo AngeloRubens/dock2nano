@@ -489,7 +489,7 @@ type runState struct {
 	// noted holds what Start noticed about each started service; every service
 	// observed with it running gets the notes, not only the first one.
 	noted map[string][]string
-	order   []string
+	order []string
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
 	failed map[string]string
