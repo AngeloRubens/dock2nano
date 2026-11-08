@@ -1530,6 +1530,12 @@ func TestEveryPackageOfTheComposeFileHasAVolumeSize(t *testing.T) {
 			t.Errorf("%s: base_volume_sz %q, want 256m", c.Pkg, c.BaseVolumeSz)
 		}
 	}
+	// "ops pkg load" does not read compose.yaml: the manifest has the size too
+	for _, s := range p.Services {
+		if s.Manifest.BaseVolumeSz != "256m" {
+			t.Errorf("%s: manifest BaseVolumeSz %q, want 256m", s.Name, s.Manifest.BaseVolumeSz)
+		}
+	}
 }
 
 func TestNumericUserWhenTheObservedOneIsUnknownGoesInTheManifest(t *testing.T) {

@@ -801,6 +801,8 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: %s did not open %s: say it with --file", image, program)
 	}
 
+	r.writeLocalNames(sysroot)
+
 	return &Result{
 		Sysroot:            sysroot,
 		Program:            program,
@@ -851,6 +853,27 @@ func parseStatusIDs(text string) (uid, gid int, ok bool) {
 		return -1, -1, false
 	}
 	return uid, gid, true
+}
+
+// writeLocalNames gives the package an /etc/hosts that names localhost, unless the sysroot has one.
+// The /etc/hosts of the container is not carried (docker writes it with the name and the address
+// of that container), and without any, a program that looks up "localhost" asks the resolver and
+// does not get an answer: caddy and etcd stop at "lookup localhost: no such host".
+func (r *run) writeLocalNames(sysroot string) {
+	path := filepath.Join(sysroot, "etc", "hosts")
+	if _, err := os.Lstat(path); err == nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		r.warnOnce(fmt.Sprintf("could not make /etc/hosts for the package: %v", err))
+		return
+	}
+	const hosts = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+	if err := os.WriteFile(path, []byte(hosts), 0o644); err != nil {
+		r.warnOnce(fmt.Sprintf("could not make /etc/hosts for the package: %v", err))
+		return
+	}
+	r.warnOnce("the /etc/hosts of the container is not carried; the package gets one that names localhost")
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root. strace looks the

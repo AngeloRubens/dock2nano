@@ -2792,3 +2792,44 @@ func (f *failFrom) ExecUser(ctx context.Context, id, user string, cmd []string) 
 	}
 	return f.startFake.ExecUser(ctx, id, user, cmd)
 }
+
+func TestObserveGivesThePackageAHostsFileWithLocalhost(t *testing.T) {
+	s := newScene(t)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "127.0.0.1\tlocalhost") || !strings.Contains(string(b), "::1\tlocalhost") {
+		t.Errorf("/etc/hosts = %q", b)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the package gets one that names localhost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings %q", res.Warnings)
+	}
+}
+
+func TestWriteLocalNamesKeepsAFileThatIsThere(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "etc", "hosts"), []byte("10.0.0.1 db\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &run{once: map[string]bool{}}
+	r.writeLocalNames(dir)
+	b, _ := os.ReadFile(filepath.Join(dir, "etc", "hosts"))
+	if string(b) != "10.0.0.1 db\n" {
+		t.Errorf("/etc/hosts = %q", b)
+	}
+	equal(t, "warnings", r.warn, []string(nil))
+}

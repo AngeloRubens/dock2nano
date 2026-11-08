@@ -21,7 +21,7 @@ jobs:
           # programs that do not fork: Go, JVM, or threads in C or C++
           # programs that fork by default, with the setting that Ian uses in his packages
           - {image: "httpd:2.4-alpine", port: 80, kind: http, cmd: "httpd -DONE_PROCESS"}
-          - {image: "nginx:1.27-alpine", port: 8080, kind: http, conftarget: "/etc/nginx/nginx.conf", conf: "worker_processes 1;\\ndaemon off;\\nmaster_process off;\\npid /tmp/nginx.pid;\\nerror_log stderr crit;\\nevents { worker_connections 1024; }\\nhttp { access_log off; server { listen 8080; location / { root /usr/share/nginx/html; } } }\\n"}
+          - {image: "nginx:1.27-alpine", port: 8080, kind: http, conftarget: "/etc/nginx/nginx.conf", conf: "worker_processes 1;\\nmaster_process off;\\npid /tmp/nginx.pid;\\nerror_log stderr crit;\\nevents { worker_connections 1024; }\\nhttp { access_log off; server { listen 8080; location / { root /usr/share/nginx/html; } } }\\n"}
           - {image: "caddy:2-alpine", port: 80, kind: http}
           - {image: "registry:2", port: 5000, kind: http}
           - {image: "traefik:v3.1", port: 80, kind: http}
@@ -29,7 +29,7 @@ jobs:
           - {image: "prom/prometheus:v2.54.1", port: 9090, kind: http}
           - {image: "quay.io/coreos/etcd:v3.5.16", port: 2379, kind: tcp, cmd: "etcd --listen-client-urls=http://0.0.0.0:2379 --advertise-client-urls=http://0.0.0.0:2379"}
           - {image: "nats:2-alpine", port: 4222, kind: tcp}
-          - {image: "minio/minio:latest", port: 9000, kind: http, cmd: "server /data"}
+          - {image: "quay.io/minio/minio:latest", port: 9000, kind: http, cmd: "server /data"}
           - {image: "victoriametrics/victoria-metrics:v1.103.0", port: 8428, kind: http}
           - {image: "influxdb:2", port: 8086, kind: http}
           - {image: "redis:7-alpine", port: 6379, kind: tcp, cmd: "redis-server --bind 0.0.0.0 --protected-mode no --save \"\" --appendonly no"}

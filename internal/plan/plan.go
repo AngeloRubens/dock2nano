@@ -61,6 +61,11 @@ type Manifest struct {
 	// service before it.
 	RebootOnExit bool `json:"RebootOnExit"`
 
+	// BaseVolumeSz is the size of the writable volume, as in compose.yaml:
+	// "ops pkg load" reads it from the manifest, and "ops compose" takes the
+	// value of compose.yaml over it.
+	BaseVolumeSz string `json:",omitempty"`
+
 	// DisableArgsCopy stops ops from copying a host file named like Args[1]
 	// into the image.
 	DisableArgsCopy bool `json:",omitempty"`

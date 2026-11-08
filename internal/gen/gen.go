@@ -166,7 +166,7 @@ func Generate(in Input) (*plan.Plan, error) {
 		}
 		folders[svc.PackageName] = s.Name
 		g.plan.Services = append(g.plan.Services, *svc)
-		g.plan.Compose.Packages = append(g.plan.Compose.Packages, plan.ComposePackage{Pkg: pkgOf[s.Name], Name: svc.PackageName, Local: true, Arch: in.Arch, BaseVolumeSz: volumeSize(svc.Sysroot)})
+		g.plan.Compose.Packages = append(g.plan.Compose.Packages, plan.ComposePackage{Pkg: pkgOf[s.Name], Name: svc.PackageName, Local: true, Arch: in.Arch, BaseVolumeSz: svc.Manifest.BaseVolumeSz})
 	}
 	g.networkNote(pkgOf)
 	g.envNote()
@@ -352,6 +352,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.identity(s, si, obs, &m)
 	g.unknown(s, si)
 	g.observed(s, obs)
+	m.BaseVolumeSz = volumeSize(obs.Sysroot)
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
 }
 
