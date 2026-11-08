@@ -2282,6 +2282,7 @@ func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
 		{"password that starts with digits", "DATABASE_URL=postgres://app:2024/spring@db/x", "see postgres://app:2024/spring@db/x", "see postgres://***@db/x"},
 		{"hash after digits", "DATABASE_URL=postgres://app:5#xyz12@db/x", "see postgres://app:5#xyz12@db/x", "see postgres://***@db/x"},
 		{"an at sign in a path is not a user", "REGISTRY=https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg", "https://registry.example/@scope/pkg"},
+		{"a user without a password", "REPO=https://abcdef123456@git.example/x", "clone https://abcdef123456@git.example/x", "clone https://***@git.example/x"},
 		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
 		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
 		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
@@ -2632,21 +2633,28 @@ func TestObserveProbeIsBoundedByTheEndOfTheObservation(t *testing.T) {
 func TestStartCancelledWhileSocketsCannotBeReadIsAnError(t *testing.T) {
 	s := newStartScene()
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &cancelOnExec{startFake: s.d, cancel: cancel}
+	// the exec fails and the context ends at the poll after 3 seconds, when the container
+	// would be taken as ready
+	d := &cancelOnExec{startFake: s.d, cancel: cancel, clock: s.clock, at: time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC)}
 	if r, err := Start(ctx, d, s.o); err == nil || r != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("r = %v, err = %v", r, err)
 	}
 }
 
-// cancelOnExec cancels the context at the first exec and fails it.
+// cancelOnExec fails every exec, and cancels the context from the time at.
 type cancelOnExec struct {
 	*startFake
 	cancel context.CancelFunc
+	clock  *fakeClock
+	at     time.Time
 }
 
 func (c *cancelOnExec) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
-	c.cancel()
-	return nil, context.Canceled
+	if !c.clock.now().Before(c.at) {
+		c.cancel()
+		return nil, context.Canceled
+	}
+	return nil, errors.New("exec failed")
 }
 
 func TestStartServerForTheSetUpThatEndsDoesNotUseUpTheGrace(t *testing.T) {
