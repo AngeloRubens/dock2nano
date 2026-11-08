@@ -69,13 +69,21 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, failed: map[string]string{}}
+	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, failed: map[string]string{}}
+	// The copies of the binds are removed however the run ends, after the
+	// containers that use them are stopped.
+	defer rs.removeCopies(a)
 	if len(converted) > 0 {
 		name, err := networkName()
 		if err != nil {
 			return 0, err
 		}
-		if err := a.Docker.NetworkCreate(ctx, name); err != nil {
+		if err := a.Docker.NetworkCreate(ctx, name, "dock2nano=1"); err != nil {
+			// Docker may have made the network even though the call failed (a
+			// cancelled context): remove it, best effort.
+			cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			a.Docker.NetworkRemove(cctx, name)
 			return 0, fmt.Errorf("creating the docker network %s: %w", name, err)
 		}
 		rs.network = name
@@ -422,7 +430,8 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Env = a.serviceEnv(s, dir)
 	oo.WorkingDir = s.WorkingDir
 	oo.User = s.User
-	oo.Binds = a.binds(s, dir)
+	var bindNotes []string
+	oo.Binds, bindNotes = rs.mountBinds(a, s.Name, a.binds(s, dir))
 	oo.Seconds = o.seconds
 	oo.Log = func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
@@ -445,6 +454,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		return si, err
 	}
 	if res != nil {
+		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
 	return si, nil
@@ -476,10 +486,19 @@ type runState struct {
 	// running holds the services started for the observation of others; order
 	// is the order they were started in.
 	running map[string]Stopper
-	order   []string
+	// noted holds what Start noticed about each started service; every service
+	// observed with it running gets the notes, not only the first one.
+	noted map[string][]string
+	order []string
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
 	failed map[string]string
+	// binds holds, by host path, the mount of each read-write bind: the copy
+	// that the observation and the started services share. tmpRoot is the
+	// private directory with the copies; copies counts them.
+	binds   map[string]*bindMount
+	tmpRoot string
+	copies  int
 }
 
 // closure returns the services that s depends on, directly or not, in
@@ -517,6 +536,11 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 	var notes []string
 	for _, name := range rs.closure(s) {
 		if rs.running[name] != nil {
+			for _, n := range rs.noted[name] {
+				msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
+				fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+				notes = append(notes, msg)
+			}
 			continue
 		}
 		why := rs.failed[name]
@@ -545,6 +569,15 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 			} else {
 				rs.running[name] = st
 				rs.order = append(rs.order, name)
+				// what Start noticed (a container that runs and listens on nothing)
+				if nl, ok := st.(interface{ NoteList() []string }); ok {
+					rs.noted[name] = nl.NoteList()
+				}
+				for _, n := range rs.noted[name] {
+					msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
+					fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+					notes = append(notes, msg)
+				}
 			}
 		}
 		if why != "" {

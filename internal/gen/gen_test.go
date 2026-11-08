@@ -1433,3 +1433,43 @@ func TestHealthcheckOptionsFoldIntoItem(t *testing.T) {
 	wantNone(t, p, "web", plan.Unsupported, "healthcheck")
 	want1(t, p, "web", plan.Unsupported, "healthcheck.interval", "not converted")
 }
+
+func TestObservedUserRows(t *testing.T) {
+	tests := []struct {
+		name      string
+		user      string
+		imageUser string
+		uid       int
+		want      string
+	}{
+		{"root in the file, entrypoint dropped to 999", "root", "", 999, "the program ran as uid 999"},
+		{"zero in the file, entrypoint dropped to 999", "0", "", 999, "the program ran as uid 999"},
+		{"zero with group in the file", "0:0", "", 999, "the program ran as uid 999"},
+		{"no user in the file", "", "", 999, "the program ran as uid 999"},
+		{"non-root user in the file", "app", "", 999, "user app is not applied"},
+		{"root observed", "", "", 0, ""},
+		{"unknown, image user non-root", "", "mysql", -1, "the program was started as user mysql in the image; it was not possible to read which user it ran as; nanos runs everything as root"},
+		{"unknown, image user numeric", "", "999:999", -1, "started as user 999:999 in the image"},
+		{"unknown, image user root", "", "root", -1, ""},
+		{"unknown, no image user", "", "", -1, ""},
+		{"unknown, file says root", "root", "mysql", -1, ""},
+		{"unknown, file says non-root", "app", "mysql", -1, "user app is not applied"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			web := svc("web")
+			web.User = tt.user
+			in := newInput(&fake{}, web)
+			in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = tt.uid, tt.uid
+			si := in.Services["web"]
+			si.Image = &docker.ImageConfig{User: tt.imageUser}
+			in.Services["web"] = si
+			p := mustGen(t, in)
+			if tt.want == "" {
+				wantNone(t, p, "web", plan.Unsupported, "user")
+				return
+			}
+			want1(t, p, "web", plan.Unsupported, "user", tt.want)
+		})
+	}
+}

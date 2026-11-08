@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -48,20 +46,25 @@ type StartOptions struct {
 	// Log receives the messages, in the manner of fmt.Printf. nil drops them.
 	Log func(format string, args ...any)
 
-	// now, sleep and dial are the clock and the connection; tests replace them.
+	// now and sleep are the clock and the pause; tests replace them.
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
-	dial  func(ctx context.Context, address string) error
 }
 
 // Running is a container started by Start.
 type Running struct {
 	d  Docker
 	id string
+	// Notes are things to tell the user about how the container came up, for instance that it was
+	// running at the deadline but listened on no port.
+	Notes []string
 }
 
 // ID is the id of the container.
 func (r *Running) ID() string { return r.id }
+
+// NoteList is Notes, for a caller that holds the container through an interface.
+func (r *Running) NoteList() []string { return r.Notes }
 
 // Stop stops and removes the container, with a context of its own so that it also works after
 // the context of the run has ended. It is safe to call more than once.
@@ -83,11 +86,14 @@ func (r *Running) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Start runs the image as a plain container (no tracing) and returns when it is ready: when every
-// tcp port the image exposes accepts a connection at the address of the container, or, for an
-// image that exposes none, when the container is still running after 3 seconds. A container that
-// stops before it is ready, or is not ready within o.Wait, is an error that includes the end of
-// its output (1 KiB, the values of o.Env hidden). The container is removed on every error.
+// Start runs the image as a plain container (no tracing) and returns when it is ready: when the
+// container runs and every tcp port that the image exposes is in the listening state inside it (or, after 10 seconds with one of them listening, whatever listens) (read from
+// /proc/net/tcp and tcp6 of the container, so nothing is dialed from this machine), or, for an
+// image that exposes no port, when the container is still running after 3 seconds. If the
+// deadline o.Wait comes while the container still runs, it is returned as running with a note in
+// Running.Notes. A container that stops before it is ready is an error that includes the end of
+// its output (1 KiB, the values of o.Env hidden), and so is an image that exposes no port and does
+// not stay up within o.Wait. The container is removed on every error.
 func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	if o.Image == "" {
 		return nil, errors.New("observe: start: no image given")
@@ -100,9 +106,6 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	}
 	if o.sleep == nil {
 		o.sleep = sleepContext
-	}
-	if o.dial == nil {
-		o.dial = dialTCP
 	}
 	r := &run{d: d, o: Options{Image: o.Image, Env: o.Env, Log: o.Log, now: o.now, sleep: o.sleep}, once: map[string]bool{}}
 
@@ -155,72 +158,77 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	if err := d.Start(ctx, id); err != nil {
 		return fail(fmt.Errorf("observe: start: starting the container: %w", err))
 	}
-	if err := r.ready(ctx, id, ports, o); err != nil {
+	notes, err := r.ready(ctx, id, ports, o)
+	if err != nil {
 		return fail(err)
 	}
+	started.Notes = notes
 	return started, nil
 }
 
-// ready waits for the container to be ready, as Start describes.
-func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions) error {
-	begin := o.now()
-	deadline := begin.Add(o.Wait)
-	for {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
-		}
-		up, err := r.d.Running(ctx, id)
-		if err != nil {
-			return fmt.Errorf("observe: start: asking whether the container of %s runs: %w", o.Image, err)
-		}
-		if !up {
-			return fmt.Errorf("observe: start: the container of %s stopped before it was ready%s", o.Image, r.startLogTail(id))
-		}
-		if len(ports) == 0 {
-			if !o.now().Before(begin.Add(stayUpFor)) {
-				return nil
-			}
-		} else if r.portsOpen(ctx, id, ports, o) {
-			return nil
-		}
-		if !o.now().Before(deadline) {
-			what := "did not stay up"
-			if len(ports) > 0 {
-				what = "did not accept connections on " + portList(ports)
-			}
-			return fmt.Errorf("observe: start: the container of %s %s within %s%s", o.Image, what, o.Wait, r.startLogTail(id))
-		}
-		if err := o.sleep(ctx, startPollEvery); err != nil {
-			return fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
-		}
-	}
-}
+// otherPortsGrace is how long Start waits, after one port listens, for the other ports that the
+// image exposes.
+const otherPortsGrace = 10 * time.Second
 
-// portsOpen tells whether every port accepts a connection at the address of the container. A
-// container that has no address yet is not ready.
-func (r *run) portsOpen(ctx context.Context, id string, ports []int, o StartOptions) bool {
-	a, ok := r.d.(Addresser)
-	if !ok {
-		return false
+// hasAll says whether every port of want is in got.
+func hasAll(got, want []int) bool {
+	have := map[int]bool{}
+	for _, p := range got {
+		have[p] = true
 	}
-	host, err := a.IPAddress(ctx, id)
-	if err != nil || host == "" {
-		return false
-	}
-	for _, p := range ports {
-		if err := o.dial(ctx, net.JoinHostPort(host, strconv.Itoa(p))); err != nil {
+	for _, p := range want {
+		if !have[p] {
 			return false
 		}
 	}
 	return true
 }
 
-func portList(ports []int) string {
-	var s []string
-	for _, p := range ports {
-		s = append(s, strconv.Itoa(p))
+// ready waits for the container to be ready, as Start describes, and gives the notes to keep.
+func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions) ([]string, error) {
+	begin := o.now()
+	deadline := begin.Add(o.Wait)
+	var first time.Time
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
+		}
+		up, err := r.d.Running(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("observe: start: asking whether the container of %s runs: %w", o.Image, err)
+		}
+		if !up {
+			return nil, fmt.Errorf("observe: start: the container of %s stopped before it was ready%s", o.Image, r.startLogTail(id))
+		}
+		if len(ports) == 0 {
+			if !o.now().Before(begin.Add(stayUpFor)) {
+				return nil, nil
+			}
+		} else if got := r.listening(ctx, id); len(got) > 0 {
+			// a server may open one port before the one a client uses (mysqld opens its
+			// X port first): wait for every port the image exposes, but not for ever
+			if hasAll(got, ports) {
+				return nil, nil
+			}
+			if first.IsZero() {
+				first = o.now()
+			}
+			if !o.now().Before(first.Add(otherPortsGrace)) {
+				return nil, nil
+			}
+		}
+		if !o.now().Before(deadline) {
+			if len(ports) == 0 {
+				return nil, fmt.Errorf("observe: start: the container of %s did not stay up within %s%s", o.Image, o.Wait, r.startLogTail(id))
+			}
+			note := fmt.Sprintf("the container was running but listens on no port after %d seconds", int(o.Wait.Seconds()))
+			r.logf("%s\n", note)
+			return []string{note}, nil
+		}
+		if err := o.sleep(ctx, startPollEvery); err != nil {
+			return nil, fmt.Errorf("observe: start: waiting for %s: %w", o.Image, err)
+		}
 	}
-	return strings.Join(s, ", ")
 }
 
 // startLogTail is ": " and the last 1 KiB of the output of the container, secrets hidden, or a
@@ -240,14 +248,4 @@ func (r *run) startLogTail(id string) string {
 		return " (the container wrote nothing)"
 	}
 	return ": " + text
-}
-
-// dialTCP connects to the address and closes the connection.
-func dialTCP(ctx context.Context, address string) error {
-	dialer := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
 }

@@ -1532,6 +1532,65 @@ func TestObserveTraceStartsInTheDirectoryOfTheContainer(t *testing.T) {
 	equal(t, "working dir", res.WorkingDir, "/srv/sub")
 }
 
+func TestObserveWorkingDirectoryExistsInTheSysroot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cwd  string
+		want string
+	}{
+		{"from /proc", "/srv/app\n", "srv/app"},
+		{"from the image", "", "app"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.traceTxt = `11 execve("/usr/bin/x", ["x"], 0x7ffd /* 4 vars */) = 0
+11 openat(AT_FDCWD, "/usr/bin/x", O_RDONLY) = 3
+`
+			s.d.files["/usr/bin/x"] = entry{data: "x", mode: 0755}
+			s.d.exec["readlink /proc/11/exe"] = "/usr/bin/x\n"
+			if tc.cwd != "" {
+				s.d.exec["readlink /proc/11/cwd"] = tc.cwd
+			} else {
+				delete(s.d.exec, "readlink /proc/11/cwd")
+			}
+			res, err := s.observe(t, context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := os.Stat(filepath.Join(res.Sysroot, tc.want))
+			if err != nil || !st.IsDir() {
+				t.Errorf("%s in the sysroot: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestObserveNetworkFilesOfTheRuntimeAreNotCarried(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = `11 execve("/usr/bin/app", ["app"], 0x7ffd /* 4 vars */) = 0
+11 openat(AT_FDCWD, "/etc/resolv.conf", O_RDONLY) = 3
+11 openat(AT_FDCWD, "/etc/hosts", O_RDONLY) = 3
+11 openat(AT_FDCWD, "/etc/hostname", O_RDONLY) = 3
+11 openat(AT_FDCWD, "/etc/app.conf", O_RDONLY) = 3
+`
+	s.d.files["/etc/resolv.conf"] = entry{data: "nameserver 127.0.0.11\n"}
+	s.d.files["/etc/hosts"] = entry{data: "127.0.0.1 localhost\n"}
+	s.d.files["/etc/hostname"] = entry{data: "abc\n"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"etc/resolv.conf", "etc/hosts", "etc/hostname"} {
+		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err == nil {
+			t.Errorf("%s is in the sysroot", f)
+		}
+	}
+	equal(t, "configuration files", res.ConfigurationFiles, []string{"/etc/app.conf"})
+	if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "resolv.conf") }) {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
 func TestObserveRelativePathWithoutAWorkingDirIsReadAgainstRoot(t *testing.T) {
 	s := newScene(t)
 	s.d.cfg.WorkingDir = ""
@@ -1834,6 +1893,11 @@ type startFake struct {
 	clock  *fakeClock
 	// startErr fails Start of the container.
 	startErr error
+	// tcp and tcp6 give the text of /proc/net/tcp and /proc/net/tcp6 of the container.
+	tcp  func() string
+	tcp6 func() string
+	// execs are the commands ExecUser was given, with the user.
+	execs []string
 	// stopCtxErr and removeCtxErr are the errors of the contexts Stop and Remove were given.
 	stopCtxErr   []error
 	removeCtxErr []error
@@ -1882,27 +1946,43 @@ func (f *startFake) LogsTail(ctx context.Context, id string, lines int) ([]byte,
 
 func (f *startFake) IPAddress(ctx context.Context, id string) (string, error) { return f.ip, nil }
 
+func (f *startFake) ExecUser(ctx context.Context, id, user string, cmd []string) ([]byte, error) {
+	f.execs = append(f.execs, user+" "+strings.Join(cmd, " "))
+	switch strings.Join(cmd, " ") {
+	case "cat /proc/net/tcp":
+		return []byte(f.tcp()), nil
+	case "cat /proc/net/tcp6":
+		return []byte(f.tcp6()), nil
+	}
+	return nil, errors.New("fake exec: no answer for " + strings.Join(cmd, " "))
+}
+
+// tcpTable is the text of /proc/net/tcp with a socket in the listening state per port, and one
+// established connection that is not a server.
+func tcpTable(ports ...int) string {
+	text := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+	for i, p := range ports {
+		text += fmt.Sprintf("  %d: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1 0\n", i, p)
+	}
+	return text + "  9: 0100007F:9999 0100007F:0050 01 00000000:00000000 00:00000000 00000000     0        0 2 1 0\n"
+}
+
 type startScene struct {
 	d     *startFake
 	clock *fakeClock
-	dials []string
-	// open reports whether a dial succeeds
-	open func(address string) bool
-	o    StartOptions
+	// listening are the ports the container listens on at the moment
+	listening func() []int
+	o         StartOptions
 }
 
 func newStartScene() *startScene {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	s := &startScene{clock: clock}
 	s.d = &startFake{clock: clock, have: true, ip: "172.18.0.2", cfg: &docker.ImageConfig{OS: "linux", ExposedPorts: []string{"3306/tcp", "33060/tcp", "53/udp"}}}
-	s.open = func(string) bool { return true }
-	s.o = StartOptions{Image: "db:1", now: clock.now, sleep: clock.sleep, dial: func(ctx context.Context, address string) error {
-		s.dials = append(s.dials, address)
-		if !s.open(address) {
-			return errors.New("connection refused")
-		}
-		return nil
-	}}
+	s.listening = func() []int { return []int{3306, 33060} }
+	s.d.tcp = func() string { return tcpTable(s.listening()...) }
+	s.d.tcp6 = func() string { return tcpTable() }
+	s.o = StartOptions{Image: "db:1", now: clock.now, sleep: clock.sleep}
 	return s
 }
 
@@ -1936,54 +2016,122 @@ func TestStartCreateOptions(t *testing.T) {
 	equal(t, "started", s.d.started, []string{"dep-1"})
 }
 
-func TestStartReadyWhenEveryPortAccepts(t *testing.T) {
+func TestStartReadyWhenAPortListens(t *testing.T) {
 	s := newStartScene()
-	// 3306 opens at once, 33060 only after 3 seconds
-	s.open = func(address string) bool {
-		return address == "172.18.0.2:3306" || s.clock.now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) >= 3*time.Second
+	// nothing listens for 3 seconds, then the server opens 3306 only
+	s.listening = func() []int {
+		if s.clock.now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) >= 3*time.Second {
+			return []int{3306}
+		}
+		return nil
 	}
 	r, err := Start(context.Background(), s.d, s.o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.clock.sleeps != 3 {
-		t.Errorf("slept %d times, want 3", s.clock.sleeps)
+	// 3306 opens at 3 seconds; 33060 never does: the grace of 10 seconds ends the wait
+	if s.clock.sleeps != 13 {
+		t.Errorf("slept %d times, want 13", s.clock.sleeps)
 	}
-	// the udp port is not asked for
-	for _, a := range s.dials {
-		if strings.HasSuffix(a, ":53") {
-			t.Errorf("dialed %s", a)
-		}
+	if !slices.Contains(s.d.execs, "root cat /proc/net/tcp") {
+		t.Errorf("execs = %q", s.d.execs)
 	}
-	if len(s.dials) == 0 || s.dials[len(s.dials)-1] != "172.18.0.2:33060" {
-		t.Errorf("dials = %v", s.dials)
-	}
+	equal(t, "notes", r.Notes, []string(nil))
 	equal(t, "removed before Stop", s.d.removed, []string(nil))
 	_ = r.Stop(context.Background())
 	equal(t, "removed after Stop", s.d.removed, []string{"dep-1"})
 }
 
-func TestStartNotReadyWithinWait(t *testing.T) {
+func TestStartExposedPortsThatDoNotListenDoNotBlock(t *testing.T) {
 	s := newStartScene()
-	s.open = func(string) bool { return false }
-	s.d.logs = "booting\n"
+	// rabbitmq: 5671 listens only with TLS, 5672 listens
+	s.d.cfg.ExposedPorts = []string{"5671/tcp", "5672/tcp"}
+	s.listening = func() []int { return []int{5672} }
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 10)
+	equal(t, "notes", r.Notes, []string(nil))
+}
+
+func TestStartWaitsForEveryExposedPort(t *testing.T) {
+	s := newStartScene()
+	// mysqld opens its X port (33060) first and 3306 five seconds later: a client
+	// that connects when only 33060 listens is refused
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		d := s.clock.now().Sub(start)
+		switch {
+		case d >= 5*time.Second:
+			return []int{3306, 33060}
+		case d >= 2*time.Second:
+			return []int{33060}
+		}
+		return nil
+	}
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 5)
+}
+
+func TestStartAPortOfAnotherNumberThanTheExposedOneIsReady(t *testing.T) {
+	s := newStartScene()
+	// nginx with a user configuration on 8080 never opens the exposed 80
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
+	s.listening = func() []int { return []int{8080} }
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 10)
+}
+
+func TestStartListeningOnTcp6IsReady(t *testing.T) {
+	s := newStartScene()
+	s.listening = func() []int { return nil }
+	s.d.cfg.ExposedPorts = []string{"3306/tcp"}
+	s.d.tcp6 = func() string { return tcpTable(3306) }
+	if _, err := Start(context.Background(), s.d, s.o); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 0)
+}
+
+func TestStartDeadlineOfARunningContainerKeepsIt(t *testing.T) {
+	s := newStartScene()
+	s.listening = func() []int { return nil }
 	s.o.Wait = 5 * time.Second
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil || r == nil {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
+	equal(t, "notes", r.Notes, []string{"the container was running but listens on no port after 5 seconds"})
+	equal(t, "slept", s.clock.sleeps, 5)
+	equal(t, "removed", s.d.removed, []string(nil))
+	equal(t, "stopped", s.d.stopped, []string(nil))
+}
+
+func TestStartNoPortImageNotUpWithinWait(t *testing.T) {
+	s := newStartScene()
+	s.listening = func() []int { return nil }
+	s.d.logs = "booting\n"
+	s.d.cfg.ExposedPorts = nil
+	// an image without ports that cannot stay up for 3 seconds within a wait of 2
+	s.o.Wait = 2 * time.Second
 	r, err := Start(context.Background(), s.d, s.o)
 	if err == nil || r != nil {
 		t.Fatalf("r = %v, err = %v", r, err)
 	}
-	if !strings.Contains(err.Error(), "3306, 33060") || !strings.Contains(err.Error(), "booting") {
+	if !strings.Contains(err.Error(), "did not stay up within 2s") || !strings.Contains(err.Error(), "booting") {
 		t.Errorf("err = %v", err)
-	}
-	if s.clock.sleeps != 5 {
-		t.Errorf("slept %d times, want 5", s.clock.sleeps)
 	}
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
 }
 
 func TestStartExitsBeforeReady(t *testing.T) {
 	s := newStartScene()
-	s.open = func(string) bool { return false }
+	s.listening = func() []int { return nil }
 	s.d.exitAt = s.clock.now().Add(2 * time.Second)
 	s.o.Env = []string{"PASSWORD=s3cret-pw"}
 	s.d.logs = strings.Repeat("old line\n", 200) + "last s3cret-pw\n"
@@ -2014,9 +2162,8 @@ func TestStartImageWithoutPortsStaysUpThreeSeconds(t *testing.T) {
 	if got := s.clock.now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); got != 3*time.Second {
 		t.Errorf("waited %s, want 3s", got)
 	}
-	if len(s.dials) != 0 {
-		t.Errorf("dials = %v", s.dials)
-	}
+	// the sockets are not asked for: only the 3 seconds count
+	equal(t, "execs", s.d.execs, []string(nil))
 
 	s = newStartScene()
 	s.d.cfg.ExposedPorts = []string{"53/udp"}
@@ -2029,7 +2176,7 @@ func TestStartImageWithoutPortsStaysUpThreeSeconds(t *testing.T) {
 
 func TestStartCancelRemovesTheContainer(t *testing.T) {
 	s := newStartScene()
-	s.open = func(string) bool { return false }
+	s.listening = func() []int { return nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	s.o.sleep = func(ctx context.Context, d time.Duration) error {
 		cancel()
@@ -2112,6 +2259,31 @@ func TestObserveRedactOnlyValuesOfSecretNames(t *testing.T) {
 func TestObserveRedactHidesValuesFromSixBytes(t *testing.T) {
 	r := &run{o: Options{Env: []string{"API_KEY=abcde", "DB_PASSWORD=fghijk"}}}
 	equal(t, "redacted", r.redact("abcde fghijk"), "abcde ***")
+}
+
+func TestObserveRedactSecretsByNameAndByShape(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+		text string
+		want string
+	}{
+		{"url with a user", "DATABASE_URL=postgres://app:s3cr3tpw@db/app", "connect postgres://app:s3cr3tpw@db/app failed", "connect postgres://***@db/app failed"},
+		{"jdbc url with a user", "JDBC_URL=jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://app:s3cr3tpw@db/x", "bad jdbc:mysql://***@db/x"},
+		{"pwd name", "MYSQL_PWD=s3cr3tpw", "login with s3cr3tpw", "login with ***"},
+		{"dsn name", "SENTRY_DSN=https://abcdef123456@o1.ingest.sentry.io/1", "to https://abcdef123456@o1.ingest.sentry.io/1 now", "to *** now"},
+		{"password in a query", "JDBC_URL=jdbc:mysql://db/x?user=u&password=s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=s3cr3tpw and s3cr3tpw", "url jdbc:mysql://db/x?user=u&password=*** and ***"},
+		{"pwd in a semicolon string", "CONN=Server=db;Uid=u;Pwd=abc;Database=x", "Server=db;Uid=u;Pwd=abc;Database=x", "Server=db;Uid=u;Pwd=***;Database=x"},
+		{"the variable PWD is a directory", "PWD=/srv/app", "in /srv/app", "in /srv/app"},
+		{"OLDPWD is a directory", "OLDPWD=/srv/old", "in /srv/old", "in /srv/old"},
+		{"a name is left alone", "DB_NAME=petclinic", "database petclinic", "database petclinic"},
+		{"a url without a user", "URL=http://db:8080/x", "http://db:8080/x", "http://db:8080/x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &run{o: Options{Env: []string{tc.env}}}
+			equal(t, "redacted", r.redact(tc.text), tc.want)
+		})
+	}
 }
 
 func TestPasswdNameSkipsCommentLines(t *testing.T) {
@@ -2202,7 +2374,7 @@ func TestObserveStoppedLogDropsABrokenCharacter(t *testing.T) {
 
 func TestStartLogTailDropsABrokenCharacter(t *testing.T) {
 	s := newStartScene()
-	s.open = func(string) bool { return false }
+	s.listening = func() []int { return nil }
 	s.d.exitAt = s.clock.now().Add(2 * time.Second)
 	s.d.logs = strings.Repeat("\u00e9", 1500) + "b"
 	r, err := Start(context.Background(), s.d, s.o)
@@ -2271,26 +2443,38 @@ type noAddress struct {
 	Docker
 }
 
-func TestStartWithoutAnAddresserIsNeverReady(t *testing.T) {
+func TestStartWithoutAnAddresserIsReady(t *testing.T) {
 	s := newStartScene()
-	s.o.Wait = 3 * time.Second
 	r, err := Start(context.Background(), noAddress{s.d}, s.o)
-	if r != nil || err == nil || !strings.Contains(err.Error(), "did not accept connections on 3306, 33060 within 3s") {
+	if err != nil || r == nil {
 		t.Fatalf("r = %v, err = %v", r, err)
 	}
-	equal(t, "dials", s.dials, []string(nil))
-	equal(t, "removed", s.d.removed, []string{"dep-1"})
+	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "removed", s.d.removed, []string(nil))
 }
 
-func TestStartWithAnEmptyAddressIsNeverReady(t *testing.T) {
+func TestStartWithoutAnAddresserAndNothingListeningKeepsTheContainerWithANote(t *testing.T) {
 	s := newStartScene()
-	s.d.ip = ""
+	s.listening = func() []int { return nil }
 	s.o.Wait = 3 * time.Second
-	r, err := Start(context.Background(), s.d, s.o)
-	if r != nil || err == nil || !strings.Contains(err.Error(), "did not accept connections on 3306, 33060 within 3s") {
+	r, err := Start(context.Background(), noAddress{s.d}, s.o)
+	if err != nil || r == nil {
 		t.Fatalf("r = %v, err = %v", r, err)
 	}
-	equal(t, "dials", s.dials, []string(nil))
+	equal(t, "notes", r.Notes, []string{"the container was running but listens on no port after 3 seconds"})
+}
+
+func TestStartDeadlineOfAContainerThatExitedIsAnError(t *testing.T) {
+	s := newStartScene()
+	s.listening = func() []int { return nil }
+	s.o.Wait = 5 * time.Second
+	// it exits at the moment of the deadline
+	s.d.exitAt = s.clock.now().Add(5 * time.Second)
+	s.d.logs = "crashed\n"
+	r, err := Start(context.Background(), s.d, s.o)
+	if r != nil || err == nil || !strings.Contains(err.Error(), "stopped before it was ready: crashed") {
+		t.Fatalf("r = %v, err = %v", r, err)
+	}
 	equal(t, "removed", s.d.removed, []string{"dep-1"})
 }
 

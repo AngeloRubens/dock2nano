@@ -38,6 +38,7 @@ jobs:
         run: ops update 2>&1 | tail -5
       - name: convert
         run: |
+          set -o pipefail
           mkdir -p /tmp/out
           go run . convert -f examples/petclinic-glassfish/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 120 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml

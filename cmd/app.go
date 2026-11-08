@@ -70,7 +70,7 @@ type Docker interface {
 	Pull(ctx context.Context, image string) error
 	HasImage(ctx context.Context, image string) (bool, error)
 	Inspect(ctx context.Context, image string) (*docker.ImageConfig, error)
-	NetworkCreate(ctx context.Context, name string) error
+	NetworkCreate(ctx context.Context, name string, labels ...string) error
 	NetworkRemove(ctx context.Context, name string) error
 }
 

@@ -1358,6 +1358,11 @@ func TestNetworkCommands(t *testing.T) {
 	}
 	wantCall(t, f, "network", "create", "dock2nano-0a1b2c3d")
 	c, f = newFake()
+	if err := c.NetworkCreate(ctx, "dock2nano-0a1b2c3d", "dock2nano=1"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, "network", "create", "--label", "dock2nano=1", "dock2nano-0a1b2c3d")
+	c, f = newFake()
 	if err := c.NetworkRemove(ctx, "dock2nano-0a1b2c3d"); err != nil {
 		t.Fatal(err)
 	}
