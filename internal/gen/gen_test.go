@@ -1472,7 +1472,8 @@ func TestObservedUserRows(t *testing.T) {
 		{"non-root user in the file", "app", "", 999, "the program ran as uid 999"},
 		{"root observed", "", "", 0, ""},
 		{"unknown, image user non-root", "", "mysql", -1, "the program was started as user mysql in the image; it was not possible to read which user it ran as; nanos runs everything as root"},
-		{"unknown, image user numeric", "", "999:999", -1, "started as user 999:999 in the image"},
+		{"unknown, image user numeric", "", "999:999", -1, "the numeric user of the image, uid 999"},
+		{"unknown, file numeric over the image user", "1000:1000", "mysql", -1, "the numeric user of the file, uid 1000"},
 		{"unknown, image user root", "", "root", -1, ""},
 		{"unknown, no image user", "", "", -1, ""},
 		{"unknown, file says root", "root", "mysql", -1, ""},
@@ -1494,7 +1495,7 @@ func TestObservedUserRows(t *testing.T) {
 				return
 			}
 			kind := plan.Unsupported
-			if tt.uid > 0 {
+			if tt.uid > 0 || strings.Contains(tt.want, "numeric user") {
 				kind = plan.Approximated
 			}
 			want1(t, p, "web", kind, "user", tt.want)
@@ -1527,6 +1528,51 @@ func TestEveryPackageOfTheComposeFileHasAVolumeSize(t *testing.T) {
 	for _, c := range p.Compose.Packages {
 		if c.BaseVolumeSz != "256m" {
 			t.Errorf("%s: base_volume_sz %q, want 256m", c.Pkg, c.BaseVolumeSz)
+		}
+	}
+}
+
+func TestNumericUserWhenTheObservedOneIsUnknownGoesInTheManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, image string
+		uid, gid          any
+	}{
+		{"image uid and gid", "", "999:998", 999, 998},
+		{"image uid only", "", "999", 999, nil},
+		{"the file wins", "1000", "999:999", 1000, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			web := svc("web")
+			web.User = tc.file
+			in := newInput(&fake{}, web)
+			in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = -1, -1
+			si := in.Services["web"]
+			si.Image = &docker.ImageConfig{User: tc.image}
+			in.Services["web"] = si
+			p := mustGen(t, in)
+			pass := p.Services[0].Manifest.ManifestPassthrough
+			if pass["uid"] != tc.uid {
+				t.Errorf("uid = %v, want %v", pass["uid"], tc.uid)
+			}
+			if got, has := pass["gid"]; (tc.gid == nil) == has || (has && got != tc.gid) {
+				t.Errorf("gid = %v (%v), want %v", got, has, tc.gid)
+			}
+		})
+	}
+}
+
+func TestNumericUser(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		uid, gid int
+		ok       bool
+	}{
+		{"999", 999, -1, true}, {"999:998", 999, 998, true}, {"0", 0, 0, false}, {"root", 0, 0, false},
+		{"app:1", 0, 0, false}, {"1:app", 0, 0, false}, {"", 0, 0, false}, {"-5", 0, 0, false}, {"1:-2", 0, 0, false},
+	} {
+		uid, gid, ok := numericUser(tc.in)
+		if ok != tc.ok || (ok && (uid != tc.uid || gid != tc.gid)) {
+			t.Errorf("numericUser(%q) = %d %d %v, want %d %d %v", tc.in, uid, gid, ok, tc.uid, tc.gid, tc.ok)
 		}
 	}
 }

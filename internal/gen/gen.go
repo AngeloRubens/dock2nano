@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
@@ -571,20 +572,56 @@ func nonRootUser(user string) bool {
 	return u != "" && u != "root" && u != "0"
 }
 
+// numericUser reads "uid" or "uid:gid" with numbers and a uid above zero. gid is -1 when the text has
+// none.
+func numericUser(user string) (uid, gid int, ok bool) {
+	u, gtext, hasGroup := strings.Cut(user, ":")
+	uid, err := strconv.Atoi(u)
+	if err != nil || uid <= 0 {
+		return 0, 0, false
+	}
+	gid = -1
+	if hasGroup {
+		if gid, err = strconv.Atoi(gtext); err != nil || gid < 0 {
+			return 0, 0, false
+		}
+	}
+	return uid, gid, true
+}
+
 func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.Result, m *plan.Manifest) {
 	composeNonRoot := nonRootUser(s.User)
 	// The file may say root while the entrypoint drops to another user, so the observed user wins
 	// when it is known. nanos reads uid and gid from the root of the manifest (nanovms/nanos#2189,
-	// merged on 2026-10-31, not in release 0.1.56) and tells the program who it is; an older
-	// nanos runs the program as root, as before. ops copies ManifestPassthrough into the manifest.
+	// merged on 2026-10-31, not in release 0.1.56) and tells the program who it is; an older nanos
+	// runs the program as root, as before. ops copies ManifestPassthrough into the manifest.
+	uid, gid := obs.UID, obs.GID
+	imageUser := ""
+	if si.Image != nil {
+		imageUser = si.Image.User
+	}
+	// When the user could not be read, a numeric USER of the file (or, without one, of the image)
+	// is the next best thing to what was observed.
+	fallback := false
+	if obs.UID < 0 {
+		declared := s.User
+		if declared == "" {
+			declared = imageUser
+		}
+		if u, gr, ok := numericUser(declared); ok {
+			uid, gid, fallback = u, gr, true
+		}
+	}
 	switch {
-	case obs.UID > 0:
-		g.add(s.Name, plan.Approximated, "user", fmt.Sprintf("the program ran as uid %d (gid %d) while it was observed; uid and gid are set in the package manifest, which a nanos that reads them from the manifest honours (nanovms/nanos#2189, in master since 2026-10-31, not in release 0.1.56); an older nanos runs the program as root, and a program that refuses to run as root, or that depends on who owns its files, may not work", obs.UID, obs.GID))
+	case fallback:
+		g.add(s.Name, plan.Approximated, "user", fmt.Sprintf("it was not possible to read which user the program ran as; the numeric user of the %s, uid %d, is set in the package manifest, which a nanos that reads uid and gid from the manifest honours (nanovms/nanos#2189, in master since 2026-10-31, not in release 0.1.56); an older nanos runs the program as root", userSource(s), uid))
+	case uid > 0:
+		g.add(s.Name, plan.Approximated, "user", fmt.Sprintf("the program ran as uid %d (gid %d) while it was observed; uid and gid are set in the package manifest, which a nanos that reads them from the manifest honours (nanovms/nanos#2189, in master since 2026-10-31, not in release 0.1.56); an older nanos runs the program as root, and a program that refuses to run as root, or that depends on who owns its files, may not work", uid, gid))
 	case composeNonRoot:
 		g.add(s.Name, plan.Unsupported, "user", "user "+s.User+" is not applied; the user the program ran as could not be read, and nanos runs the program as root")
 	}
-	if obs.UID < 0 && s.User == "" && si.Image != nil && nonRootUser(si.Image.User) {
-		g.add(s.Name, plan.Unsupported, "user", fmt.Sprintf("the program was started as user %s in the image; it was not possible to read which user it ran as; nanos runs everything as root", si.Image.User))
+	if obs.UID < 0 && !fallback && s.User == "" && nonRootUser(imageUser) {
+		g.add(s.Name, plan.Unsupported, "user", fmt.Sprintf("the program was started as user %s in the image; it was not possible to read which user it ran as; nanos runs everything as root", imageUser))
 	}
 	// nanos reads "cwd" from the root of the manifest and changes to it before
 	// it starts the program; ops copies ManifestPassthrough into the manifest of
@@ -596,10 +633,10 @@ func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.R
 		cwd = "/"
 	}
 	m.ManifestPassthrough = map[string]any{"cwd": cwd}
-	if obs.UID > 0 {
-		m.ManifestPassthrough["uid"] = obs.UID
-		if obs.GID >= 0 {
-			m.ManifestPassthrough["gid"] = obs.GID
+	if uid > 0 {
+		m.ManifestPassthrough["uid"] = uid
+		if gid >= 0 {
+			m.ManifestPassthrough["gid"] = gid
 		}
 	}
 	switch {
@@ -761,4 +798,12 @@ func (g *generator) envNote() {
 		return
 	}
 	g.add("", plan.Note, "environment", "ops compose reads all packages into one configuration: environment variables of one service stay set for the services after it. Variables per service: "+strings.Join(parts, "; ")+".")
+}
+
+// userSource says where the numeric user came from: the file or the image.
+func userSource(s *compose.Service) string {
+	if s.User != "" {
+		return "file"
+	}
+	return "image"
 }
