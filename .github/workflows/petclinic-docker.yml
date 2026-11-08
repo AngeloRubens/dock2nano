@@ -2,11 +2,13 @@ name: petclinic-docker
 # Runs examples/petclinic-glassfish with plain docker compose and asks the pages that read the
 # database: what the example does where it is meant to run, to compare with nanos. Manual only.
 on:
+  push:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   compose:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[petclinic-docker]')
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
