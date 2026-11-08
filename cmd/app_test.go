@@ -1529,3 +1529,25 @@ func TestPortsOfTheFileReachTheStartOfADependency(t *testing.T) {
 		t.Errorf("started: %+v", h.started)
 	}
 }
+
+func TestADependencyReportsThatItsDependentsWroteIntoIt(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", depsCompose)
+	h.haveAll("c", "d", "w", "a")
+	h.mustRun(0, "convert")
+	var got []string
+	for _, w := range h.genIn[0].Services["db"].Observed.Warnings {
+		if strings.Contains(w, "was observed while this service was running") {
+			got = append(got, w)
+		}
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], "web, api was observed while this service was running") {
+		t.Errorf("warnings %q", got)
+	}
+	// a service nobody depends on has no such warning
+	for _, w := range h.genIn[0].Services["web"].Observed.Warnings {
+		if strings.Contains(w, "was observed while this service was running") {
+			t.Errorf("web: %q", w)
+		}
+	}
+}
