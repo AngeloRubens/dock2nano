@@ -18,20 +18,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {image: "nginx:1.27-alpine", port: 80, kind: http}
-          - {image: "httpd:2.4-alpine", port: 80, kind: http}
+          # programs that do not fork: Go, JVM, or threads in C or C++
           - {image: "caddy:2-alpine", port: 80, kind: http}
-          - {image: "redis:7-alpine", port: 6379, kind: tcp}
+          - {image: "registry:2", port: 5000, kind: http}
+          - {image: "traefik:v3.1", port: 80, kind: http}
+          - {image: "grafana/grafana:11.2.0", port: 3000, kind: http}
+          - {image: "prom/prometheus:v2.54.1", port: 9090, kind: http}
+          - {image: "quay.io/coreos/etcd:v3.5.16", port: 2379, kind: tcp, cmd: "etcd --listen-client-urls=http://0.0.0.0:2379 --advertise-client-urls=http://0.0.0.0:2379"}
+          - {image: "nats:2-alpine", port: 4222, kind: tcp}
+          - {image: "minio/minio:latest", port: 9000, kind: http, cmd: "server /data"}
+          - {image: "victoriametrics/victoria-metrics:v1.103.0", port: 8428, kind: http}
+          - {image: "influxdb:2", port: 8086, kind: http}
           - {image: "memcached:1.6-alpine", port: 11211, kind: tcp}
           - {image: "mysql:8.4", port: 3306, kind: tcp, env: "MYSQL_ROOT_PASSWORD=rootpass"}
           - {image: "mariadb:11", port: 3306, kind: tcp, env: "MARIADB_ROOT_PASSWORD=rootpass"}
-          - {image: "postgres:16-alpine", port: 5432, kind: tcp, env: "POSTGRES_PASSWORD=pw"}
-          - {image: "registry:2", port: 5000, kind: http}
-          - {image: "grafana/grafana:11.2.0", port: 3000, kind: http}
-          - {image: "prom/prometheus:v2.54.1", port: 9090, kind: http}
-          - {image: "quay.io/coreos/etcd:v3.5.16", port: 2379, kind: tcp}
+          - {image: "mongo:7", port: 27017, kind: tcp}
+          - {image: "clickhouse/clickhouse-server:24.8", port: 8123, kind: http}
           - {image: "tomcat:10.1-jre17", port: 8080, kind: http}
-          - {image: "eclipse-temurin:21-jre-alpine", port: 0, kind: none}
+          - {image: "elasticsearch:8.15.3", port: 9200, kind: tcp, env: "discovery.type=single-node"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,6 +62,7 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           PENV: ${{ matrix.env }}
+          PCMD: ${{ matrix.cmd }}
         run: |
           go build -o /tmp/d2n .
           mkdir -p /tmp/work /tmp/out
@@ -67,6 +72,7 @@ jobs:
             echo "  svc:"
             echo "    image: $IMAGE"
             if [ -n "$PENV" ]; then echo "    environment:"; echo "      - $PENV"; fi
+            if [ -n "$PCMD" ]; then echo "    command: $PCMD"; fi
           } > /tmp/work/docker-compose.yml
           set +e
           /tmp/d2n convert -f /tmp/work/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 40 > /tmp/out/report.txt 2> /tmp/out/stderr.txt
