@@ -958,7 +958,7 @@ A("observe-url-authority-first", "observe", "TestObserveRedactSecretsByNameAndBy
 A("observe-probe-bounded", "observe", "TestObserveProbeIsBoundedByTheEndOfTheObservation",
   r"""context.WithTimeout(ctx, deadline.Sub(r.o.now()))""", r"""context.WithTimeout(ctx, time.Hour)""")
 A("cmd-ro-bind-reads-copy", "cmd", "TestReadOnlyBindOfASourceThatIsCopiedReadsTheCopy",
-  r"""return &bindMount{path: m.path, readOnly: true}""", r"""return &bindMount{path: host, readOnly: true}""")
+  r"""m != nil && m.path != "" {⏎»»»return &bindMount{path: m.path, readOnly: true}""", r"""m != nil && m.path != "" {⏎»»»return &bindMount{path: host, readOnly: true}""")
 A("cmd-copies-made-writable", "cmd", "TestBindCopyOfAReadOnlyDirectoryIsRemoved",
   r"""os.Chmod(p, 0o700)""", r"""_ = p""")
 A("cmd-declared-ports-to-start", "cmd", "TestPortsOfTheFileReachTheStartOfADependency",
@@ -979,7 +979,7 @@ A("docker-cli-reads-env", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvi
 A("docker-cli-reads-home", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
   r'''"DOCKER_CONTENT_TRUST_SERVER", "HOME", "PATH", "USERPROFILE":''', r'''"DOCKER_CONTENT_TRUST_SERVER", "PATH", "USERPROFILE":''')
 A("docker-cli-value-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
-  r'''if strings.Contains(val, "@") {''', r'''if false {''')
+  r'''if strings.Contains(val, "@") && u != "DOCKER_HOST" {''', r'''if false {''')
 A("docker-cli-secret-prefix", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
   r'''strings.HasPrefix(u, "DOCKER_CLI_")''', r'''strings.HasPrefix(u, "DOCKER_")''')
 A("observe-start-ctx-after-read", "observe", "TestStartCancelledWhileSocketsCannotBeReadIsAnError",
@@ -996,6 +996,15 @@ A("cmd-rw-sources", "cmd", "TestReadOnlyBindPreparedBeforeTheWriterReadsTheCopy"
   r'''if rs.rwSources[host] {''', r'''if false {''')
 A("cmd-declared-expose-case", "cmd", "TestDeclaredPorts",
   r'''add(number, strings.ToLower(proto))''', r'''add(number, proto)''')
+
+
+# ------------------------------------------------ rules added with the sixth review
+A("docker-cli-host-over-ssh", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
+  r'''&& u != "DOCKER_HOST" {''', r'''{''')
+A("observe-start-deadline-note-after-reads", "observe", "TestStartDeadlineAfterAFailedReadKeepsTheOtherPortsNote",
+  r'''case unreadable != nil && !readable:''', r'''case unreadable != nil:''')
+A("cmd-rw-sources-skipped", "cmd", "TestReadOnlyBindIsMountedWithoutACopyWhenTheWriterIsSkipped",
+  r'''if _, no := skipped[s.Name]; no {⏎»»»continue⏎»»}⏎»»for _, v := range s.Volumes {⏎»»»if v.Type != "bind" || v.ReadOnly''', r'''for _, v := range s.Volumes {⏎»»»if v.Type != "bind" || v.ReadOnly''')
 
 
 def main():
