@@ -884,18 +884,54 @@ A("cmd-notes-reach-later-services", "cmd", "TestNotesOfAStartedDependencyReachTh
   r"""if rs.running[name] != nil {⏎»»»for _, n := range rs.noted[name] {""", r"""if rs.running[name] != nil {⏎»»»for _, n := range []string(nil) {""")
 A("cmd-notes-of-start", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
   r"""rs.noted[name] = nl.NoteList()""", r"""_ = nl""")
-A("gen-observed-uid-item", "gen", "TestObservedUser",
+A("gen-observed-uid-item", "gen", "TestObservedUser.*",
   r"""if obs.UID > 0 && !composeNonRoot {""", r"""if false && obs.UID > 0 && !composeNonRoot {""")
-A("gen-observed-uid-not-when-file-names-user", "gen", "TestObservedUser",
+A("gen-observed-uid-not-when-file-names-user", "gen", "TestObservedUser.*",
   r"""if obs.UID > 0 && !composeNonRoot {""", r"""if obs.UID > 0 {""")
-A("observe-status-gid-needed", "observe", ".",
+A("observe-status-gid-needed", "observe", ".*",
   r"""if uid < 0 || gid < 0 {""", r"""if uid < 0 {""")
-A("observe-status-negative-id", "observe", ".",
+A("observe-status-negative-id", "observe", ".*",
   r"""if err != nil || n < 0 {""", r"""if err != nil {""")
-A("observe-user-root-not-resolved", "observe", ".",
+A("observe-user-root-not-resolved", "observe", ".*",
   r"""if who == "" || who == "root" {""", r"""if who == "" {""")
-A("observe-user-uid0-not-resolved", "observe", ".",
+A("observe-user-uid0-not-resolved", "observe", ".*",
   r"""if uid == 0 {⏎»»return "", nil⏎»}""", r"""if false {⏎»»return "", nil⏎»}""")
+
+
+# ------------------------------------------------ patterns brought up to date with the code
+for _n in ("observe-redact-short-values", "observe-redact-image-values", "observe-redact-only-secret-names",
+           "observe-start-poll-every", "observe-start-failure-removes-the-container", "observe-start-deadline",
+           "observe-start-default-wait", "observe-start-ports-in-the-error", "observe-start-ready-when-ports-open",
+           "observe-ports-open-needs-an-addresser", "observe-ports-open-needs-an-address",
+           "gen-user-root-zero", "docker-network-create-failure-wrapped", "docker-network-create-argv",
+           "cmd-network-removed-by-name", "cmd-network-create-failure", "observe-start-every-port"):
+    M.pop(_n, None)
+A("observe-redact-short-values", "observe", "TestObserveRedactHidesValuesFromSixBytes|TestObserveRedactLeavesShortAndImageValuesAlone",
+  r"""secretName(k) && len(v) >= minSecret && !r.imageValues[v] {""", r"""secretName(k) && !r.imageValues[v] {""")
+A("observe-redact-image-values", "observe", "TestObserveRedactLeavesShortAndImageValuesAlone",
+  r"""secretName(k) && len(v) >= minSecret && !r.imageValues[v] {""", r"""secretName(k) && len(v) >= minSecret {""")
+A("observe-redact-only-secret-names", "observe", "TestObserveRedactOnlyValuesOfSecretNames",
+  r"""secretName(k) && len(v) >= minSecret && !r.imageValues[v] {""", r"""(secretName(k) || true) && len(v) >= minSecret && !r.imageValues[v] {""")
+A("observe-start-poll-every", "observe", "TestStartReadyWhenAPortListens",
+  r"""startPollEvery = time.Second""", r"""startPollEvery = 2 * time.Second""")
+A("observe-start-failure-removes-the-container", "observe", "TestStartExitsBeforeReady|TestStartCancelRemovesTheContainer",
+  r"""return fail(err)⏎»}⏎»started.Notes""", r"""return nil, err⏎»}⏎»started.Notes""")
+A("observe-start-deadline", "observe", "TestStartDeadlineOfARunningContainerKeepsIt",
+  r"""deadline := begin.Add(o.Wait)""", r"""deadline := begin.Add(o.Wait + time.Second)""")
+A("observe-start-default-wait", "observe", "TestStartReadyWhenAPortListens",
+  r"""defaultStartWait = 60 * time.Second""", r"""defaultStartWait = 1 * time.Second""")
+A("gen-user-root-zero", "gen", "TestObservedUserRows",
+  r'''u != "root" && u != "0"''', r'''u != "root"''')
+A("docker-network-create-failure-wrapped", "docker", "TestNetworkCreateFailureIsWrapped",
+  r"""_, err := c.do(ctx, "docker network create", append(args, name))""", r"""_, _, err := c.r.Run(ctx, nil, append(args, name)...)""")
+A("docker-network-create-argv", "docker", "TestNetworkCommands",
+  r"""append(args, name))""", r"""args)""")
+A("docker-network-create-labels", "docker", "TestNetworkCommands",
+  r"""args = append(args, "--label", l)⏎»}⏎»_, err := c.do(ctx, "docker network create",""", r"""_ = l⏎»}⏎»_, err := c.do(ctx, "docker network create",""")
+A("cmd-network-removed-by-name", "cmd", "TestNetworkCreatedOnceAndRemoved",
+  r"""if err := a.Docker.NetworkRemove(cctx, name); err != nil {""", r"""if err := a.Docker.NetworkRemove(cctx, name+"x"); err != nil {""")
+A("cmd-network-create-failure", "cmd", "TestNetworkCreateFailureStopsTheRun",
+  r"""if err := a.Docker.NetworkCreate(ctx, name, "dock2nano=1"); err != nil {""", r"""if err := a.Docker.NetworkCreate(ctx, name, "dock2nano=1"); err != nil && false {""")
 
 
 def main():
