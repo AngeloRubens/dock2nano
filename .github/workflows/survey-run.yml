@@ -19,6 +19,9 @@ jobs:
       matrix:
         include:
           # programs that do not fork: Go, JVM, or threads in C or C++
+          # programs that fork by default, with the setting that Ian uses in his packages
+          - {image: "httpd:2.4-alpine", port: 80, kind: http, cmd: "httpd -DONE_PROCESS"}
+          - {image: "nginx:1.27-alpine", port: 8080, kind: http, conftarget: "/etc/nginx/nginx.conf", conf: "worker_processes 1;\\ndaemon off;\\nmaster_process off;\\npid /tmp/nginx.pid;\\nerror_log stderr crit;\\nevents { worker_connections 1024; }\\nhttp { access_log off; server { listen 8080; location / { root /usr/share/nginx/html; } } }\\n"}
           - {image: "caddy:2-alpine", port: 80, kind: http}
           - {image: "registry:2", port: 5000, kind: http}
           - {image: "traefik:v3.1", port: 80, kind: http}
@@ -64,6 +67,8 @@ jobs:
           IMAGE: ${{ matrix.image }}
           PENV: ${{ matrix.env }}
           PCMD: ${{ matrix.cmd }}
+          PCONF: ${{ matrix.conf }}
+          PCONFTARGET: ${{ matrix.conftarget }}
         run: |
           go build -o /tmp/d2n .
           mkdir -p /tmp/work /tmp/out
@@ -74,7 +79,9 @@ jobs:
             echo "    image: $IMAGE"
             if [ -n "$PENV" ]; then echo "    environment:"; echo "      - $PENV"; fi
             if [ -n "$PCMD" ]; then echo "    command: $PCMD"; fi
+            if [ -n "$PCONF" ]; then echo "    volumes:"; echo "      - ./conf:$PCONFTARGET:ro"; fi
           } > /tmp/work/docker-compose.yml
+          if [ -n "$PCONF" ]; then printf '%b' "$PCONF" > /tmp/work/conf; fi
           set +e
           /tmp/d2n convert -f /tmp/work/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 40 > /tmp/out/report.txt 2> /tmp/out/stderr.txt
           echo "convert exit status $?" | tee /tmp/out/status.txt
