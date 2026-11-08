@@ -252,7 +252,7 @@ type run struct {
 	cleanup []error
 	// localNames: the package got an /etc/hosts of its own.
 	localNames bool
-	once    map[string]bool
+	once       map[string]bool
 
 	// created are the paths the program created while it ran.
 	created map[string]bool
