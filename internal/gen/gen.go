@@ -573,13 +573,15 @@ func nonRootUser(user string) bool {
 
 func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.Result, m *plan.Manifest) {
 	composeNonRoot := nonRootUser(s.User)
-	if composeNonRoot {
-		g.add(s.Name, plan.Unsupported, "user", "user "+s.User+" is not applied; nanos runs the program as one user")
-	}
-	// The file may say root while the entrypoint drops to another user, so the
-	// observed user is reported unless the file names a user other than root.
-	if obs.UID > 0 && !composeNonRoot {
-		g.add(s.Name, plan.Unsupported, "user", fmt.Sprintf("the program ran as uid %d (gid %d) while it was observed; nanos runs everything as root, so a program that refuses to run as root, or that depends on who owns its files, may not work", obs.UID, obs.GID))
+	// The file may say root while the entrypoint drops to another user, so the observed user wins
+	// when it is known. nanos reads uid and gid from the root of the manifest (nanovms/nanos#2189,
+	// merged on 2026-10-31, not in release 0.1.56) and tells the program who it is; an older
+	// nanos runs the program as root, as before. ops copies ManifestPassthrough into the manifest.
+	switch {
+	case obs.UID > 0:
+		g.add(s.Name, plan.Approximated, "user", fmt.Sprintf("the program ran as uid %d (gid %d) while it was observed; uid and gid are set in the package manifest, which a nanos that reads them from the manifest honours (nanovms/nanos#2189, in master since 2026-10-31, not in release 0.1.56); an older nanos runs the program as root, and a program that refuses to run as root, or that depends on who owns its files, may not work", obs.UID, obs.GID))
+	case composeNonRoot:
+		g.add(s.Name, plan.Unsupported, "user", "user "+s.User+" is not applied; the user the program ran as could not be read, and nanos runs the program as root")
 	}
 	if obs.UID < 0 && s.User == "" && si.Image != nil && nonRootUser(si.Image.User) {
 		g.add(s.Name, plan.Unsupported, "user", fmt.Sprintf("the program was started as user %s in the image; it was not possible to read which user it ran as; nanos runs everything as root", si.Image.User))
@@ -594,6 +596,12 @@ func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.R
 		cwd = "/"
 	}
 	m.ManifestPassthrough = map[string]any{"cwd": cwd}
+	if obs.UID > 0 {
+		m.ManifestPassthrough["uid"] = obs.UID
+		if obs.GID >= 0 {
+			m.ManifestPassthrough["gid"] = obs.GID
+		}
+	}
 	switch {
 	case s.WorkingDir != "" && path.Clean(s.WorkingDir) != path.Clean(cwd):
 		g.add(s.Name, plan.Unsupported, "working_dir", "working_dir "+s.WorkingDir+" of the file is not applied: the program was observed in "+cwd+", and cwd "+cwd+" is set in the package manifest")

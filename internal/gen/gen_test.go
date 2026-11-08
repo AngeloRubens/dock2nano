@@ -1006,18 +1006,39 @@ func TestVanishedFilesAreANote(t *testing.T) {
 	wantNone(t, p, "web", plan.Note, "vanished")
 }
 
-func TestObservedUserIsUnsupported(t *testing.T) {
+func TestObservedUserIsSetInTheManifest(t *testing.T) {
 	web := svc("web")
 	in := newInput(&fake{}, web)
 	in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = 999, 998
 	p := mustGen(t, in)
-	got := itemsOf(p, "web", plan.Unsupported, "user")
+	got := itemsOf(p, "web", plan.Approximated, "user")
 	if len(got) != 1 {
 		t.Fatalf("got %d items, want 1; report: %+v", len(got), p.Report)
 	}
-	const want = "the program ran as uid 999 (gid 998) while it was observed; nanos runs everything as root, so a program that refuses to run as root, or that depends on who owns its files, may not work"
+	const want = "the program ran as uid 999 (gid 998) while it was observed; uid and gid are set in the package manifest, which a nanos that reads them from the manifest honours (nanovms/nanos#2189, in master since 2026-10-31, not in release 0.1.56); an older nanos runs the program as root, and a program that refuses to run as root, or that depends on who owns its files, may not work"
 	if got[0].Message != want {
 		t.Errorf("message %q, want %q", got[0].Message, want)
+	}
+	wantNone(t, p, "web", plan.Unsupported, "user")
+	pass := p.Services[0].Manifest.ManifestPassthrough
+	if pass["uid"] != 999 || pass["gid"] != 998 {
+		t.Errorf("passthrough = %v, want uid 999 and gid 998", pass)
+	}
+}
+
+func TestRootOrUnknownUserIsNotSetInTheManifest(t *testing.T) {
+	for _, id := range []int{0, -1} {
+		web := svc("web")
+		in := newInput(&fake{}, web)
+		in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = id, id
+		p := mustGen(t, in)
+		pass := p.Services[0].Manifest.ManifestPassthrough
+		if _, has := pass["uid"]; has {
+			t.Errorf("uid %d: passthrough = %v", id, pass)
+		}
+		if _, has := pass["gid"]; has {
+			t.Errorf("gid %d: passthrough = %v", id, pass)
+		}
 	}
 }
 
@@ -1037,7 +1058,9 @@ func TestObservedUserWithComposeUserIsOneItem(t *testing.T) {
 	in := newInput(&fake{}, web)
 	in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = 999, 999
 	p := mustGen(t, in)
-	want1(t, p, "web", plan.Unsupported, "user", "user app is not applied")
+	// the observed user is what the manifest says; the file's user is not a second item
+	wantNone(t, p, "web", plan.Unsupported, "user")
+	want1(t, p, "web", plan.Approximated, "user", "the program ran as uid 999")
 }
 
 func TestChildProcessesAreUnsupported(t *testing.T) {
@@ -1446,7 +1469,7 @@ func TestObservedUserRows(t *testing.T) {
 		{"zero in the file, entrypoint dropped to 999", "0", "", 999, "the program ran as uid 999"},
 		{"zero with group in the file", "0:0", "", 999, "the program ran as uid 999"},
 		{"no user in the file", "", "", 999, "the program ran as uid 999"},
-		{"non-root user in the file", "app", "", 999, "user app is not applied"},
+		{"non-root user in the file", "app", "", 999, "the program ran as uid 999"},
 		{"root observed", "", "", 0, ""},
 		{"unknown, image user non-root", "", "mysql", -1, "the program was started as user mysql in the image; it was not possible to read which user it ran as; nanos runs everything as root"},
 		{"unknown, image user numeric", "", "999:999", -1, "started as user 999:999 in the image"},
@@ -1467,9 +1490,14 @@ func TestObservedUserRows(t *testing.T) {
 			p := mustGen(t, in)
 			if tt.want == "" {
 				wantNone(t, p, "web", plan.Unsupported, "user")
+				wantNone(t, p, "web", plan.Approximated, "user")
 				return
 			}
-			want1(t, p, "web", plan.Unsupported, "user", tt.want)
+			kind := plan.Unsupported
+			if tt.uid > 0 {
+				kind = plan.Approximated
+			}
+			want1(t, p, "web", kind, "user", tt.want)
 		})
 	}
 }
