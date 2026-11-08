@@ -165,7 +165,7 @@ func Generate(in Input) (*plan.Plan, error) {
 		}
 		folders[svc.PackageName] = s.Name
 		g.plan.Services = append(g.plan.Services, *svc)
-		g.plan.Compose.Packages = append(g.plan.Compose.Packages, plan.ComposePackage{Pkg: pkgOf[s.Name], Name: svc.PackageName, Local: true, Arch: in.Arch})
+		g.plan.Compose.Packages = append(g.plan.Compose.Packages, plan.ComposePackage{Pkg: pkgOf[s.Name], Name: svc.PackageName, Local: true, Arch: in.Arch, BaseVolumeSz: volumeSize(svc.Sysroot)})
 	}
 	g.networkNote(pkgOf)
 	g.envNote()
