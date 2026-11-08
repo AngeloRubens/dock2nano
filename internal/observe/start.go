@@ -43,6 +43,9 @@ type StartOptions struct {
 	// Network is the docker network the container joins and NetworkAliases are its names there.
 	Network        string
 	NetworkAliases []string
+	// Ports are tcp ports that the user's file says the service listens on (ports and expose); they
+	// are waited for like the ports that the image exposes.
+	Ports []int
 	// Wait is how long the container may take to be ready. The default is 60 seconds.
 	Wait time.Duration
 	// Log receives the messages, in the manner of fmt.Printf. nil drops them.
@@ -134,7 +137,7 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 			r.imageValues[v] = true
 		}
 	}
-	ports := exposedPorts(cfg.ExposedPorts)
+	ports := mergePorts(exposedPorts(cfg.ExposedPorts), o.Ports)
 
 	id, err := r.create(ctx, docker.CreateOptions{
 		Image:          o.Image,
@@ -294,4 +297,18 @@ func (r *run) startLogTail(id string) string {
 		return " (the container wrote nothing)"
 	}
 	return ": " + text
+}
+
+// mergePorts is the sorted union of two lists of ports.
+func mergePorts(a, b []int) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, p := range append(append([]int(nil), a...), b...) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Ints(out)
+	return out
 }

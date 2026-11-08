@@ -2036,7 +2036,7 @@ func TestStartReadyWhenAPortListens(t *testing.T) {
 	if !slices.Contains(s.d.execs, "root cat /proc/net/tcp") {
 		t.Errorf("execs = %q", s.d.execs)
 	}
-	equal(t, "notes", r.Notes, []string(nil))
+	equal(t, "notes", r.Notes, []string{"the container listens on 3306 but not on 33060, which the image exposes"})
 	equal(t, "removed before Stop", s.d.removed, []string(nil))
 	_ = r.Stop(context.Background())
 	equal(t, "removed after Stop", s.d.removed, []string{"dep-1"})
@@ -2519,6 +2519,26 @@ func TestStartGraceEndsAtTheDeadlineWithTheMissingPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "notes", r.Notes, []string{"the container listens on 33060 but not on 3306, which the image exposes"})
+}
+
+func TestStartWaitsForThePortsOfTheFileToo(t *testing.T) {
+	s := newStartScene()
+	// an image that exposes nothing; the file says the service listens on 8080, which opens at 4 s
+	s.d.cfg.ExposedPorts = nil
+	s.o.Ports = []int{8080}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.listening = func() []int {
+		if s.clock.now().Sub(start) >= 4*time.Second {
+			return []int{8080}
+		}
+		return nil
+	}
+	r, err := Start(context.Background(), s.d, s.o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "slept", s.clock.sleeps, 4)
+	equal(t, "notes", r.Notes, []string(nil))
 }
 
 func TestStartWithoutAnImageIsAnError(t *testing.T) {

@@ -585,7 +585,11 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 
 	tracerDir, loader, err := r.prepareTracer(ctx)
 	if tracerDir != "" {
-		defer os.RemoveAll(tracerDir)
+		defer func() {
+			if rerr := os.RemoveAll(tracerDir); rerr != nil {
+				r.cleanup = append(r.cleanup, fmt.Errorf("the directory of the tracer %s was not removed: %w", tracerDir, rerr))
+			}
+		}()
 	}
 	if err != nil {
 		return nil, err
@@ -1166,7 +1170,11 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 				continue
 			}
 			url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
-			if err := r.o.Probe.Get(ctx, url); err != nil {
+			// the question may not take the observation past its end
+			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
+			err := r.o.Probe.Get(pctx, url)
+			stop()
+			if err != nil {
 				failed[port] = err.Error()
 				continue
 			}
