@@ -1,0 +1,123 @@
+name: survey-run
+# Converts a public image, boots the result on nanos with ops and asks its port. One image per job;
+# the row of each is in the summary of the job. No assertion: the output is the finding. Runs on a
+# push whose head commit message contains [survey-run], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[survey-run]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: "nginx:1.27-alpine", port: 80, kind: http}
+          - {image: "httpd:2.4-alpine", port: 80, kind: http}
+          - {image: "caddy:2-alpine", port: 80, kind: http}
+          - {image: "redis:7-alpine", port: 6379, kind: tcp}
+          - {image: "memcached:1.6-alpine", port: 11211, kind: tcp}
+          - {image: "mysql:8.4", port: 3306, kind: tcp, env: "MYSQL_ROOT_PASSWORD=rootpass"}
+          - {image: "mariadb:11", port: 3306, kind: tcp, env: "MARIADB_ROOT_PASSWORD=rootpass"}
+          - {image: "postgres:16-alpine", port: 5432, kind: tcp, env: "POSTGRES_PASSWORD=pw"}
+          - {image: "registry:2", port: 5000, kind: http}
+          - {image: "grafana/grafana:11.2.0", port: 3000, kind: http}
+          - {image: "prom/prometheus:v2.54.1", port: 9090, kind: http}
+          - {image: "quay.io/coreos/etcd:v3.5.16", port: 2379, kind: tcp}
+          - {image: "tomcat:10.1-jre17", port: 8080, kind: http}
+          - {image: "eclipse-temurin:21-jre-alpine", port: 0, kind: none}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
+          cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly, it reads uid and gid from the manifest)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f"
+          done
+      - name: convert
+        env:
+          IMAGE: ${{ matrix.image }}
+          PENV: ${{ matrix.env }}
+        run: |
+          go build -o /tmp/d2n .
+          mkdir -p /tmp/work /tmp/out
+          {
+            echo "name: sr"
+            echo "services:"
+            echo "  svc:"
+            echo "    image: $IMAGE"
+            if [ -n "$PENV" ]; then echo "    environment:"; echo "      - $PENV"; fi
+          } > /tmp/work/docker-compose.yml
+          set +e
+          /tmp/d2n convert -f /tmp/work/docker-compose.yml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 40 > /tmp/out/report.txt 2> /tmp/out/stderr.txt
+          echo "convert exit status $?" | tee /tmp/out/status.txt
+          head -c 5000 /tmp/out/report.txt
+      - name: boot
+        env:
+          PORT: ${{ matrix.port }}
+          KIND: ${{ matrix.kind }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          pkg=$(ls "$OPS_HOME/.ops/local_packages/amd64" | head -1)
+          echo "package $pkg"
+          python3 - "$OPS_HOME/.ops/local_packages/amd64/$pkg/package.manifest" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          m = json.load(open(p))
+          print("program", m.get("Program"), "uid", m.get("ManifestPassthrough", {}).get("uid"))
+          PY
+          result="not started"
+          if [ "$KIND" != none ]; then
+            sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops pkg load -l "$pkg" -p "$PORT" > /tmp/out/boot.log 2>&1 &
+            sleep 20
+            ip=""
+            for i in $(seq 1 90); do
+              ip=$(grep -o 'assigned 10\.0\.2\.[0-9]*\|assigned 192\.168\.[0-9.]*' /tmp/out/boot.log | tail -1 | awk '{print $2}')
+              if [ "$KIND" = http ]; then
+                code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://localhost:$PORT/" || true)
+                case "$code" in 2*|3*|4*) result="answers HTTP $code"; break;; esac
+              else
+                if timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then result="port $PORT accepts connections"; break; fi
+              fi
+              sleep 10
+            done
+            [ "$result" = "not started" ] && result="no answer on $PORT after 15 minutes"
+          else
+            sleep 5; result="converted only (no port)"
+          fi
+          echo "RESULT: $result"
+          tail -25 /tmp/out/boot.log 2>/dev/null | cut -c1-250
+          {
+            echo "### $IMAGE: $result"
+            echo '```'
+            cat /tmp/out/status.txt
+            grep -E "^(  (unsupported|approximated|note) |service )" /tmp/out/report.txt | cut -c1-220 | head -25
+            echo '--- console'
+            tail -15 /tmp/out/boot.log 2>/dev/null | cut -c1-220
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: survey-run-${{ strategy.job-index }}
+          path: /tmp/out
