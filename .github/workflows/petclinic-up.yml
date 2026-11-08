@@ -5,6 +5,11 @@ name: petclinic-up
 on:
   push:
   workflow_dispatch:
+    inputs:
+      jvmflags:
+        description: 'extra JVM options for the petclinic package (space separated)'
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -46,6 +51,8 @@ jobs:
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 3000 "$m"; echo; done
           du -sh "$OPS_HOME"/.ops/local_packages/*/*
       - name: review the report (the two changes it asks for)
+        env:
+          JVMFLAGS: ${{ github.event.inputs.jvmflags }}
         run: |
           # The report says: mysqld ran as uid 999 and refuses root (nanos runs everything as root),
           # and the host name db is db.service on ops. These are the two changes made by hand.
@@ -59,6 +66,16 @@ jobs:
           json.dump(m, open(p, "w"), indent=2)
           PY
           grep -n -A3 '"Args"' "$pk/petclinic-glassfish_db/package.manifest" | head -8
+          if [ -n "$JVMFLAGS" ]; then
+            python3 - "$pk/petclinic-glassfish_petclinic/package.manifest" "$JVMFLAGS" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          m = json.load(open(p))
+          m["Args"][1:1] = sys.argv[2].split()
+          json.dump(m, open(p, "w"), indent=2)
+          PY
+            echo "JVM options added: $JVMFLAGS"
+          fi
           dom="$pk/petclinic-glassfish_petclinic/sysroot/opt/glassfish7/glassfish/domains/domain1/config/domain.xml"
           grep -n 'serverName' "$dom" | cut -c1-200
           sed -i 's/\(name="serverName" value="\)db"/\1db.service"/' "$dom"
@@ -103,7 +120,7 @@ jobs:
             sleep 15
             sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
           done
-          for u in home.jsf owner/search.jsf; do echo "=== GET $u"; curl -s -m 20 -o /tmp/out/page.html -w '%{http_code}\\n' "http://$app:8080/$u"; head -c 400 /tmp/out/page.html; echo; done
+          for u in home.jsf owner/search.jsf; do echo "=== GET $u"; curl -s -m 20 -o /tmp/out/page.html -w '%{http_code}\\n' "http://$app:8080/$u" || true; head -c 400 /tmp/out/page.html; echo; done
           echo "=== last answer"; cat /tmp/out/http-code.txt 2>/dev/null; head -c 600 /tmp/out/index.html 2>/dev/null
           echo "=== console of petclinic, last 60 lines"; tail -60 /tmp/out/console-petclinic.txt | cut -c1-300
           echo "=== console of db, last 30 lines"; sudo env OPS_HOME="$OPS_HOME" ops instance logs db 2>&1 | tail -30 | cut -c1-300
