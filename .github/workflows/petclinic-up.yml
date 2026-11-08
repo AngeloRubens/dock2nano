@@ -10,6 +10,14 @@ on:
         description: 'number of CPUs of the petclinic package (empty: ops default)'
         required: false
         default: ''
+      nightly:
+        description: 'use the nightly nanos kernel (it reads uid and gid from the manifest, nanovms/nanos#2189)'
+        required: false
+        default: 'true'
+      rootfix:
+        description: 'add --user=root to mysqld by hand (not needed when the kernel reads the uid)'
+        required: false
+        default: 'false'
       jvmflags:
         description: 'extra JVM options for the petclinic package (space separated); -Xint because the compiled code crashes the JVM on nanos'
         required: false
@@ -44,7 +52,21 @@ jobs:
           sudo install /tmp/ops /usr/local/bin/ops
           ops version
       - name: kernel and boot image
-        run: ops update 2>&1 | tail -5
+        env:
+          NIGHTLY: ${{ github.event.inputs.nightly }}
+        run: |
+          ops update 2>&1 | tail -5
+          if [ "${NIGHTLY:-true}" = true ]; then
+            mkdir -p /tmp/nightly
+            curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+            ls -la /tmp/nightly
+            rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+            ls -la "$rel"
+            for f in kernel.img boot.img; do
+              src=$(find /tmp/nightly -name "$f" | head -1)
+              [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $rel/$f from $src"
+            done
+          fi
       - name: convert
         run: |
           set -o pipefail
@@ -57,16 +79,21 @@ jobs:
       - name: review the report (the two changes it asks for)
         env:
           JVMFLAGS: ${{ github.event.inputs.jvmflags }}
+          ROOTFIX: ${{ github.event.inputs.rootfix }}
           CPUS: ${{ github.event.inputs.cpus }}
         run: |
-          # The report says: mysqld ran as uid 999 and refuses root (nanos runs everything as root),
-          # and the host name db is db.service on ops. These are the two changes made by hand.
+          # What the report names, done by hand: mysqld looks up the names of its clients (the DNS of
+          # ops compose does not answer), and the host db is db.service on ops. The uid 999 of mysqld
+          # is in the manifest (uid, gid): the nightly kernel honours it.
           pk="$OPS_HOME/.ops/local_packages/amd64"
           python3 - "$pk/petclinic-glassfish_db/package.manifest" <<'PY'
-          import json, sys
+          import json, os, sys
           p = sys.argv[1]
           m = json.load(open(p))
-          for extra in ("--user=root", "--skip-name-resolve"):
+          extras = ["--skip-name-resolve"]
+          if os.environ.get("ROOTFIX") == "true":
+              extras.insert(0, "--user=root")
+          for extra in extras:
               if extra not in m["Args"]:
                   m["Args"].append(extra)
           json.dump(m, open(p, "w"), indent=2)
