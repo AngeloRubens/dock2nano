@@ -246,7 +246,7 @@ func (r *run) ready(ctx context.Context, id string, ports []int, o StartOptions)
 			}
 			note := fmt.Sprintf("the container was running but listens on no port after %d seconds", int(o.Wait.Seconds()))
 			switch {
-			case unreadable != nil:
+			case unreadable != nil && !readable:
 				note = fmt.Sprintf("%v; whether it listens is not known", unreadable)
 			case len(partial) > 0:
 				note = fmt.Sprintf("the container listens on %s but not on %s, which the image or the file declares", portNumbers(partial), portNumbers(missingPorts(partial, ports)))

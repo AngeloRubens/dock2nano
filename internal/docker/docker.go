@@ -323,12 +323,13 @@ func (c *Client) doEnv(ctx context.Context, op string, args, env []string) ([]by
 // cliReads says whether the docker CLI itself reads the variable name from its environment. A
 // proxy address with a user name in it is not one: it may hold a password.
 func cliReads(name, val string) bool {
-	if strings.Contains(val, "@") {
-		// an address with a user name may hold a password: it stays off the command line, and
-		// in the environment it replaces the CLI's own setting (the trade-off is the user's)
+	u := strings.ToUpper(name)
+	// an address with a user name may hold a password: it stays off the command line, and in the
+	// environment it replaces the CLI's own setting (the trade-off is the user's). The name
+	// DOCKER_HOST is the exception: ssh://user@host is its documented form, with no password.
+	if strings.Contains(val, "@") && u != "DOCKER_HOST" {
 		return false
 	}
-	u := strings.ToUpper(name)
 	switch u {
 	case "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_TLS",
 		"DOCKER_API_VERSION", "DOCKER_BUILDKIT", "DOCKER_DEFAULT_PLATFORM", "DOCKER_CONTENT_TRUST",

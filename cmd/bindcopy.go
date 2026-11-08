@@ -68,7 +68,8 @@ func (rs *runState) bindMountOf(a *App, service, host string, ro bool) *bindMoun
 		}
 		if rs.rwSources[host] {
 			if m := rs.bindMountOf(a, service, host, false); m.path != "" {
-				return &bindMount{path: m.path, readOnly: true, notes: m.notes}
+				// the notes belong to the service that writes: it gets them when it is prepared
+				return &bindMount{path: m.path, readOnly: true}
 			}
 		}
 		return &bindMount{path: host, readOnly: true}
