@@ -69,7 +69,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, failed: map[string]string{}}
+	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, failed: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -486,6 +486,9 @@ type runState struct {
 	// running holds the services started for the observation of others; order
 	// is the order they were started in.
 	running map[string]Stopper
+	// noted holds what Start noticed about each started service; every service
+	// observed with it running gets the notes, not only the first one.
+	noted map[string][]string
 	order   []string
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
@@ -533,6 +536,11 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 	var notes []string
 	for _, name := range rs.closure(s) {
 		if rs.running[name] != nil {
+			for _, n := range rs.noted[name] {
+				msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
+				fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+				notes = append(notes, msg)
+			}
 			continue
 		}
 		why := rs.failed[name]
@@ -563,11 +571,12 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 				rs.order = append(rs.order, name)
 				// what Start noticed (a container that runs and listens on nothing)
 				if nl, ok := st.(interface{ NoteList() []string }); ok {
-					for _, n := range nl.NoteList() {
-						msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
-						fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
-						notes = append(notes, msg)
-					}
+					rs.noted[name] = nl.NoteList()
+				}
+				for _, n := range rs.noted[name] {
+					msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
+					fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+					notes = append(notes, msg)
 				}
 			}
 		}
