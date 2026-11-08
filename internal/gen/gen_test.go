@@ -305,7 +305,7 @@ func TestProgramArgsAndPackage(t *testing.T) {
 	if got.Sysroot != "/tmp/sys-web" || got.Name != "web" || got.PackageName != "proj_web" {
 		t.Errorf("service = %+v", got)
 	}
-	wantPkg := plan.ComposePackage{Pkg: "web", Name: "proj_web", Local: true, Arch: "amd64"}
+	wantPkg := plan.ComposePackage{Pkg: "web", Name: "proj_web", Local: true, Arch: "amd64", BaseVolumeSz: "256m"}
 	if len(p.Compose.Packages) != 1 || p.Compose.Packages[0] != wantPkg {
 		t.Errorf("compose = %+v, want %+v", p.Compose.Packages, wantPkg)
 	}
@@ -1471,5 +1471,34 @@ func TestObservedUserRows(t *testing.T) {
 			}
 			want1(t, p, "web", plan.Unsupported, "user", tt.want)
 		})
+	}
+}
+
+func TestVolumeSizeGivesRoomToWrite(t *testing.T) {
+	dir := t.TempDir()
+	if got := volumeSize(dir); got != "256m" {
+		t.Errorf("empty sysroot: %q, want 256m", got)
+	}
+	if got := volumeSize(filepath.Join(dir, "missing")); got != "256m" {
+		t.Errorf("missing sysroot: %q, want 256m", got)
+	}
+	// 8 MiB of files: 8 + 8/4 + 256
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "f"), make([]byte, 8<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := volumeSize(dir); got != "266m" {
+		t.Errorf("8 MiB: %q, want 266m", got)
+	}
+}
+
+func TestEveryPackageOfTheComposeFileHasAVolumeSize(t *testing.T) {
+	p := mustGen(t, newInput(&fake{}, svc("web"), svc("app")))
+	for _, c := range p.Compose.Packages {
+		if c.BaseVolumeSz != "256m" {
+			t.Errorf("%s: base_volume_sz %q, want 256m", c.Pkg, c.BaseVolumeSz)
+		}
 	}
 }

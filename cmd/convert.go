@@ -70,7 +70,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, failed: map[string]string{}}
+	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -131,6 +131,14 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			}
 		}
 		inputs[s.Name] = si
+	}
+
+	// The package of a service holds its files as they were at the end of its own observation. What
+	// the services observed beside it did to it afterwards (a schema, rows, files) is not in it.
+	for name, by := range rs.served {
+		if si, ok := inputs[name]; ok && si.Observed != nil {
+			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s was observed while this service was running; what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
+		}
 	}
 
 	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch}
@@ -491,7 +499,9 @@ type runState struct {
 	// noted holds what Start noticed about each started service; every service
 	// observed with it running gets the notes, not only the first one.
 	noted map[string][]string
-	order []string
+	// served holds, by service name, the services that were observed while it was running.
+	served map[string][]string
+	order  []string
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
 	failed map[string]string
@@ -540,6 +550,7 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 	var notes []string
 	for _, name := range rs.closure(s) {
 		if rs.running[name] != nil {
+			rs.served[name] = append(rs.served[name], s.Name)
 			for _, n := range rs.noted[name] {
 				msg := fmt.Sprintf("the service %s was started for the observation of %s: %s", name, s.Name, n)
 				fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
@@ -572,6 +583,7 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 				rs.failed[name] = why
 			} else {
 				rs.running[name] = st
+				rs.served[name] = append(rs.served[name], s.Name)
 				rs.order = append(rs.order, name)
 				// what Start noticed (a container that runs and listens on nothing)
 				if nl, ok := st.(interface{ NoteList() []string }); ok {

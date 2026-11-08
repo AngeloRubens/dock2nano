@@ -5,13 +5,22 @@ name: petclinic-up
 on:
   push:
   workflow_dispatch:
+    inputs:
+      cpus:
+        description: 'number of CPUs of the petclinic package (empty: ops default)'
+        required: false
+        default: ''
+      jvmflags:
+        description: 'extra JVM options for the petclinic package (space separated); -Xint because the compiled code crashes the JVM on nanos'
+        required: false
+        default: '-Xint'
 permissions:
   contents: read
 jobs:
   up:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[petclinic-up]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       OPS_HOME: /home/runner
     steps:
@@ -45,6 +54,48 @@ jobs:
           find "$OPS_HOME/.ops/local_packages" -maxdepth 3 | head -20
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 3000 "$m"; echo; done
           du -sh "$OPS_HOME"/.ops/local_packages/*/*
+      - name: review the report (the two changes it asks for)
+        env:
+          JVMFLAGS: ${{ github.event.inputs.jvmflags }}
+          CPUS: ${{ github.event.inputs.cpus }}
+        run: |
+          # The report says: mysqld ran as uid 999 and refuses root (nanos runs everything as root),
+          # and the host name db is db.service on ops. These are the two changes made by hand.
+          pk="$OPS_HOME/.ops/local_packages/amd64"
+          python3 - "$pk/petclinic-glassfish_db/package.manifest" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          m = json.load(open(p))
+          for extra in ("--user=root", "--skip-name-resolve"):
+              if extra not in m["Args"]:
+                  m["Args"].append(extra)
+          json.dump(m, open(p, "w"), indent=2)
+          PY
+          grep -n -A3 '"Args"' "$pk/petclinic-glassfish_db/package.manifest" | head -8
+          if [ -n "$CPUS" ]; then
+            python3 - "$pk/petclinic-glassfish_petclinic/package.manifest" "$CPUS" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          m = json.load(open(p))
+          m.setdefault("RunConfig", {})["CPUs"] = int(sys.argv[2])
+          json.dump(m, open(p, "w"), indent=2)
+          PY
+            echo "CPUs: $CPUS"
+          fi
+          if [ -n "$JVMFLAGS" ]; then
+            python3 - "$pk/petclinic-glassfish_petclinic/package.manifest" "$JVMFLAGS" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          m = json.load(open(p))
+          m["Args"][1:1] = sys.argv[2].split()
+          json.dump(m, open(p, "w"), indent=2)
+          PY
+            echo "JVM options added: $JVMFLAGS"
+          fi
+          dom="$pk/petclinic-glassfish_petclinic/sysroot/opt/glassfish7/glassfish/domains/domain1/config/domain.xml"
+          grep -n 'serverName' "$dom" | cut -c1-200
+          sed -i 's/\(name="serverName" value="\)db"/\1db.service"/' "$dom"
+          grep -n 'serverName' "$dom" | cut -c1-200
       - name: dns package
         run: ops pkg get eyberg/ops-dns:0.0.1
       - name: compose up
@@ -80,14 +131,18 @@ jobs:
           app=$(ipof petclinic); db=$(ipof db)
           echo "petclinic=$app db=$db"
           # up to ten minutes for the web application, then report what answers
-          for i in $(seq 1 40); do
-            if [ -n "$app" ] && curl -s -m 5 -o /tmp/out/index.html -w '%{http_code}\n' "http://$app:8080/" | tee /tmp/out/http-code.txt | grep -q '^[23]'; then break; fi
+          for i in $(seq 1 120); do
+            if [ -n "$app" ] && curl -s -m 5 -o /tmp/out/index.html -w '%{http_code}\n' "http://$app:8080/home.jsf" | tee /tmp/out/http-code.txt | grep -q '^[23]'; then break; fi
             sleep 15
             sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
           done
+          for u in home.jsf owner.jsf petType.jsf veterinarian.jsf; do echo "=== GET $u"; curl -s -m 120 -o /tmp/out/$u.html -w '%{http_code}\\n' "http://$app:8080/$u" || true; sed -e 's/<[^>]*>/ /g' /tmp/out/$u.html | tr -s ' \n' | head -c 2500; echo; done
+          sudo env OPS_HOME="$OPS_HOME" ops instance logs petclinic > /tmp/out/console-petclinic.txt 2>&1 || true
+          echo "=== errors in the console after the requests"; grep -n -B2 -A12 'Communications\|UnknownHost\|Access denied\|PersistenceException\|SQLException\|jakarta.persistence' /tmp/out/console-petclinic.txt | tail -60 | cut -c1-300
           echo "=== last answer"; cat /tmp/out/http-code.txt 2>/dev/null; head -c 600 /tmp/out/index.html 2>/dev/null
           echo "=== console of petclinic, last 60 lines"; tail -60 /tmp/out/console-petclinic.txt | cut -c1-300
           echo "=== console of db, last 30 lines"; sudo env OPS_HOME="$OPS_HOME" ops instance logs db 2>&1 | tail -30 | cut -c1-300
+          ps -eo args | grep '[q]emu-system' | cut -c1-500 | head -4
           ps aux | grep -c '[q]emu' || true
           free -m | head -2
       - name: artifacts
