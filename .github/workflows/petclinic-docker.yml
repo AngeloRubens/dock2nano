@@ -37,6 +37,12 @@ jobs:
           docker compose logs --no-color petclinic 2>&1 | grep -n "EclipseLink\|CREATE TABLE\|SEVERE\|doesn't exist" | cut -c1-250 | head -20
           docker compose logs --no-color db 2>&1 | tail -5 | cut -c1-200
           docker compose exec -T db mysql -uroot -prootpass -e 'show tables' petclinic 2>&1 | head -20
+      - name: schema
+        if: always()
+        run: |
+          cd examples/petclinic-glassfish
+          docker compose exec -T db mysqldump -uroot -prootpass --no-data --no-tablespaces --skip-comments --skip-add-drop-table petclinic 2>/dev/null | sed -e 's/ AUTO_INCREMENT=[0-9]*//' -e '/^\/\*!/d' -e '/^$/d'
+          docker compose exec -T db mysql -uroot -prootpass -e 'select count(*) as owners from owner; select count(*) as vets from vet' petclinic 2>/dev/null
       - name: down
         if: always()
         run: cd examples/petclinic-glassfish && docker compose down -v
