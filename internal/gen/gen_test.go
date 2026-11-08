@@ -1576,3 +1576,21 @@ func TestNumericUser(t *testing.T) {
 		}
 	}
 }
+
+// ops writes the file system of the image from the manifest and can encode strings, vectors and
+// tuples, not numbers: every value we pass through is a string.
+func TestEveryPassthroughValueIsAString(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.UID, in.Services["web"].Observed.GID = 999, 998
+	in.Services["web"].Observed.WorkingDir = "/srv"
+	p := mustGen(t, in)
+	for k, v := range p.Services[0].Manifest.ManifestPassthrough {
+		if _, ok := v.(string); !ok {
+			t.Errorf("%s: %T %v", k, v, v)
+		}
+	}
+	if len(p.Services[0].Manifest.ManifestPassthrough) < 3 {
+		t.Errorf("passthrough = %v, want cwd, uid and gid", p.Services[0].Manifest.ManifestPassthrough)
+	}
+}
