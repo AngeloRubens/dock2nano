@@ -61,9 +61,15 @@ func (rs *runState) mountBinds(a *App, service string, binds []string) ([]string
 // bindMountOf returns the mount of one source, making the copy the first time.
 func (rs *runState) bindMountOf(a *App, service, host string, ro bool) *bindMount {
 	if ro {
-		// the copy that a service writes is what the others must read
+		// the copy that a service writes is what the others must read, whichever of them is
+		// prepared first
 		if m := rs.binds[host]; m != nil && m.path != "" {
 			return &bindMount{path: m.path, readOnly: true}
+		}
+		if rs.rwSources[host] {
+			if m := rs.bindMountOf(a, service, host, false); m.path != "" {
+				return &bindMount{path: m.path, readOnly: true, notes: m.notes}
+			}
 		}
 		return &bindMount{path: host, readOnly: true}
 	}

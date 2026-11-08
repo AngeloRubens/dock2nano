@@ -1512,10 +1512,10 @@ func TestNotesOfAStartedDependencyReachTheReport(t *testing.T) {
 func TestDeclaredPorts(t *testing.T) {
 	s := &compose.Service{
 		Ports:  []compose.Port{{Target: "8080", Protocol: "tcp"}, {Target: "53", Protocol: "udp"}, {Target: "9000-9010"}, {Target: "3000"}, {Target: "0"}, {Target: "70000"}},
-		Expose: []string{"5432", "6000/udp", "7000/tcp", "x"},
+		Expose: []string{"5432", "6000/udp", "7000/tcp", "x", "8888/TCP"},
 	}
 	equal := reflect.DeepEqual
-	if got, want := declaredPorts(s), []int{8080, 3000, 5432, 7000}; !equal(got, want) {
+	if got, want := declaredPorts(s), []int{8080, 3000, 5432, 7000, 8888}; !equal(got, want) {
 		t.Errorf("declaredPorts = %v, want %v", got, want)
 	}
 }
