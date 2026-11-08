@@ -873,6 +873,30 @@ A("cmd-stop-failure-warning", "cmd", "TestStopFailureOfADependencyIsAWarning",
 A("cmd-starting-is-announced", "cmd", "TestStartingADependencyIsAnnounced",
   r"""fmt.Fprintf(a.Stderr, "%s: starting %s for %s\n", name, so.Image, s.Name)""", r"""_ = so.Image""")
 
+# ------------------------------------------------ rules added after the third review
+A("observe-start-every-port", "observe", "TestStartWaitsForEveryExposedPort",
+  r"""if hasAll(got, ports) {""", r"""if len(got) > 0 {""")
+A("observe-start-grace", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
+  r"""if !o.now().Before(first.Add(otherPortsGrace)) {""", r"""if true {""")
+A("observe-start-grace-from-first", "observe", "TestStartExposedPortsThatDoNotListenDoNotBlock|TestStartReadyWhenAPortListens",
+  r"""if first.IsZero() {⏎»»»»first = o.now()⏎»»»}""", r"""first = o.now()""")
+A("cmd-notes-reach-later-services", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
+  r"""if rs.running[name] != nil {⏎»»»for _, n := range rs.noted[name] {""", r"""if rs.running[name] != nil {⏎»»»for _, n := range []string(nil) {""")
+A("cmd-notes-of-start", "cmd", "TestNotesOfAStartedDependencyReachTheReport",
+  r"""rs.noted[name] = nl.NoteList()""", r"""_ = nl""")
+A("gen-observed-uid-item", "gen", "TestObservedUser",
+  r"""if obs.UID > 0 && !composeNonRoot {""", r"""if false && obs.UID > 0 && !composeNonRoot {""")
+A("gen-observed-uid-not-when-file-names-user", "gen", "TestObservedUser",
+  r"""if obs.UID > 0 && !composeNonRoot {""", r"""if obs.UID > 0 {""")
+A("observe-status-gid-needed", "observe", ".",
+  r"""if uid < 0 || gid < 0 {""", r"""if uid < 0 {""")
+A("observe-status-negative-id", "observe", ".",
+  r"""if err != nil || n < 0 {""", r"""if err != nil {""")
+A("observe-user-root-not-resolved", "observe", ".",
+  r"""if who == "" || who == "root" {""", r"""if who == "" {""")
+A("observe-user-uid0-not-resolved", "observe", ".",
+  r"""if uid == 0 {⏎»»return "", nil⏎»}""", r"""if false {⏎»»return "", nil⏎»}""")
+
 
 def main():
     if sys.argv[1] == "list":
