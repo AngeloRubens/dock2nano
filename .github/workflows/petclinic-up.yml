@@ -11,9 +11,9 @@ on:
         required: false
         default: ''
       jvmflags:
-        description: 'extra JVM options for the petclinic package (space separated)'
+        description: 'extra JVM options for the petclinic package (space separated); -Xint because the compiled code crashes the JVM on nanos'
         required: false
-        default: ''
+        default: '-Xint'
 permissions:
   contents: read
 jobs:

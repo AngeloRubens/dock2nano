@@ -8,6 +8,7 @@ services:
       MYSQL_PASSWORD: petclinic
     volumes:
       - dbdata:/var/lib/mysql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
       interval: 5s
