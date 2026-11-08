@@ -142,6 +142,10 @@ type Options struct {
 
 // Result is what Observe found. The caller owns Sysroot and removes it.
 type Result struct {
+	// LocalNames says that the package was given an /etc/hosts that names localhost: the one of the
+	// container is not carried.
+	LocalNames bool
+
 	// Sysroot is a directory on this machine with the files the program reached.
 	Sysroot string
 
@@ -246,6 +250,8 @@ type run struct {
 	o       Options
 	warn    []string
 	cleanup []error
+	// localNames: the package got an /etc/hosts of its own.
+	localNames bool
 	once    map[string]bool
 
 	// created are the paths the program created while it ran.
@@ -804,6 +810,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	r.writeLocalNames(sysroot)
 
 	return &Result{
+		LocalNames:         r.localNames,
 		Sysroot:            sysroot,
 		Program:            program,
 		Argv:               cmdline,
@@ -873,7 +880,7 @@ func (r *run) writeLocalNames(sysroot string) {
 		r.warnOnce(fmt.Sprintf("could not make /etc/hosts for the package: %v", err))
 		return
 	}
-	r.warnOnce("the /etc/hosts of the container is not carried; the package gets one that names localhost")
+	r.localNames = true
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root. strace looks the

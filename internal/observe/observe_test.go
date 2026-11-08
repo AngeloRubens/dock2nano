@@ -504,7 +504,7 @@ func TestObserveSuccess(t *testing.T) {
 		"/lib/libc.so.6", "/bin/sh",
 	})
 	equal(t, "sysroot files", tree(t, res.Sysroot), []string{
-		"app/rel.txt", "bin/sh", "etc/app.conf", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
+		"app/rel.txt", "bin/sh", "etc/app.conf", "etc/hosts", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
 	})
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
@@ -2806,15 +2806,10 @@ func TestObserveGivesThePackageAHostsFileWithLocalhost(t *testing.T) {
 	if !strings.Contains(string(b), "127.0.0.1\tlocalhost") || !strings.Contains(string(b), "::1\tlocalhost") {
 		t.Errorf("/etc/hosts = %q", b)
 	}
-	found := false
-	for _, w := range res.Warnings {
-		if strings.Contains(w, "the package gets one that names localhost") {
-			found = true
-		}
+	if !res.LocalNames {
+		t.Error("LocalNames is false")
 	}
-	if !found {
-		t.Errorf("warnings %q", res.Warnings)
-	}
+	equal(t, "warnings", res.Warnings, []string(nil))
 }
 
 func TestWriteLocalNamesKeepsAFileThatIsThere(t *testing.T) {
@@ -2831,5 +2826,7 @@ func TestWriteLocalNamesKeepsAFileThatIsThere(t *testing.T) {
 	if string(b) != "10.0.0.1 db\n" {
 		t.Errorf("/etc/hosts = %q", b)
 	}
-	equal(t, "warnings", r.warn, []string(nil))
+	if r.localNames {
+		t.Error("localNames is set for a file that was there")
+	}
 }

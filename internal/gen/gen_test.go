@@ -1600,3 +1600,13 @@ func TestEveryPassthroughValueIsAString(t *testing.T) {
 		t.Errorf("passthrough = %v, want cwd, uid and gid", p.Services[0].Manifest.ManifestPassthrough)
 	}
 }
+
+func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.LocalNames = true
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "hosts", "names localhost")
+	in2 := newInput(&fake{}, svc("web"))
+	wantNone(t, mustGen(t, in2), "web", plan.Note, "hosts")
+}

@@ -690,6 +690,9 @@ func variableNote(u string) (string, bool) {
 }
 
 func (g *generator) observed(s *compose.Service, obs *observe.Result) {
+	if obs.LocalNames {
+		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
+	}
 	if obs.StoppedEarly {
 		msg := fmt.Sprintf("the container stopped with status %d before the end of the observation, so what was observed is not a running server; the program chosen is the last one it started", obs.ExitCode)
 		if head := firstLines(obs.StoppedLog, 3); head != "" {
