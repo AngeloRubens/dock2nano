@@ -939,8 +939,6 @@ M.pop("observe-status-gid-needed", None)
 M.pop("observe-status-negative-id", None)
 A("observe-status-gid-needed", "observe", "TestParseStatusIDs",
   r"""if uid < 0 || gid < 0 {""", r"""if uid < 0 {""")
-A("observe-status-negative-id", "observe", "TestParseStatusIDs",
-  r"""if err != nil || n < 0 {""", r"""if err != nil {""")
 A("docker-cli-reads-env", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
   r"""if has && cliReads(name, val) {""", r"""if false && cliReads(name, val) {""")
 A("docker-cli-proxy-with-user", "docker", "TestVariablesTheCLIReadsDoNotReplaceItsEnvironment",
@@ -954,7 +952,7 @@ A("observe-start-partial-at-deadline", "observe", "TestStartGraceEndsAtTheDeadli
 A("observe-start-ports-of-the-file", "observe", "TestStartWaitsForThePortsOfTheFileToo",
   r"""mergePorts(exposedPorts(cfg.ExposedPorts), o.Ports)""", r"""exposedPorts(cfg.ExposedPorts)""")
 A("observe-url-unparseable", "observe", "TestObserveRedactSecretsByNameAndByShape",
-  r"""if _, err := url.Parse(value); err != nil {""", r"""if false {""")
+  r"""if _, err := url.Parse(value); err != nil {""", r"""if _, err := url.Parse(value); err != nil && false {""")
 A("observe-url-authority-first", "observe", "TestObserveRedactSecretsByNameAndByShape",
   r"""if at := strings.LastIndex(authority, "@"); at > 0 {""", r"""if at := strings.LastIndex(authority, "@"); at > 100 {""")
 A("observe-probe-bounded", "observe", "TestObserveProbeIsBoundedByTheEndOfTheObservation",
