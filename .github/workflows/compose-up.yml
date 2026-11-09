@@ -1,0 +1,111 @@
+name: compose-up
+# Converts compose files of docker/awesome-compose, starts each result with "ops compose up" on
+# nanos and asks the ports it names. One compose file per job. No assertion on the result: the
+# output is the finding. Runs on a push whose head commit message contains [compose-up], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  up:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[compose-up]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # probe: service:port:kind, kind http or tcp
+          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:8080:http"}
+          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
+          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
+          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source (with the dns fix of nanovms/ops#1803)
+        run: |
+          git clone https://github.com/AngeloRubens/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout fix/compose-empty-dns-record
+          cd /tmp/ops-src && git log --oneline | head -1
+          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly, it reads uid and gid from the manifest)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          ops pkg get eyberg/ops-dns:0.0.1
+      - name: the compose file
+        run: |
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          git -C /tmp/ac log --oneline | head -1
+          ls -la /tmp/ac/${{ matrix.name }}
+          cat /tmp/ac/${{ matrix.name }}/compose.y*ml /tmp/ac/${{ matrix.name }}/docker-compose.y*ml 2>/dev/null
+      - name: convert
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/out
+          cd /tmp/ac/${{ matrix.dir }}
+          f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1)
+          cd "$GITHUB_WORKSPACE"
+          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 2>&1 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+          for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
+      - name: compose up
+        timeout-minutes: 10
+        run: |
+          cd /tmp/out
+          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1 || echo "ops compose up failed: $?"
+          grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | cut -c1-300 | tail -30
+      - name: probe
+        if: always()
+        run: |
+          sleep 60
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
+          for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u) dns; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+          done
+          for p in ${{ matrix.probe }}; do
+            svc=${p%%:*}; rest=${p#*:}; port=${rest%%:*}; kind=${rest##*:}
+            ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
+            echo "=== $svc $ip:$port $kind"
+            [ -z "$ip" ] && { echo "no address"; continue; }
+            for i in $(seq 1 24); do
+              if [ "$kind" = http ]; then
+                code=$(curl -s -m 5 -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                case "$code" in 2*|3*|4*) break;; esac
+              else
+                if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
+              fi
+              sleep 10
+            done
+            echo "answer: $code"
+            [ "$kind" = http ] && head -c 400 /tmp/out/body-$svc.txt 2>/dev/null; echo
+          done
+          for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+            echo "=== console of $svc, last 25 lines"; tail -25 /tmp/out/console-$svc.txt | cut -c1-250
+          done
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-up-${{ matrix.name }}
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
