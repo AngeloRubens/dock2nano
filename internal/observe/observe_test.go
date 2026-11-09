@@ -1399,7 +1399,7 @@ func TestObserveBindsFollowTheTracerBinds(t *testing.T) {
 func TestObserveBindUnderTheTracerIsAnError(t *testing.T) {
 	for _, b := range []string{
 		"/h:/.ops-trace", "/h:/.ops-trace/out", "/h:/.ops-trace/../.ops-trace/x:ro",
-		"h:/x", "/h:x", "/h", "/h:/x:zz", "/h:/x:ro:more",
+		"h:/x", "/h:x", "h", "/h:/x:zz", "/h:/x:ro:more",
 	} {
 		s := newScene(t)
 		s.o.Binds = []string{b}

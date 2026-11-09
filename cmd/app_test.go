@@ -1113,7 +1113,8 @@ func TestOnlyBindVolumesWithASourceReachTheObservation(t *testing.T) {
 	}
 	h.dock.have["w"] = true
 	h.mustRun(0, "convert")
-	if len(h.observed[0].Binds) != 1 {
+	// the bind with a source, and the anonymous volume as a bare path
+	if len(h.observed[0].Binds) != 2 || h.observed[0].Binds[1] != "/anonymous" {
 		t.Fatalf("binds %v", h.observed[0].Binds)
 	}
 	h.wantCopy(h.observed[0].Binds[0], filepath.Join(h.dir, "real"), "/real")
