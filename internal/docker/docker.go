@@ -818,12 +818,13 @@ func (c *Client) Kill(ctx context.Context, id string) error {
 	return c.simple(ctx, "docker kill", id, "kill")
 }
 
-// Remove runs docker rm, with --force when force is true.
+// Remove runs docker rm, with --force when force is true. The anonymous volumes of the container
+// go with it (--volumes).
 func (c *Client) Remove(ctx context.Context, id string, force bool) error {
 	if force {
-		return c.simple(ctx, "docker rm", id, "rm", "--force")
+		return c.simple(ctx, "docker rm", id, "rm", "--force", "--volumes")
 	}
-	return c.simple(ctx, "docker rm", id, "rm")
+	return c.simple(ctx, "docker rm", id, "rm", "--volumes")
 }
 
 // Running reports whether the container is running.

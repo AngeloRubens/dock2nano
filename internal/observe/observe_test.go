@@ -2834,3 +2834,15 @@ func TestWriteLocalNamesKeepsAFileThatIsThere(t *testing.T) {
 		t.Error("localNames is set for a file that was there")
 	}
 }
+
+func TestCheckBindsAcceptsAnAnonymousVolumeButNotUnderTheTracer(t *testing.T) {
+	if err := checkBinds([]string{"/usr/src/app/node_modules"}); err != nil {
+		t.Errorf("anonymous volume: %v", err)
+	}
+	if err := checkBinds([]string{trace.TraceMount + "/x"}); err == nil {
+		t.Errorf("a volume under the tracer was accepted")
+	}
+	if err := checkBinds([]string{"relative"}); err == nil {
+		t.Errorf("a relative path was accepted")
+	}
+}

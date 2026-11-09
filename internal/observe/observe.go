@@ -114,7 +114,7 @@ type Options struct {
 	// runs the program as a user name. A uid with no name is observed as root, with a warning.
 	User string
 	// Binds are bind mounts in docker syntax, "host:container" or "host:container:ro", with
-	// absolute paths. The traced container gets them in addition to its own, so that the program
+	// absolute paths; a bare absolute path is an anonymous volume at that path of the container. The traced container gets them in addition to its own, so that the program
 	// sees the files the user mounts; the files it opens under them are carried like any other.
 	// A container path under the directory of the tracer is an error.
 	Binds []string
@@ -482,6 +482,14 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 func checkBinds(binds []string) error {
 	for _, b := range binds {
 		parts := strings.Split(b, ":")
+		if len(parts) == 1 && path.IsAbs(b) {
+			// an anonymous volume: only the path in the container
+			t := path.Clean(b)
+			if t == trace.TraceMount || strings.HasPrefix(t, trace.TraceMount+"/") {
+				return fmt.Errorf("observe: the volume %q is under %s, which the tracer uses", b, trace.TraceMount)
+			}
+			continue
+		}
 		if len(parts) < 2 || len(parts) > 3 {
 			return fmt.Errorf("observe: the bind %q is not host:container[:ro]", b)
 		}

@@ -1551,3 +1551,20 @@ func TestADependencyReportsThatItsDependentsWroteIntoIt(t *testing.T) {
 		}
 	}
 }
+
+func TestHiddenVolumesAreTheOnesDockerFillsFromTheImage(t *testing.T) {
+	s := &compose.Service{Volumes: []compose.Volume{
+		{Type: "bind", Source: "./backend", Target: "/usr/src/app"},
+		{Type: "volume", Target: "/usr/src/app/node_modules"},
+		{Type: "volume", Source: "modules", Target: "/usr/src/app/vendor/"},
+		{Type: "volume", Source: "data", Target: "/var/lib/db"},
+		{Type: "volume", Target: "/cache"},
+		{Type: "volume", Target: "relative"},
+		{Type: "tmpfs", Target: "/run"},
+	}}
+	got := hiddenVolumes(s)
+	want := []string{"/usr/src/app/node_modules", "/usr/src/app/vendor", "/cache"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hiddenVolumes = %v, want %v", got, want)
+	}
+}

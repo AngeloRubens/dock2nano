@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -442,6 +443,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.User = s.User
 	var bindNotes []string
 	oo.Binds, bindNotes = rs.mountBinds(a, s.Name, a.binds(s, dir))
+	oo.Binds = append(oo.Binds, hiddenVolumes(s)...)
 	oo.Seconds = o.seconds
 	oo.Log = func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
@@ -771,6 +773,37 @@ func (a *App) binds(s *compose.Service, dir string) []string {
 			b += ":ro"
 		}
 		out = append(out, b)
+	}
+	return out
+}
+
+// hiddenVolumes are the container paths of the volumes of a service that docker fills from the
+// image: an anonymous volume, or a named one under a bind mount. They are passed to the observation
+// as anonymous volumes, because a bind mount over a directory hides what the image has there (the
+// node_modules of an image, with a bind of the source over its parent) and the volume is what docker
+// puts back. What a volume holds is not kept by the package, as the report says for every volume.
+func hiddenVolumes(s *compose.Service) []string {
+	var binds []string
+	for _, v := range s.Volumes {
+		if v.Type == "bind" && v.Target != "" {
+			binds = append(binds, path.Clean(v.Target))
+		}
+	}
+	var out []string
+	for _, v := range s.Volumes {
+		if v.Type != "volume" || !strings.HasPrefix(v.Target, "/") || strings.Contains(v.Target, ":") {
+			continue
+		}
+		t := path.Clean(v.Target)
+		under := false
+		for _, b := range binds {
+			if t != b && strings.HasPrefix(t, b+"/") {
+				under = true
+			}
+		}
+		if v.Source == "" || under {
+			out = append(out, t)
+		}
 	}
 	return out
 }
