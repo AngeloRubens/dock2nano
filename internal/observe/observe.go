@@ -145,6 +145,10 @@ type Result struct {
 	// LocalNames says that the package was given an /etc/hosts that names localhost: the one of the
 	// container is not carried.
 	LocalNames bool
+	// MachineFiles lists the files of /proc and /sys that the program opened to learn what machine
+	// it runs on and that the package carries as files of ours (the processors), since nanos does
+	// not answer them.
+	MachineFiles []string
 
 	// Sysroot is a directory on this machine with the files the program reached.
 	Sysroot string
@@ -808,8 +812,13 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 
 	r.writeLocalNames(sysroot)
+	machine, err := writeMachineFiles(sysroot, cfg.Architecture, touched)
+	if err != nil {
+		r.warnOnce(fmt.Sprintf("could not write the machine files for the package: %v", err))
+	}
 
 	return &Result{
+		MachineFiles:       machine,
 		LocalNames:         r.localNames,
 		Sysroot:            sysroot,
 		Program:            program,

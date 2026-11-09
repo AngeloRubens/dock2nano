@@ -1610,3 +1610,11 @@ func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
 	in2 := newInput(&fake{}, svc("web"))
 	wantNone(t, mustGen(t, in2), "web", plan.Note, "hosts")
 }
+
+func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
+	in := newInput(&fake{}, svc("db"))
+	in.Services["db"].Observed.MachineFiles = []string{"/proc/cpuinfo", "/sys/devices/system/cpu/possible"}
+	p := mustGen(t, in)
+	want1(t, p, "db", plan.Note, "machine", "/sys/devices/system/cpu/possible")
+	wantNone(t, mustGen(t, newInput(&fake{}, svc("db"))), "db", plan.Note, "machine")
+}
