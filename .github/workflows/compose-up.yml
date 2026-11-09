@@ -60,7 +60,7 @@ jobs:
           set -o pipefail
           mkdir -p /tmp/out
           cd /tmp/ac/${{ matrix.dir }}
-          f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1)
+          f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
           cd "$GITHUB_WORKSPACE"
           go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 2>&1 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
