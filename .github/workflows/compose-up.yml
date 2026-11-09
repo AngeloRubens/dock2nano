@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:8080:http"}
+          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
           - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
           - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
@@ -68,6 +68,13 @@ jobs:
           go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 2>&1 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
+      - name: the changes the report asks for, by hand
+        run: |
+          if [ -f ci/patches/${{ matrix.name }}.sh ]; then
+            OPS_HOME="$OPS_HOME" bash ci/patches/${{ matrix.name }}.sh
+          else
+            echo "no changes for ${{ matrix.name }}"
+          fi
       - name: compose up
         timeout-minutes: 10
         run: |
