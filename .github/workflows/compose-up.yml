@@ -48,6 +48,9 @@ jobs:
             src=$(find /tmp/nightly -name "$f" | head -1)
             [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
           done
+          # ops update replaces the ops binary too: put the one built from source back
+          sudo install /tmp/ops /usr/local/bin/ops
+          grep -c "not registered in the dns" /usr/local/bin/ops || true
           ops pkg get eyberg/ops-dns:0.0.1
       - name: the compose file
         run: |
