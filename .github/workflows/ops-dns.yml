@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [empty-record-added, wait-ten-seconds, adddns-ignores-errors, adddns-ignores-newrequest-error, adddns-no-timeout]
+        name: [empty-record-added, wait-ten-seconds, adddns-ignores-errors, adddns-ignores-newrequest-error, adddns-no-timeout, adddns-ignores-status]
     steps:
       - uses: actions/checkout@v4
         with:

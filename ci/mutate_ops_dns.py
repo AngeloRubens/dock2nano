@@ -24,12 +24,15 @@ M = {
 		fmt.Println(err)
 	}'''),
     "adddns-ignores-newrequest-error": (
-        '''	req, err := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+host+".service&ip="+ip, nil)
+        '''	req, err := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+url.QueryEscape(host+".service")+"&ip="+url.QueryEscape(ip), nil)
 	if err != nil {
 		return err
 	}
-''', '''	req, _ := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+host+".service&ip="+ip, nil)
+''', '''	req, _ := http.NewRequest("GET", "http://"+dnsIP+":"+dnsPort+"/add?svc="+url.QueryEscape(host+".service")+"&ip="+url.QueryEscape(ip), nil)
 '''),
+    # an error status of the dns counts as success
+    "adddns-ignores-status": (
+        "if res.StatusCode/100 != 2 {", "if false && res.StatusCode/100 != 2 {"),
     # the client waits for ever for a dns that does not answer
     "adddns-no-timeout": ("http.Client{Timeout: dnsTimeout}", "http.Client{}"),
     # no sleep-skip is not tested; the service that failed does not make the up fail
