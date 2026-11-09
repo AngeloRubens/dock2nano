@@ -475,6 +475,9 @@ func (g *generator) bind(service, key string, v compose.Volume) {
 	if v.Options != "" {
 		msg += "; the options " + v.Options + " are ignored"
 	}
+	if v.Secret {
+		msg = "secret file mounted at " + v.Target + " (" + msg + "); the content of the secret is in the package"
+	}
 	g.add(service, plan.Approximated, key, msg)
 }
 

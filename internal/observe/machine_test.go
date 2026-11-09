@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,32 @@ func TestMachineFilesKeepWhatIsThere(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != "mine" {
 		t.Fatalf("cpuinfo = %q", b)
+	}
+}
+
+func TestProcessStatFilesAreWrittenForTheFirstThreeProcesses(t *testing.T) {
+	dir := t.TempDir()
+	wrote, err := writeMachineFiles(dir, "amd64", []string{"/proc/2/stat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proc/1/stat", "/proc/2/stat", "/proc/3/stat"}
+	if !reflect.DeepEqual(wrote, want) {
+		t.Fatalf("wrote %v, want %v", wrote, want)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "proc/2/stat"))
+	if got := len(strings.Fields(string(b))); got != 52 {
+		t.Fatalf("%d words in %q", got, b)
+	}
+	if !strings.HasPrefix(string(b), "2 (program) R ") {
+		t.Fatalf("stat = %q", b)
+	}
+}
+
+func TestProcessStatIsNotWrittenForOtherProcFiles(t *testing.T) {
+	dir := t.TempDir()
+	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/proc/self/stat", "/proc/meminfo", "/proc/2/status"})
+	if len(wrote) != 0 {
+		t.Fatalf("wrote %v", wrote)
 	}
 }

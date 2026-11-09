@@ -1618,3 +1618,11 @@ func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
 	want1(t, p, "db", plan.Note, "machine", "/sys/devices/system/cpu/possible")
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("db"))), "db", plan.Note, "machine")
 }
+
+func TestSecretBindSaysTheSecretIsInThePackage(t *testing.T) {
+	db := svc("db")
+	db.Volumes = []compose.Volume{{Type: "bind", Source: "pw.txt", Target: "/run/secrets/pw", ReadOnly: true, Secret: true}}
+	in := newInput(&fake{files: map[string]string{"/work/app/pw.txt": "x"}}, db)
+	p := mustGen(t, in)
+	want1(t, p, "db", plan.Approximated, "volumes[0]", "the content of the secret is in the package")
+}

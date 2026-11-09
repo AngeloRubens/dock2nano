@@ -26,6 +26,8 @@ type Project struct {
 	Volumes  []string   // names declared at top level
 	// Unknown lists top-level keys that are not modelled, such as configs.
 	Unknown []string
+	// secretFiles maps the name of a secret whose source is a file to that file.
+	secretFiles map[string]string
 }
 
 // Service returns the service with the given name, or nil.
@@ -63,7 +65,11 @@ type Service struct {
 	// Unknown lists keys that are not modelled, as dotted paths such as
 	// "privileged" or "deploy.resources". Extension keys (x-...) are not listed.
 	Unknown []string
+	// secrets are the secrets the service asks for, until the project knows where they come from.
+	secrets []secretRef
 }
+
+type secretRef struct{ source, target string }
 
 // Build is the build section of a service.
 type Build struct {
@@ -112,6 +118,8 @@ type Volume struct {
 	Target   string
 	ReadOnly bool
 	Options  string
+	// Secret is true for a volume made from a file secret: the file is mounted at /run/secrets.
+	Secret bool
 }
 
 // Dependency is one depends_on entry.
@@ -195,6 +203,10 @@ func Parse(data []byte) (*Project, error) {
 			if p.Volumes, err = keyNames(e.val, "volumes", &p.Unknown); err != nil {
 				return nil, err
 			}
+		case e.key == "secrets":
+			if err := p.parseSecrets(e.val); err != nil {
+				return nil, err
+			}
 		case isExtension(e.key):
 		default:
 			p.Unknown = append(p.Unknown, e.key)
@@ -203,7 +215,125 @@ func Parse(data []byte) (*Project, error) {
 	if !hasServices || len(p.Services) == 0 {
 		return nil, fmt.Errorf("the file has no services")
 	}
+	p.mountSecrets()
 	return p, nil
+}
+
+// parseSecrets reads the top level secrets. A secret that comes from a file can be mounted;
+// whatever else a secret says (environment, external, name) is listed as unknown, and the secret
+// is not mounted.
+func (p *Project) parseSecrets(n *yaml.Node) error {
+	if isNull(n) {
+		return nil
+	}
+	es, err := entries(n)
+	if err != nil {
+		return err
+	}
+	for _, e := range es {
+		if isNull(e.val) {
+			p.Unknown = append(p.Unknown, "secrets."+e.key)
+			continue
+		}
+		sub, err := entries(e.val)
+		if err != nil {
+			return fmt.Errorf("secrets.%s: %w", e.key, err)
+		}
+		file, others := "", false
+		for _, se := range sub {
+			switch {
+			case se.key == "file":
+				if file, err = scalar(se.val); err != nil {
+					return fmt.Errorf("secrets.%s.file: %w", e.key, err)
+				}
+			case isExtension(se.key):
+			default:
+				others = true
+				p.Unknown = append(p.Unknown, "secrets."+e.key+"."+se.key)
+			}
+		}
+		if file == "" || others || strings.Contains(file, "$") || strings.Contains(file, ":") {
+			if file != "" && !others {
+				p.Unknown = append(p.Unknown, "secrets."+e.key+".file")
+			}
+			continue
+		}
+		if p.secretFiles == nil {
+			p.secretFiles = map[string]string{}
+		}
+		p.secretFiles[e.key] = file
+	}
+	return nil
+}
+
+// mountSecrets turns the secrets of each service that come from a file into a read-only bind
+// mount at /run/secrets/<name>, which is where Compose puts them. A secret that is not from a
+// file stays in the unknown keys of the service.
+func (p *Project) mountSecrets() {
+	for _, s := range p.Services {
+		for _, ref := range s.secrets {
+			file, ok := p.secretFiles[ref.source]
+			if !ok {
+				s.Unknown = append(s.Unknown, "secrets."+ref.source)
+				continue
+			}
+			target := ref.target
+			if target == "" {
+				target = ref.source
+			}
+			if !strings.HasPrefix(target, "/") {
+				target = "/run/secrets/" + target
+			}
+			s.Volumes = append(s.Volumes, Volume{Type: "bind", Source: file, Target: target, ReadOnly: true, Secret: true})
+		}
+		s.secrets = nil
+	}
+}
+
+// parseServiceSecrets reads the secrets of a service: names, or entries with a source and a target.
+func parseServiceSecrets(n *yaml.Node, s *Service) error {
+	d := deref(n)
+	if d.Kind != yaml.SequenceNode {
+		return errAt(d, "expected a list")
+	}
+	for _, c := range d.Content {
+		c = deref(c)
+		if isNull(c) {
+			return errAt(c, "empty entry in secrets")
+		}
+		if c.Kind == yaml.ScalarNode {
+			s.secrets = append(s.secrets, secretRef{source: c.Value})
+			continue
+		}
+		es, err := entries(c)
+		if err != nil {
+			return err
+		}
+		var ref secretRef
+		for _, e := range es {
+			switch e.key {
+			case "source":
+				if ref.source, err = scalar(e.val); err != nil {
+					return err
+				}
+			case "target":
+				if ref.target, err = scalar(e.val); err != nil {
+					return err
+				}
+			case "uid", "gid", "mode":
+				s.Unknown = append(s.Unknown, "secrets."+e.key)
+			default:
+				if !isExtension(e.key) {
+					s.Unknown = append(s.Unknown, "secrets."+e.key)
+				}
+			}
+		}
+		if ref.source == "" {
+			return errAt(c, "a secret needs a source")
+		}
+		s.secrets = append(s.secrets, ref)
+	}
+	return nil
 }
 
 // keyNames returns the keys of a mapping; a null value gives no names. The
@@ -272,7 +402,7 @@ var modeled = map[string]bool{
 	"working_dir": true, "user": true, "restart": true, "network_mode": true,
 	"environment": true, "env_file": true, "ports": true, "expose": true,
 	"volumes": true, "depends_on": true, "networks": true, "healthcheck": true,
-	"profiles": true, "scale": true, "deploy": true,
+	"profiles": true, "scale": true, "deploy": true, "secrets": true,
 }
 
 func (s *Service) set(e entry) (err error) {
@@ -312,6 +442,8 @@ func (s *Service) set(e entry) (err error) {
 		s.Networks, err = parseServiceNetworks(e.val, s)
 	case "healthcheck":
 		s.Healthcheck, err = parseHealthcheck(e.val, s)
+	case "secrets":
+		err = parseServiceSecrets(e.val, s)
 	case "profiles":
 		s.Profiles, err = stringList(e.val)
 	case "scale":

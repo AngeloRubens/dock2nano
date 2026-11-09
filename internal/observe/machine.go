@@ -3,6 +3,7 @@ package observe
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,12 @@ import (
 // work by what it counts, and one too few only costs speed. What reads "possible" cannot take a
 // number below the truth (tcmalloc keeps a cache per processor, indexed by the processor it runs
 // on), and a number above it costs memory never used.
+//
+// The process files are for the same programs: mongodb reads /proc/<pid>/stat of the first few
+// processes for its diagnostics and logs an assertion every second when it cannot. A number is
+// the one the program had in the container, which is not the one it will have, so the first three
+// are written. The line has fifty-two words, since a reader takes the twenty-fourth for the
+// resident memory without counting them first.
 var machineFiles = map[string]string{
 	"proc/cpuinfo":                    "processor\t: 0\n\n",
 	"sys/devices/system/cpu/possible": "0-63\n",
@@ -31,8 +38,12 @@ func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) 
 		return nil, nil
 	}
 	var wrote []string
-	for _, name := range []string{"proc/cpuinfo", "sys/devices/system/cpu/possible"} {
-		if !openedPath(opened, "/"+name) {
+	for _, name := range []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"} {
+		if strings.HasPrefix(name, "proc/") && strings.HasSuffix(name, "/stat") {
+			if !openedProcessStat(opened) {
+				continue
+			}
+		} else if !openedPath(opened, "/"+name) {
 			continue
 		}
 		path := filepath.Join(sysroot, filepath.FromSlash(name))
@@ -42,7 +53,11 @@ func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) 
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return wrote, err
 		}
-		if err := os.WriteFile(path, []byte(machineFiles[name]), 0o444); err != nil {
+		says, ok := machineFiles[name]
+		if !ok {
+			says = processStat(strings.Split(name, "/")[1])
+		}
+		if err := os.WriteFile(path, []byte(says), 0o444); err != nil {
 			return wrote, err
 		}
 		wrote = append(wrote, "/"+name)
@@ -57,4 +72,27 @@ func openedPath(opened []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// openedProcessStat says whether the program opened /proc/<number>/stat of some process.
+func openedProcessStat(opened []string) bool {
+	for _, p := range opened {
+		parts := strings.Split(p, "/")
+		if len(parts) == 4 && parts[0] == "" && parts[1] == "proc" && parts[3] == "stat" {
+			if _, err := strconv.Atoi(parts[2]); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// processStat is the line a process of Linux has in /proc/<pid>/stat: fifty-two words. The times
+// are zero, which stops being true the moment the process runs.
+func processStat(pid string) string {
+	words := []string{pid, "(program)", "R", "0", pid, pid}
+	for len(words) < 52 {
+		words = append(words, "0")
+	}
+	return strings.Join(words, " ") + "\n"
 }
