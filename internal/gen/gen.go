@@ -69,6 +69,9 @@ type Input struct {
 	// reason is reported as unsupported with that reason.
 	Skipped map[string]string
 
+	// DNSNames is the dns_names of compose.yaml: "", "service", "plain" or "both".
+	DNSNames string
+
 	// Arch is the architecture of the packages, "amd64" or "arm64". The default
 	// is that of the machine that runs the tool; for any other machine it is
 	// an error.
@@ -127,11 +130,17 @@ func Generate(in Input) (*plan.Plan, error) {
 	if in.Stat == nil {
 		in.Stat = os.Stat
 	}
+	switch in.DNSNames {
+	case "", "service", "plain", "both":
+	default:
+		return nil, fmt.Errorf("dns names %q is not known; it is one of service, plain or both", in.DNSNames)
+	}
 	ordered, err := order(in.Project)
 	if err != nil {
 		return nil, err
 	}
 	g := &generator{in: in, plan: &plan.Plan{Arch: in.Arch}}
+	g.plan.Compose.DNSNames = in.DNSNames
 	project := projectName(in)
 	for _, u := range in.Project.Unknown {
 		g.add("", plan.Unsupported, u, "this top-level key of the compose file is not converted")
@@ -409,9 +418,9 @@ func (g *generator) ports(s *compose.Service, si ServiceInput, m *plan.Manifest,
 			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("the host address %s is not supported; port %s is published on every address", p.HostIP, p.Published))
 		}
 		if p.Published != p.Target {
-			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("the port mapping %s:%s is not applied: the service is reachable on the container port %s, on the bridge ops0 at %s.service and at the address of the instance; the published port %s does not exist (ops does not forward ports in compose mode)", p.Published, p.Target, p.Target, pkg, p.Published))
+			g.add(s.Name, plan.Unsupported, key, fmt.Sprintf("the port mapping %s:%s is not applied: the service is reachable on the container port %s, on the bridge ops0 at %s and at the address of the instance; the published port %s does not exist (ops does not forward ports in compose mode)", p.Published, p.Target, p.Target, g.dnsName(pkg), p.Published))
 		}
-		g.add(s.Name, plan.Approximated, key, fmt.Sprintf("reachable at %s.service and at the address of the instance on the ops0 bridge; not forwarded to the host", pkg))
+		g.add(s.Name, plan.Approximated, key, fmt.Sprintf("reachable at %s and at the address of the instance on the ops0 bridge; not forwarded to the host", g.dnsName(pkg)))
 		if proto == "udp" {
 			m.RunConfig.UDPPorts = append(m.RunConfig.UDPPorts, p.Target)
 		} else {
@@ -764,15 +773,31 @@ func sortedEnvNames(env map[string]string) []string {
 
 // networkNote explains how services find each other, once for the project. It
 // names the variables whose value names another service, never the values.
+// dnsName is the name a service has in the dns of ops compose, as the file asks for.
+func (g *generator) dnsName(pkg string) string {
+	if g.in.DNSNames == "plain" || g.in.DNSNames == "both" {
+		return pkg
+	}
+	return pkg + ".service"
+}
+
 func (g *generator) networkNote(pkgOf map[string]string) {
 	if len(g.plan.Services) < 2 {
 		return
 	}
 	var pairs []string
 	for _, svc := range g.plan.Services {
-		pairs = append(pairs, svc.Name+" -> "+pkgOf[svc.Name]+".service")
+		pairs = append(pairs, svc.Name+" -> "+g.dnsName(pkgOf[svc.Name]))
 	}
-	msg := "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
+	var msg string
+	switch g.in.DNSNames {
+	case "plain":
+		msg = "a service reaches another by its compose name (dns_names: plain in compose.yaml, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
+	case "both":
+		msg = "a service reaches another by its compose name or as <pkg>.service (dns_names: both in compose.yaml, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
+	default:
+		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
+	}
 	var refs []string
 	for _, svc := range g.plan.Services {
 		var vars []string
@@ -788,7 +813,8 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 			refs = append(refs, svc.Name+": "+strings.Join(vars, ", "))
 		}
 	}
-	if len(refs) > 0 {
+	// with the names of the compose file in the dns, those values need no rewriting
+	if len(refs) > 0 && g.in.DNSNames != "plain" && g.in.DNSNames != "both" {
 		msg += " Environment variables whose value names another service were not rewritten: " + strings.Join(refs, "; ") + "."
 	}
 	g.add("", plan.Note, "service names", msg)

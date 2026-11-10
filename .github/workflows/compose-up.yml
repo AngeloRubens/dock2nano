@@ -19,12 +19,9 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp
-          - {name: flask-redis-noshm, dir: flask-redis, probe: "web:8000:http"}
-          - {name: flask-redis-klib, dir: flask-redis, probe: "web:8000:http"}
-          - {name: flask-redis-shmuse, dir: flask-redis, probe: "web:8000:http"}
-          - {name: flask-redis-shmauto, dir: flask-redis, probe: "web:8000:http"}
-          - {name: flask-redis-shmdir, dir: flask-redis, probe: "web:8000:http"}
-          - {name: flask-redis-shmklib, dir: flask-redis, probe: "web:8000:http"}
+          - {name: nginx-golang-plain, dir: nginx-golang, dnsnames: plain, probe: "proxy:80:http backend:80:http"}
+          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, dnsnames: plain, probe: "backend:8080:http db:3306:tcp"}
+          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, dnsnames: plain, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
           - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
           - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
@@ -38,10 +35,10 @@ jobs:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (with the dns fix of nanovms/ops#1803)
+      - name: ops from source (with the dns fix of nanovms/ops#1803 and dns_names)
         run: |
           git clone https://github.com/AngeloRubens/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout fix/compose-empty-dns-record
+          git -C /tmp/ops-src checkout feat/compose-dns-names
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
@@ -74,7 +71,7 @@ jobs:
           cd /tmp/ac/${{ matrix.dir }}
           f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
           cd "$GITHUB_WORKSPACE"
-          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 2>&1 | tee /tmp/out/report.txt
+          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 ${{ matrix.dnsnames && format('--dns-names {0}', matrix.dnsnames) || '' }} 2>&1 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
       - name: the changes the report asks for, by hand

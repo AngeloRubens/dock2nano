@@ -21,6 +21,10 @@ type Plan struct {
 // ComposeFile is what "ops compose" reads (ComposeFile in the ops source).
 type ComposeFile struct {
 	Packages []ComposePackage `yaml:"packages"`
+	// DNSNames is which names ops gives a service in its dns: service (name.service, what ops
+	// does when the key is absent), plain (the name of the compose file) or both. Empty leaves
+	// the key out, so that an ops without the option reads the file.
+	DNSNames string `yaml:"dns_names,omitempty"`
 }
 
 // ComposePackage is one entry of compose.yaml. For a package kept in the local

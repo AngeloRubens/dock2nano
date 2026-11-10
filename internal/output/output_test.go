@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/AngeloRubens/dock2nano/internal/plan"
+	"gopkg.in/yaml.v3"
 )
 
 func put(t *testing.T, path, content string, mode os.FileMode) {
@@ -874,5 +875,26 @@ func TestCopyTreeKeepsSpecialBits(t *testing.T) {
 		if got := fi.Mode() & bits; got != want {
 			t.Errorf("%s mode = %v, want %v", rel, got, want)
 		}
+	}
+}
+
+func TestComposeFileWritesDNSNamesOnlyWhenSet(t *testing.T) {
+	var with, without plan.ComposeFile
+	with.Packages = []plan.ComposePackage{{Pkg: "web", Name: "web", Local: true, Arch: "amd64"}}
+	with.DNSNames = "plain"
+	without.Packages = with.Packages
+	a, err := yaml.Marshal(with)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := yaml.Marshal(without)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(a), "dns_names: plain") {
+		t.Errorf("with: %q", a)
+	}
+	if strings.Contains(string(b), "dns_names") {
+		t.Errorf("without: %q", b)
 	}
 }
