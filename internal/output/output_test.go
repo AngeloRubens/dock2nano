@@ -878,10 +878,10 @@ func TestCopyTreeKeepsSpecialBits(t *testing.T) {
 	}
 }
 
-func TestComposeFileWritesDNSNamesOnlyWhenSet(t *testing.T) {
+func TestComposeFileWritesDNSSearchOnlyWhenSet(t *testing.T) {
 	var with, without plan.ComposeFile
 	with.Packages = []plan.ComposePackage{{Pkg: "web", Name: "web", Local: true, Arch: "amd64"}}
-	with.DNSNames = "plain"
+	with.DNSSearch = []string{"service"}
 	without.Packages = with.Packages
 	a, err := yaml.Marshal(with)
 	if err != nil {
@@ -891,10 +891,10 @@ func TestComposeFileWritesDNSNamesOnlyWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(a), "dns_names: plain") {
+	if !strings.Contains(string(a), "dns_search:\n    - service") {
 		t.Errorf("with: %q", a)
 	}
-	if strings.Contains(string(b), "dns_names") {
+	if strings.Contains(string(b), "dns_search") {
 		t.Errorf("without: %q", b)
 	}
 }

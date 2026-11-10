@@ -58,9 +58,9 @@ Flags of convert:
   --pull             pull the images that are missing on this machine
   --force            replace package folders and a compose.yaml that exist
   --strict           exit with status 2 if the report has an unsupported item
-  --dns-names MODE   names of the services in the dns of ops compose: service (name.service, the
-                     default of ops), plain (the name of the compose file) or both; plain and both
-                     are written as dns_names in compose.yaml and need an ops that reads it
+  --short-names      let the services reach each other by the name of the compose file (db) and
+                     not only as db.service: writes dns_search: [service] in compose.yaml, which
+                     needs an ops that reads it
   --service NAME     convert only this service (can be repeated)
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
@@ -183,7 +183,7 @@ type options struct {
 	pull       bool
 	force      bool
 	strict     bool
-	dnsNames   string
+	shortNames bool
 	services   []string
 }
 
@@ -240,7 +240,7 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	set.BoolVar(&o.pull, "pull", false, "")
 	set.BoolVar(&o.force, "force", false, "")
 	set.BoolVar(&o.strict, "strict", false, "")
-	set.StringVar(&o.dnsNames, "dns-names", "", "")
+	set.BoolVar(&o.shortNames, "short-names", false, "")
 	set.Func("service", "", func(v string) error {
 		if v == "" {
 			return errors.New("the service name is empty")

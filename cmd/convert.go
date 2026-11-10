@@ -142,7 +142,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}
 
-	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, DNSNames: o.dnsNames}
+	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, ShortNames: o.shortNames}
 	in.HostEnv = a.LookupEnv
 	in.ReadFile = a.ReadFile
 	in.Stat = a.Stat

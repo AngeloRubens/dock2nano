@@ -69,8 +69,9 @@ type Input struct {
 	// reason is reported as unsupported with that reason.
 	Skipped map[string]string
 
-	// DNSNames is the dns_names of compose.yaml: "", "service", "plain" or "both".
-	DNSNames string
+	// ShortNames makes the services reachable by the name of the compose file too, with
+	// dns_search: [service] in compose.yaml.
+	ShortNames bool
 
 	// Arch is the architecture of the packages, "amd64" or "arm64". The default
 	// is that of the machine that runs the tool; for any other machine it is
@@ -130,17 +131,14 @@ func Generate(in Input) (*plan.Plan, error) {
 	if in.Stat == nil {
 		in.Stat = os.Stat
 	}
-	switch in.DNSNames {
-	case "", "service", "plain", "both":
-	default:
-		return nil, fmt.Errorf("dns names %q is not known; it is one of service, plain or both", in.DNSNames)
-	}
 	ordered, err := order(in.Project)
 	if err != nil {
 		return nil, err
 	}
 	g := &generator{in: in, plan: &plan.Plan{Arch: in.Arch}}
-	g.plan.Compose.DNSNames = in.DNSNames
+	if in.ShortNames {
+		g.plan.Compose.DNSSearch = []string{"service"}
+	}
 	project := projectName(in)
 	for _, u := range in.Project.Unknown {
 		g.add("", plan.Unsupported, u, "this top-level key of the compose file is not converted")
@@ -773,10 +771,10 @@ func sortedEnvNames(env map[string]string) []string {
 
 // networkNote explains how services find each other, once for the project. It
 // names the variables whose value names another service, never the values.
-// dnsName is the name a service has in the dns of ops compose, as the file asks for.
+// dnsName is the name a service has in the dns of ops compose, as the report says it.
 func (g *generator) dnsName(pkg string) string {
-	if g.in.DNSNames == "plain" || g.in.DNSNames == "both" {
-		return pkg
+	if g.in.ShortNames {
+		return pkg + " (or " + pkg + ".service)"
 	}
 	return pkg + ".service"
 }
@@ -790,12 +788,9 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 		pairs = append(pairs, svc.Name+" -> "+g.dnsName(pkgOf[svc.Name]))
 	}
 	var msg string
-	switch g.in.DNSNames {
-	case "plain":
-		msg = "a service reaches another by its compose name (dns_names: plain in compose.yaml, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
-	case "both":
-		msg = "a service reaches another by its compose name or as <pkg>.service (dns_names: both in compose.yaml, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
-	default:
+	if g.in.ShortNames {
+		msg = "a service reaches another by its compose name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
+	} else {
 		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
 	}
 	var refs []string
@@ -814,7 +809,7 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 		}
 	}
 	// with the names of the compose file in the dns, those values need no rewriting
-	if len(refs) > 0 && g.in.DNSNames != "plain" && g.in.DNSNames != "both" {
+	if len(refs) > 0 && !g.in.ShortNames {
 		msg += " Environment variables whose value names another service were not rewritten: " + strings.Join(refs, "; ") + "."
 	}
 	g.add("", plan.Note, "service names", msg)

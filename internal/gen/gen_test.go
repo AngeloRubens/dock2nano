@@ -1627,41 +1627,30 @@ func TestSecretBindSaysTheSecretIsInThePackage(t *testing.T) {
 	want1(t, p, "db", plan.Approximated, "volumes[0]", "the content of the secret is in the package")
 }
 
-func TestDNSNamesPlainKeepsTheNamesOfTheComposeFile(t *testing.T) {
+func TestShortNamesWritesDNSSearchAndChangesTheNote(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
 	web.Ports = []compose.Port{{Target: "80", Published: "80"}}
 	in := newInput(&fake{}, db, web)
-	in.DNSNames = "plain"
+	in.ShortNames = true
 	p := mustGen(t, in)
-	if p.Compose.DNSNames != "plain" {
-		t.Errorf("DNSNames = %q", p.Compose.DNSNames)
+	if !reflect.DeepEqual(p.Compose.DNSSearch, []string{"service"}) {
+		t.Errorf("DNSSearch = %v", p.Compose.DNSSearch)
 	}
 	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
-	if !strings.Contains(msg, "by its compose name (dns_names: plain") || !strings.Contains(msg, "db -> db, web -> web") || strings.Contains(msg, "not rewritten") {
+	if !strings.Contains(msg, "by its compose name, or as <pkg>.service (dns_search: [service]") || !strings.Contains(msg, "db -> db (or db.service)") || strings.Contains(msg, "not rewritten") {
 		t.Errorf("note = %q", msg)
 	}
-	want1(t, p, "web", plan.Approximated, "ports[0]", "reachable at web and at the address")
+	want1(t, p, "web", plan.Approximated, "ports[0]", "reachable at web (or web.service) and at the address")
 }
 
-func TestDNSNamesBothAndTheDefault(t *testing.T) {
-	in := newInput(&fake{}, svc("db"), svc("web"))
-	in.DNSNames = "both"
-	p := mustGen(t, in)
+func TestWithoutShortNamesThereIsNoDNSSearch(t *testing.T) {
+	p := mustGen(t, newInput(&fake{}, svc("db"), svc("web")))
+	if len(p.Compose.DNSSearch) != 0 {
+		t.Errorf("DNSSearch = %v", p.Compose.DNSSearch)
+	}
 	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
-	if p.Compose.DNSNames != "both" || !strings.Contains(msg, "or as <pkg>.service (dns_names: both") {
-		t.Errorf("both: %q %q", p.Compose.DNSNames, msg)
-	}
-	q := mustGen(t, newInput(&fake{}, svc("db"), svc("web")))
-	if q.Compose.DNSNames != "" {
-		t.Errorf("default DNSNames = %q", q.Compose.DNSNames)
-	}
-}
-
-func TestDNSNamesUnknownIsAnError(t *testing.T) {
-	in := newInput(&fake{}, svc("web"))
-	in.DNSNames = "short"
-	if _, err := Generate(in); err == nil || !strings.Contains(err.Error(), "short") {
-		t.Errorf("err = %v", err)
+	if !strings.Contains(msg, "as <pkg>.service, not by its compose name") {
+		t.Errorf("note = %q", msg)
 	}
 }
