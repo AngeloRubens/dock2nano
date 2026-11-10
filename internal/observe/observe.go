@@ -1591,6 +1591,9 @@ func exerciseURL(raw, host string, port int) (string, error) {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("%q is neither a path nor an address", raw)
 	}
+	if u.Scheme != "http" {
+		return "", fmt.Errorf("%q is not http: only http is asked", raw)
+	}
 	if u.Hostname() != "container" {
 		return "", fmt.Errorf("%q does not name the container: use the host \"container\" or a path", raw)
 	}
