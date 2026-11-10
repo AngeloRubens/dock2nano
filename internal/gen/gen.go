@@ -82,7 +82,8 @@ type Input struct {
 	// default is os.LookupEnv.
 	HostEnv func(string) (string, bool)
 
-	// ReadFile reads a file, for env_file. The default is os.ReadFile.
+	// ReadFile reads a file, for env_file and for the configuration files of the sysroots. The
+	// default is os.ReadFile.
 	ReadFile func(string) ([]byte, error)
 
 	// Stat tells whether a host path exists, for bind mounts. The default is
@@ -787,46 +788,85 @@ func (g *generator) startOrderNote() {
 	}
 }
 
-// nameAtStartNote says, for a service whose configuration files name another converted service,
-// that the program may look the name up when it starts, before the network of the guest has an
-// address, and exit with "host not found". nginx does this for the host of an upstream or of
-// proxy_pass: with the plain compose file it ends with "host not found in upstream". Starting the
-// other service first does not help, since the lookup fails on the network of this guest. The
-// files of the user are not changed: the report says what to do. Only the names of the files are
-// given, never their content.
+// nameAtStartNote says, for a service whose configuration files contain the name of another
+// converted service, that the name may not resolve or may not be resolved at start. What was
+// seen: with the plain compose file nginx exited with "host not found in upstream" for the host of
+// an upstream, even when the other service was started first, so the order of compose.yaml does
+// not help for names looked up at start. In ops compose only <pkg>.service is in the dns (and the
+// bare package name with --short-names), so a bare compose name does not resolve in the other
+// mode. A resolver of the program needs the address of the dns and the .service form: nginx does
+// not read the search line of resolv.conf for its resolver directive. Only the files in
+// ConfigurationFiles are read (not haproxy.cfg or a file without those extensions, not names on
+// the command line); lines that start with # are skipped, files over 1 MiB or with a NUL byte in
+// the first 4 KB are skipped. Only file names and the matched word are given.
 func (g *generator) nameAtStartNote(pkgOf map[string]string) {
+	type cand struct {
+		service string
+		ok      bool // resolves under ops compose in the mode of this run
+	}
 	for _, svc := range g.plan.Services {
 		si := g.in.Services[svc.Name]
-		if si.Observed == nil || si.Observed.Sysroot == "" {
+		if si.Observed == nil || si.Observed.Sysroot == "" || len(si.Observed.ConfigurationFiles) == 0 {
 			continue
 		}
-		var files []string
+		cands := map[string]cand{}
+		add := func(word, service string, ok bool) {
+			word = strings.ToLower(word)
+			if word == "" || word == ".service" {
+				return
+			}
+			if old, dup := cands[word]; dup && (old.ok || !ok) {
+				return
+			}
+			cands[word] = cand{service, ok}
+		}
+		for _, other := range g.plan.Services {
+			if other.Name == svc.Name {
+				continue
+			}
+			pkg := pkgOf[other.Name]
+			add(other.Name, other.Name, false)
+			add(other.Name+".service", other.Name, false)
+			if pkg != "" {
+				add(pkg, other.Name, g.in.ShortNames)
+				add(pkg+".service", other.Name, true)
+			}
+		}
+		var parts []string
 		for _, f := range si.Observed.ConfigurationFiles {
 			switch f {
 			case "/etc/hosts", "/etc/resolv.conf", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf":
-				continue
+				continue // defensive: these name hosts or users, not services
 			}
 			data, err := g.in.ReadFile(filepath.Join(si.Observed.Sysroot, f))
-			if err != nil {
+			if err != nil || len(data) > 1<<20 || slices.Contains(data[:min(len(data), 4096)], 0) {
 				continue
 			}
-			named := false
-			for _, t := range nameTokens(string(data)) {
-				for _, other := range g.plan.Services {
-					if other.Name == svc.Name {
-						continue
-					}
-					if t == other.Name || t == other.Name+".service" || t == pkgOf[other.Name] || t == pkgOf[other.Name]+".service" {
-						named = true
+			var hit string
+			var c cand
+		lines:
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "#") {
+					continue
+				}
+				for _, t := range nameTokens(line) {
+					if x, ok := cands[strings.ToLower(t)]; ok {
+						hit, c = t, x
+						break lines
 					}
 				}
 			}
-			if named {
-				files = append(files, f)
+			if hit == "" {
+				continue
+			}
+			if c.ok {
+				parts = append(parts, fmt.Sprintf("%s contains the word %s, which is the name of service %s (names %s as %s): a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", f, hit, c.service, c.service, hit, c.service, pkgOf[c.service]))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s contains the word %s, which is the name of service %s (names %s as %s): that name does not resolve under ops compose, where the dns answers %s.service%s; write it in that form", f, hit, c.service, c.service, hit, pkgOf[c.service], map[bool]string{true: " and the bare package name", false: ""}[g.in.ShortNames]))
 			}
 		}
-		if len(files) > 0 {
-			g.add(svc.Name, plan.Note, "name at start", "the configuration "+listed(files)+" names another service; a program that looks the name up when it starts (nginx, for the host of an upstream or proxy_pass) can exit with \"host not found\" because the network of the guest has no address yet, even when the other service is started first; if it does, use a form that looks the name up when a request comes (in nginx a resolver directive and a variable in proxy_pass) or start the service again once it is up")
+		if len(parts) > 0 {
+			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, "; "))
 		}
 	}
 }

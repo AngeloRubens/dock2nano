@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1673,27 +1674,72 @@ func TestStartOrderNoteIsNotMadeWhenTheOrderIsRight(t *testing.T) {
 	wantNone(t, mustGen(t, newInput(&fake{}, web, db)), "web", plan.Note, "start order")
 }
 
-func TestNameAtStartNoteForConfigurationNamingAnotherService(t *testing.T) {
-	proxy, backend := svc("proxy"), svc("backend")
-	proxy.DependsOn = []compose.Dependency{{Service: "backend"}}
+// nameInput builds proxy (observed, with the given configuration files) and a second service.
+func nameInput(files map[string]string, short bool, proxyName, otherName string) Input {
 	f := &fake{files: map[string]string{}}
-	f.files["/tmp/sys-proxy/etc/nginx/conf.d/default.conf"] = "upstream x { server backend.service:80; }"
-	f.files["/tmp/sys-proxy/etc/nginx/other.conf"] = "server_name backends;"
-	in := newInput(f, backend, proxy)
-	in.Services["proxy"].Observed.ConfigurationFiles = []string{"/etc/nginx/conf.d/default.conf", "/etc/nginx/other.conf"}
-	p := mustGen(t, in)
-	want1(t, p, "proxy", plan.Note, "name at start", "/etc/nginx/conf.d/default.conf")
-	got := itemsOf(p, "proxy", plan.Note, "name at start")
-	if strings.Contains(got[0].Message, "other.conf") {
-		t.Errorf("a file that does not name a service is listed: %q", got[0].Message)
+	var names []string
+	for n, c := range files {
+		f.files["/tmp/sys-"+proxyName+n] = c
+		names = append(names, n)
 	}
-	wantNone(t, p, "backend", plan.Note, "name at start")
+	sort.Strings(names)
+	in := newInput(f, svc(otherName), svc(proxyName))
+	in.ShortNames = short
+	in.Services[proxyName].Observed.ConfigurationFiles = names
+	return in
 }
 
-func TestNameAtStartNoteIsNotMadeWithoutAName(t *testing.T) {
-	proxy, backend := svc("proxy"), svc("backend")
-	f := &fake{files: map[string]string{"/tmp/sys-proxy/etc/app.conf": "listen 80;"}}
-	in := newInput(f, backend, proxy)
-	in.Services["proxy"].Observed.ConfigurationFiles = []string{"/etc/app.conf"}
+func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "server backend.service:80;"}, false, "proxy", "backend")
+	p := mustGen(t, in)
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which is the name of service backend")
+	wantNone(t, p, "backend", plan.Note, "name at start")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "order of compose.yaml does not help") {
+		t.Errorf("no timing text: %q", m)
+	}
+}
+
+func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "backend.service") || strings.Contains(m, "order of compose.yaml") {
+		t.Errorf("message: %q", m)
+	}
+}
+
+func TestNameAtStartBareNameWithShortNames(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "order of compose.yaml does not help")
+}
+
+func TestNameAtStartPackageNameDiffersFromServiceName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my-app.service:80;"}, false, "proxy", "My_App"))
+	want1(t, p, "proxy", plan.Note, "name at start", "name of service My_App")
+}
+
+func TestNameAtStartOwnNameIsNotReported(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server_name proxy proxy.service;"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartExcludedFileIsNotRead(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/nsswitch.conf": "backend.service"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartCommentIsSkipped(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "  # server backend.service:80;\nlisten 80;"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartBinaryFileIsSkipped(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "\x00 backend.service"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartNoSysrootIsNotRead(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "backend.service"}, false, "proxy", "backend")
+	in.Services["proxy"].Observed.Sysroot = ""
+	in.ReadFile = func(p string) ([]byte, error) { return []byte("backend.service"), nil }
 	wantNone(t, mustGen(t, in), "proxy", plan.Note, "name at start")
 }
