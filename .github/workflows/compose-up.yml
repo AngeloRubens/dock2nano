@@ -59,8 +59,8 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
           git -C /tmp/ac log --oneline | head -1
-          ls -la /tmp/ac/${{ matrix.name }}
-          cat /tmp/ac/${{ matrix.name }}/compose.y*ml /tmp/ac/${{ matrix.name }}/docker-compose.y*ml 2>/dev/null || true
+          ls -la /tmp/ac/${{ matrix.dir }}
+          cat /tmp/ac/${{ matrix.dir }}/compose.y*ml /tmp/ac/${{ matrix.dir }}/docker-compose.y*ml 2>/dev/null || true
       - name: convert
         run: |
           set -o pipefail
