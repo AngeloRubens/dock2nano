@@ -64,6 +64,9 @@ jobs:
           git -C /tmp/ac log --oneline | head -1
           ls -la /tmp/ac/${{ matrix.dir }}
           cat /tmp/ac/${{ matrix.dir }}/compose.y*ml /tmp/ac/${{ matrix.dir }}/docker-compose.y*ml 2>/dev/null || true
+      - name: changes to the source before the conversion
+        run: |
+          if [ -f ci/patches/${{ matrix.name }}.pre.sh ]; then bash ci/patches/${{ matrix.name }}.pre.sh; else echo "none"; fi
       - name: convert
         run: |
           set -o pipefail
