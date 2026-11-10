@@ -791,7 +791,8 @@ func parseArgv(after string) []string {
 // starts helpers that outlive the line that started them (the controller of Elasticsearch, a sleep
 // loop), and the most recent one is not the program. So the process that no other running traced
 // program started wins: the parentage comes from the clone, clone3, fork and vfork lines. Of
-// several such processes the one started last wins. If every running process is a child of another
+// several such processes the one started last wins. A shell that has one running child that
+// started a program is passed over for that child (the shell form of CMD). If every running process is a child of another
 // running one (pid reuse can make that circular), the oldest is taken. When none is running, the
 // one started last is taken. When nothing was started, found is false.
 //
@@ -901,6 +902,24 @@ func FinalExec(trace []byte) (Exec, bool) {
 			roots = append(roots, process)
 		}
 	}
+	// A shell that runs the program as a child (the shell form of CMD, "sh -c java -jar x") is not
+	// the program: when it has exactly one running child that started a program, that child is.
+	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
+	descend := func(process string) string {
+		for step := 0; step < 8 && shells[path.Base(last[process].Path)]; step++ {
+			var children []string
+			for _, other := range running {
+				if other != process && parent[other] == process {
+					children = append(children, other)
+				}
+			}
+			if len(children) != 1 {
+				break
+			}
+			process = children[0]
+		}
+		return process
+	}
 	if len(roots) == 0 {
 		oldest := running[0]
 		for _, process := range running[1:] {
@@ -910,7 +929,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 		}
 		return last[oldest], true
 	}
-	return last[newest(roots)], true
+	return last[descend(newest(roots))], true
 }
 
 // SplitNul reads what /proc keeps as strings ended by a zero byte. Only the last zero byte is a

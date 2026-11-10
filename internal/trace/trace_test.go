@@ -962,6 +962,21 @@ func TestFinalExec(t *testing.T) {
 		{"no array printed", `5     execve("/x", 0x7ffd1, 0x7ffd2 /* 2 vars */) = 0
 `, Exec{Pid: "5", Path: "/x", Line: 0}, true},
 		{"nothing", ``, Exec{Line: -1}, false},
+		{"a shell that runs the program as its child", `1     execve("/bin/sh", ["/bin/sh", "-c", "java -jar /app.jar"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/opt/java/bin/java", ["java", "-jar", "/app.jar"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "7", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "/app.jar"}, Line: 2}, true},
+		{"a shell with two running children stays", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "a & b"}, Line: 0}, true},
+		{"a shell whose child ended stays", `1     execve("/bin/sh", ["sh", "-c", "date; sleep 1000"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/date", ["date"], 0x7ffd1 /* 1 vars */) = 0
+7     +++ exited with 0 +++
+`, Exec{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "date; sleep 1000"}, Line: 0}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
