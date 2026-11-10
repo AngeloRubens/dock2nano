@@ -1692,7 +1692,7 @@ func nameInput(files map[string]string, short bool, proxyName, otherName string)
 func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	in := nameInput(map[string]string{"/etc/n.conf": "server backend.service:80;"}, false, "proxy", "backend")
 	p := mustGen(t, in)
-	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which is the name of service backend")
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
 	wantNone(t, p, "backend", plan.Note, "name at start")
 	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "order of compose.yaml does not help") {
 		t.Errorf("no timing text: %q", m)
@@ -1714,7 +1714,7 @@ func TestNameAtStartBareNameWithShortNames(t *testing.T) {
 
 func TestNameAtStartPackageNameDiffersFromServiceName(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my-app.service:80;"}, false, "proxy", "My_App"))
-	want1(t, p, "proxy", plan.Note, "name at start", "name of service My_App")
+	want1(t, p, "proxy", plan.Note, "name at start", "may name service My_App")
 }
 
 func TestNameAtStartOwnNameIsNotReported(t *testing.T) {
