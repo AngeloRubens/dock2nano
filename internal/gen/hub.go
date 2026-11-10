@@ -58,7 +58,11 @@ func (u HubUse) versions() string {
 	case u.Level == hub.Exact:
 		return "the hub package has the same version as your image (" + u.Wanted + ")"
 	case u.Level == hub.Near:
-		return "your image has " + u.Wanted + " and the hub package " + v + ": the same major series, not the same version"
+		apart := hub.Apart(u.Wanted, v)
+		if apart != "" {
+			apart = " (" + apart + ")"
+		}
+		return "your image has " + u.Wanted + " and the hub package " + v + ": the same major series, not the same version" + apart + "; the same series is not the same behaviour"
 	case u.Wanted == "":
 		return "the version of your image is not known; the hub package, " + v + ", is the newest of that name"
 	}
@@ -155,8 +159,11 @@ func sortedKeys(m map[string]any) []string {
 
 // hubVerdict says what the result is, without more certainty than there is:
 // nothing here is run on nanos.
-func hubVerdict(u HubUse, changed bool) plan.Item {
-	if changed {
+func hubVerdict(u HubUse, state cfgState) plan.Item {
+	if state == cfgSatisfied {
+		return u.item(plan.Note, "hub result", "the configuration is already single-process (every directive for one process is set in the file, on the command line or in an included file), so nothing was changed, and the child processes seen when the program was observed come from something else: "+u.Why)
+	}
+	if state == cfgChanged {
 		return u.item(plan.Approximated, "hub result", "the directives for one process were set in the copy of your configuration in the package, and the environment variables of the hub recipe were added. It was not run on nanos here: it is not known whether the program now starts and keeps running. What was seen when it was observed: "+u.Why)
 	}
 	return u.item(plan.Unsupported, "hub result", "no directive for one process could be set in the configuration file (and the arguments of the recipe are never applied), so what was seen when the program was observed is not addressed: "+u.Why+". The package is as it was observed")
@@ -186,7 +193,7 @@ func changesText(changes []hub.Change) string {
 // configuration of the hub package and the one of the user, as it is now. The
 // directives that are set for one process are compared too: that is where the
 // values of the hub package, which are not used, show.
-func hubDivergence(u HubUse, sp hub.SingleProcess, hubText, userText string) []plan.Item {
+func hubDivergence(u HubUse, sp hub.SingleProcess, hubText, userText string, elsewhere map[string]bool) []plan.Item {
 	if hubText == "" {
 		why := "the hub package has no configuration file at the usual places, so the two configurations were not compared"
 		if len(u.Recipe.NotRead) > 0 {
@@ -195,8 +202,12 @@ func hubDivergence(u HubUse, sp hub.SingleProcess, hubText, userText string) []p
 		return []plan.Item{u.item(plan.Note, "hub config", why)}
 	}
 	names := slices.Clone(sp.Compare)
+	// a setting that is set outside the file (on the command line, in an
+	// included file) cannot be compared with the text of the file alone
 	for _, s := range sp.Settings {
-		names = append(names, s.Name)
+		if !elsewhere[s.Name] {
+			names = append(names, s.Name)
+		}
 	}
 	var parts []string
 	for _, name := range names {
@@ -241,8 +252,8 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Approximated, "hub package", fmt.Sprintf("this program must use the build of the hub whole (%s). The package is %s, with its own files, program and arguments; the files observed from your image are not in it.%s Versions: %s", u.Why, u.source(), dropped, u.versions())),
 		u.item(plan.Unsupported, "hub files", "the configuration, extensions and data of your image are not carried: the package holds the files of the hub build, so your configuration files do not apply to it"),
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
-		u.item(plan.Unsupported, "hub credentials", "the hub builds of postgres and mysql do not apply the password variables of the environment (POSTGRES_PASSWORD, MYSQL_ROOT_PASSWORD): they accept connections with trust authentication, or have root/root baked in, so the passwords of your image are not in effect; check how the package authenticates before it is reachable by anything else"),
 	}
+	items = append(items, hubCredentials(u)...)
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
 	}
@@ -263,4 +274,17 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// hubCredentials says what was seen about the passwords of the packages of the
+// hub that were tried in a CI run, and of no other.
+func hubCredentials(u HubUse) []plan.Item {
+	p := u.Package
+	switch {
+	case p.Ref() == "francescolavra/postgres" && (p.Version == "16.0" || p.Version == "16.2"):
+		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package francescolavra/postgres "+p.Version+" accepted the user postgres with an empty password, whether or not POSTGRES_PASSWORD was set; the password of your image should not be taken to be in effect")}
+	case p.Ref() == "eyberg/mysql" && p.Version == "5.7.29":
+		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package eyberg/mysql 5.7.29 accepted root/root, which its notes give as the default login; whether MYSQL_ROOT_PASSWORD is applied was not told apart from that")}
+	}
+	return nil
 }

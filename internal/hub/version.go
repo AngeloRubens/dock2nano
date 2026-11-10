@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -193,10 +194,11 @@ func Select(pkgs []Package, name, want, arch string) (Package, Level) {
 
 // SelectFrom picks among packages that are already filtered (usable, of the
 // right architecture). With a version asked for: the nearest major series
-// (the same one, else the one whose number is nearest, the older on a tie),
-// and in it the newest release that is not newer than the version asked for,
-// else the oldest release. When want is not known: the newest package. Of
-// equal versions the one spelled with as many numbers as want comes first,
+// (the same one, else the one whose number is nearest, the older on a tie).
+// In the series of the user, the release nearest to the version asked for
+// (the differences of the numbers compared from the first, the one that is not
+// newer when two are as near); in another series, its newest release. When
+// want is not known: the newest package. Of equal versions the one spelled with as many numbers as want comes first,
 // then the namespace preference, then the name.
 func SelectFrom(cands []Package, want string) (Package, Level) {
 	if len(cands) == 0 {
@@ -247,21 +249,31 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 			series = c.v.series()
 		}
 	}
-	var group, below []cand
+	var group []cand
 	for _, c := range all {
-		if cmpNums(c.v.series(), series) != 0 {
-			continue
-		}
-		group = append(group, c)
-		if c.v.Compare(w) <= 0 {
-			below = append(below, c)
+		if cmpNums(c.v.series(), series) == 0 {
+			group = append(group, c)
 		}
 	}
 	var best cand
-	if len(below) > 0 {
-		best = pick(below, true)
+	if cmpNums(series, w.series()) != 0 {
+		// another series: its newest release, above or below the version asked
+		best = pick(group, true)
 	} else {
-		best = pick(group, false)
+		// the series of the user: the nearest release, the one that is not
+		// newer when two are as near
+		best = group[0]
+		for _, c := range group[1:] {
+			d := cmpNums(w.distance(c.v), w.distance(best.v))
+			switch {
+			case d < 0:
+				best = c
+			case d == 0 && c.v.Compare(best.v) == 0 && tie(c, best):
+				best = c
+			case d == 0 && c.v.Compare(best.v) != 0 && c.v.Compare(w) <= 0 && best.v.Compare(w) > 0:
+				best = c
+			}
+		}
 	}
 	switch {
 	case best.v.Compare(w) == 0 && len(w.Nums) == len(best.v.Nums):
@@ -372,4 +384,27 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// Apart says how far two versions of the same series are, in words: "the same
+// release", "N patch releases apart" or "N minor releases apart". It is empty
+// when the versions are in different series.
+func Apart(a, b string) string {
+	x, ok1 := ParseVersion(a)
+	y, ok2 := ParseVersion(b)
+	if !ok1 || !ok2 || !x.SameSeries(y) {
+		return ""
+	}
+	d := x.distance(y)
+	// the first number is the series; the next ones say how far
+	for i := 1; i < len(d); i++ {
+		if d[i] != 0 {
+			kind := "patch"
+			if i == 1 {
+				kind = "minor"
+			}
+			return fmt.Sprintf("%d %s releases apart", d[i], kind)
+		}
+	}
+	return "the same release"
 }

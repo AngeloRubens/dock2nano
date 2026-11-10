@@ -21,6 +21,7 @@ single_process:
     config_flag: -c
     params_flag: -g
     base_volume_size: 200m
+    base_volume_evidence: the hub package eyberg/nginx 1.28.3 ran out of space (No space left on device) when its pid file was written on the default disk in a CI run, and ran with 200m
     settings:
       - {name: master_process, value: "off"}
       - {name: daemon, value: "off"}

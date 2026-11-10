@@ -32,6 +32,9 @@ type SingleProcess struct {
 	// needs ("200m"); empty when there is none.
 	BaseVolumeSize string `yaml:"base_volume_size"`
 
+	// BaseVolumeEvidence says what was seen that the size is for.
+	BaseVolumeEvidence string `yaml:"base_volume_evidence"`
+
 	// Settings are the top-level directives that make it run in one process,
 	// with the values that are always used.
 	Settings []Setting `yaml:"settings"`
@@ -123,6 +126,24 @@ func checkSingleProcess(name string, sp SingleProcess) error {
 		if !plainWord(s.Name) || !plainWord(s.Value) {
 			return fmt.Errorf("%s: the setting %q %q must be plain words", name, s.Name, s.Value)
 		}
+	}
+	if !strings.HasPrefix(sp.ConfigFlag, "-") || !plainWord(sp.ConfigFlag) {
+		return fmt.Errorf("%s: config_flag %q must be a plain word that starts with -", name, sp.ConfigFlag)
+	}
+	if sp.ParamsFlag != "" && (!strings.HasPrefix(sp.ParamsFlag, "-") || !plainWord(sp.ParamsFlag)) {
+		return fmt.Errorf("%s: params_flag %q must be a plain word that starts with -", name, sp.ParamsFlag)
+	}
+	for _, c := range sp.Compare {
+		if !plainWord(c) {
+			return fmt.Errorf("%s: the name %q to compare must be a plain word", name, c)
+		}
+	}
+	seen := map[string]bool{}
+	for _, s := range sp.Settings {
+		if seen[s.Name] {
+			return fmt.Errorf("%s: the setting %q is given twice", name, s.Name)
+		}
+		seen[s.Name] = true
 	}
 	if sp.BaseVolumeSize != "" && !volumeSizeText.MatchString(sp.BaseVolumeSize) {
 		return fmt.Errorf("%s: base_volume_size %q must be a number and m or g", name, sp.BaseVolumeSize)

@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +25,8 @@ const maxIncludedFiles = 200
 const maxConfigFile = 4 << 20
 
 // writeTemp writes the new content of a configuration file into its
-// temporary file; tests replace it.
+// temporary file; tests replace it. It is a variable of the package, so tests
+// that replace it must not run in parallel.
 var writeTemp = func(f *os.File, data []byte) error {
 	_, err := f.Write(data)
 	return err
@@ -36,6 +39,18 @@ type sourced struct {
 	where string
 }
 
+// cfgState says what became of the configuration of the program.
+type cfgState int
+
+const (
+	// cfgNone: nothing could be done.
+	cfgNone cfgState = iota
+	// cfgChanged: the file was changed.
+	cfgChanged
+	// cfgSatisfied: every directive for one process is already set.
+	cfgSatisfied
+)
+
 // hubConfig sets, in the configuration file of the user, the directives that
 // make the program run as one process, with the values of hints/hub-tables.yaml
 // (never the values of the hub package). A directive that the command line
@@ -44,11 +59,11 @@ type sourced struct {
 // the configuration of the hub package and the one of the user differ. The
 // file is reached only through the sysroot, so a link cannot lead out of it.
 // The second result tells whether the file was changed.
-func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, bool) {
+func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, cfgState) {
 	program := path.Base(obs.Program)
 	sp, ok := hub.SingleProcessFor(program)
 	if !ok {
-		return []plan.Item{u.item(plan.Note, "hub config", "no directives that make "+program+" run as one process are known; its configuration was not changed")}, false
+		return []plan.Item{u.item(plan.Note, "hub config", "no directives that make "+program+" run as one process are known; its configuration was not changed")}, cfgNone
 	}
 	hubText := ""
 	for _, p := range sp.ConfigPaths {
@@ -57,8 +72,8 @@ func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, bool) {
 			break
 		}
 	}
-	fail := func(why string) ([]plan.Item, bool) {
-		return []plan.Item{u.item(plan.Unsupported, "hub config", why+"; the directives "+settingsText(sp.Settings)+" were not applied")}, false
+	fail := func(why string) ([]plan.Item, cfgState) {
+		return []plan.Item{u.item(plan.Unsupported, "hub config", why+"; the directives "+settingsText(sp.Settings)+" were not applied")}, cfgNone
 	}
 	root, err := os.OpenRoot(obs.Sysroot)
 	if err != nil {
@@ -82,30 +97,41 @@ func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, bool) {
 	external, noAdd := externalDirectives(root, obs, sp, logical, text)
 	var items []plan.Item
 	var apply []hub.Setting
+	setElsewhere := map[string]bool{}
 	for _, st := range sp.Settings {
 		ext := findSourced(external, st.Name)
 		switch {
 		case ext == nil:
 			apply = append(apply, st)
-		case ext.Args == st.Value:
+		case sameValue(ext.Args, st.Value):
+			setElsewhere[st.Name] = true
 			items = append(items, u.item(plan.Note, "hub config", st.Name+" "+st.Value+" is already set by "+ext.where+"; it is not written again, because the program refuses a directive given twice"))
 		default:
-			return append(items, u.item(plan.Unsupported, "hub config", st.Name+" is set to "+ext.Args+" by "+ext.where+", and the program needs "+st.Value+" to run as one process; it cannot be set again in the file, so nothing was changed in the configuration")), false
+			return append(items, u.item(plan.Unsupported, "hub config", st.Name+" is set to "+ext.Args+" by "+ext.where+", and the program needs "+st.Value+" to run as one process; it cannot be set again in the file, so nothing was changed in the configuration")), cfgNone
 		}
 	}
 	out, changes, skipped := hub.SetTopLevel(text, apply, noAdd == "")
 	if len(changes) > 0 {
 		if err := replaceInRoot(root, strings.TrimPrefix(inImage, "/"), []byte(out), mode); err != nil {
-			return append(items, u.item(plan.Unsupported, "hub config", "the configuration file "+inImage+" cannot be replaced ("+err.Error()+"); the directives "+settingsText(apply)+" were not applied")), false
+			return append(items, u.item(plan.Unsupported, "hub config", "the configuration file "+inImage+" cannot be replaced ("+err.Error()+"); the directives "+settingsText(apply)+" were not applied")), cfgNone
 		}
 		items = append(items, u.item(plan.Approximated, "hub config", "in the copy in the package of "+where+", at the top level: "+changesText(changes)+" (the values for one process from the table of this tool, not from the hub package; if the file is a bind mount, the file on your machine was not changed). Everything else in the file, the ports, servers and paths included, is as it was"))
-	} else if len(skipped) == 0 && len(items) == 0 {
-		items = append(items, u.item(plan.Note, "hub config", "the copy in the package of "+where+" already has "+settingsText(apply)+" at the top level; nothing was changed"))
+	} else if len(skipped) == 0 {
+		for _, st := range apply {
+			items = append(items, u.item(plan.Note, "hub config", "the copy in the package of "+where+" already has "+st.Name+" "+st.Value+" at the top level; nothing was changed"))
+		}
 	}
 	if len(skipped) > 0 {
 		items = append(items, u.item(plan.Unsupported, "hub config", "the file "+where+" "+noAdd+", which may hold the directives; "+settingsText(skipped)+" were not added, because a second copy would stop the program; if it still starts several processes, set them there"))
 	}
-	return append(items, hubDivergence(u, sp, hubText, out)...), len(changes) > 0
+	state := cfgNone
+	switch {
+	case len(changes) > 0:
+		state = cfgChanged
+	case len(skipped) == 0:
+		state = cfgSatisfied
+	}
+	return append(items, hubDivergence(u, sp, hubText, out, setElsewhere)...), state
 }
 
 // flagValues are the values given to an option of the command line, in both
@@ -126,6 +152,21 @@ func flagValues(argv []string, flag string) []string {
 	return out
 }
 
+// sameValue compares two values of a directive: quotes around them do not
+// count, and neither does the case (on and ON are the same to nginx).
+func sameValue(a, b string) bool {
+	return strings.EqualFold(unquote(a), unquote(b))
+}
+
+// unquote takes off one pair of matching quotes.
+func unquote(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
 func findSourced(list []sourced, name string) *sourced {
 	for i := range list {
 		if list[i].Name == name {
@@ -141,9 +182,14 @@ func findSourced(list []sourced, name string) *sourced {
 // added to the file.
 func externalDirectives(root *os.Root, obs *observe.Result, sp hub.SingleProcess, conf, text string) ([]sourced, string) {
 	var out []sourced
-	for _, v := range flagValues(obs.Argv, sp.ParamsFlag) {
-		for _, d := range hub.ParseDirectives(v) {
-			if d.Block == "" && !d.IsBlock {
+	// the program keeps only the last value of the option
+	if given := flagValues(obs.Argv, sp.ParamsFlag); len(given) > 0 {
+		for _, d := range hub.ParseDirectives(given[len(given)-1]) {
+			switch {
+			case d.Block != "" || d.IsBlock:
+			case d.Name == "include":
+				return out, "has an include on the command line (" + sp.ParamsFlag + "), which this tool does not expand"
+			default:
 				out = append(out, sourced{d, "the command line (" + sp.ParamsFlag + ")"})
 			}
 		}
@@ -184,6 +230,10 @@ func includedDirectives(root *os.Root, sysroot, conf, text string) ([]sourced, s
 				return nil, "includes " + pattern + ", whose directory cannot be read"
 			}
 			for _, e := range entries {
+				// a wildcard does not match a name that starts with a dot
+				if strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(base, ".") {
+					continue
+				}
 				if ok, _ := path.Match(base, e.Name()); ok {
 					names = append(names, e.Name())
 				}
@@ -306,9 +356,19 @@ func readInRoot(root *os.Root, p string) ([]byte, fs.FileMode, error) {
 // is as it was and no temporary file is left.
 func replaceInRoot(root *os.Root, name string, data []byte, mode fs.FileMode) error {
 	dir, base := path.Split(name)
-	tmp := dir + "." + base + ".dock2nano-tmp"
-	root.Remove(tmp)
-	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	var f *os.File
+	var tmp string
+	var err error
+	for i := 0; i < 10; i++ {
+		var salt [6]byte
+		if _, err = rand.Read(salt[:]); err != nil {
+			return err
+		}
+		tmp = dir + "." + base + ".dock2nano-" + hex.EncodeToString(salt[:])
+		if f, err = root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode); !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}

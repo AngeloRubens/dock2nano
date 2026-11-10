@@ -190,7 +190,7 @@ func SetTopLevel(text string, settings []Setting, addMissing bool) (string, []Ch
 			}
 			found = true
 			old = d.Args
-			if d.Args != st.Value {
+			if !strings.EqualFold(strings.Trim(d.Args, `"'`), st.Value) {
 				differs = true
 				edits = append(edits, edit{d.Start, d.End, st.Name + " " + st.Value + ";"})
 			}

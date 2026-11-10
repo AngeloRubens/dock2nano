@@ -151,7 +151,7 @@ func TestHubIsReadWhenTheProgramStartsChildren(t *testing.T) {
 	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.15.6"), hubPkg("eyberg", "nginx", "1.28.3")}
 	h.stub.conf = hubTestHubConf
 	h.mustRun(0, "convert")
-	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "recipe eyberg/nginx 1.15.6"}) {
+	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "recipe eyberg/nginx 1.28.3"}) {
 		t.Errorf("calls: %v", h.stub.calls)
 	}
 	for _, want := range []string{"master_process off;", "worker_processes 1;", "listen 80;"} {
@@ -166,7 +166,7 @@ func TestHubIsReadWhenTheProgramStartsChildren(t *testing.T) {
 		t.Errorf("the configuration of the hub leaked in:\n%s", h.conf)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"eyberg/nginx 1.15.6", hubTestSum, "published by eyberg", "the same major series", "files of the image are the ones observed from your image", "not run on nanos"} {
+	for _, want := range []string{"eyberg/nginx 1.28.3", hubTestSum, "published by eyberg", "the same major series", "files of the image are the ones observed from your image", "not run on nanos"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
@@ -435,11 +435,26 @@ func TestAnOldCopyOfTheListIsSaid(t *testing.T) {
 	}
 }
 
+func TestAnOldCopyOfTheListIsSaidOnceNotForEveryService(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.25.3", nginxObserved(2))
+	h.write("compose.yaml", "services:\n  web:\n    image: nginx:1.25.3\n  db:\n    image: nginx:1.25.3\n")
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.stub.staleFrom = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	h.stub.staleErr = errors.New("connection refused")
+	h.mustRun(0, "convert")
+	if n := strings.Count(h.stdout.String(), "the list of the hub is a copy of"); n != 1 {
+		t.Errorf("said %d times:\n%s", n, h.stdout)
+	}
+	if n := strings.Count(strings.Join(h.stub.calls, ","), "recipe"); n != 2 {
+		t.Errorf("calls: %v", h.stub.calls)
+	}
+}
+
 func TestTheRecipeVolumeIsAskedFor(t *testing.T) {
 	h := newHubHarness(t, "nginx:1.25.3", nginxObserved(2))
 	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
 	h.mustRun(0, "convert")
-	if !strings.Contains(h.stdout.String(), "hub volume") || !strings.Contains(h.stdout.String(), "at least 200m") {
+	if !strings.Contains(h.stdout.String(), "hub volume") || !strings.Contains(h.stdout.String(), "at least 200m") || !strings.Contains(h.stdout.String(), "eyberg/nginx 1.28.3 ran out of space") {
 		t.Errorf("the report:\n%s", h.stdout)
 	}
 }

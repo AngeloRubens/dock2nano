@@ -143,7 +143,7 @@ func TestRequiredCandidates(t *testing.T) {
 		t.Errorf("11.3: %v %v", p.Ref(), lvl)
 	}
 	p, lvl = SelectFrom(got, "14.5")
-	if lvl != Far || p.Version != "16.0" {
+	if lvl != Far || p.Version != "16.2" {
 		t.Errorf("14.5: %v %v", p.Ref(), lvl)
 	}
 	p, lvl = SelectFrom(got, "17.1")

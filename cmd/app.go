@@ -76,7 +76,7 @@ Flags of convert:
   --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this flag
                      the hub is read only for a program that did not start as one process (the
                      container stopped, or the program started child processes), to take from the
-                     nearest package only its environment variables; the directives that make
+                     package of the same program, the closest in version, only its environment variables; the directives that make
                      the program run as one process come from a table of this tool and are set
                      in the copy of your configuration in the package. The files stay the ones
                      of your image, and the report names the package, its digest and how its

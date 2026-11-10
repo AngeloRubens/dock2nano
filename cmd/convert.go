@@ -530,7 +530,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
-	if err := a.hubStep(ctx, o, rs.late, s, image, s.Build != nil, &si); err != nil {
+	if err := a.hubStep(ctx, o, rs, s, image, s.Build != nil, &si); err != nil {
 		return si, err
 	}
 	return si, nil
@@ -575,6 +575,9 @@ type runState struct {
 	// (the hub). It is kept apart from skipped, which refuses to start a service
 	// for the observation of the ones that need it.
 	late map[string]string
+	// staleSaid is set once the report has said that the list of the hub is an
+	// old copy, which is said for one service only.
+	staleSaid bool
 	// binds holds, by host path, the mount of each read-write bind: the copy
 	// that the observation and the started services share. tmpRoot is the
 	// private directory with the copies; copies counts them.

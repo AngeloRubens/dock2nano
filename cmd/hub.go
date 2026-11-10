@@ -45,7 +45,7 @@ type hubCase struct {
 // program is in the table of builds that the hub holds and must be used whole.
 // It never fails the conversion, except that the context ended: what the hub
 // did or could not do is in si.HubItems, or in the skip reason of the service.
-func (a *App) hubStep(ctx context.Context, o *options, late map[string]string, s *compose.Service, image string, built bool, si *gen.ServiceInput) error {
+func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.Service, image string, built bool, si *gen.ServiceInput) error {
 	obs := si.Observed
 	if obs == nil {
 		return nil
@@ -67,13 +67,13 @@ func (a *App) hubStep(ctx context.Context, o *options, late map[string]string, s
 	}
 	hc.wanted = hc.wantedFor(stand)
 	if row := hub.MatchRequired(a.HubRequired, stand, obs.Program); row != nil {
-		return a.hubWhole(ctx, o, late, hc, row, si)
+		return a.hubWhole(ctx, o, rs, hc, row, si)
 	}
 	why := hubTrigger(obs)
 	if why == "" {
 		return nil
 	}
-	return a.hubRecipe(ctx, o, hc, why, si)
+	return a.hubRecipe(ctx, o, rs, hc, why, si)
 }
 
 // wantedFor is the version the user runs, for a match by the name n. The tag
@@ -128,7 +128,7 @@ func hubNote(service, key, msg string) plan.Item {
 
 // hubRecipe takes the recipe of the nearest package of the hub, for a program
 // that did not start as one process.
-func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string, si *gen.ServiceInput) error {
+func (a *App) hubRecipe(ctx context.Context, o *options, rs *runState, hc hubCase, why string, si *gen.ServiceInput) error {
 	name := hc.service.Name
 	if o.noHub {
 		si.HubItems = append(si.HubItems, hubNote(name, "hub", "the hub of ops packages was not consulted because --no-hub is set, although "+why+"; nothing was taken from it"))
@@ -146,7 +146,7 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 		si.HubItems = append(si.HubItems, hubNote(name, "hub", fmt.Sprintf("the hub of ops packages could not be read (%v) although %s; nothing was taken from it", err, why)))
 		return nil
 	}
-	si.HubItems = append(si.HubItems, a.hubStale(name)...)
+	si.HubItems = append(si.HubItems, a.hubStale(rs, name)...)
 	var pkg hub.Package
 	level := hub.NotFound
 	wanted := hc.wanted
@@ -177,7 +177,7 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: wanted, ImageEnv: hc.env, Why: why, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubRecipe(use, obs)...)
 	if sp, ok := hub.SingleProcessFor(path.Base(obs.Program)); ok {
-		si.MinVolume = sp.BaseVolumeSize
+		si.MinVolume, si.MinVolumeEvidence = sp.BaseVolumeSize, sp.BaseVolumeEvidence
 	}
 	return nil
 }
@@ -185,12 +185,12 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 // hubWhole uses a package of the hub whole, for a program of the table of
 // required builds. Without the hub the service is not convertible, and the
 // service is skipped with the reason.
-func (a *App) hubWhole(ctx context.Context, o *options, late map[string]string, hc hubCase, row *hub.Required, si *gen.ServiceInput) error {
+func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase, row *hub.Required, si *gen.ServiceInput) error {
 	name := hc.service.Name
 	obs := si.Observed
 	program := path.Base(obs.Program)
 	skip := func(why string) error {
-		late[name] = fmt.Sprintf("%s runs as several processes and the hub holds a build that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
+		rs.late[name] = fmt.Sprintf("%s runs as several processes and the hub holds a build that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
 		return nil
 	}
 	if o.noHub {
@@ -206,7 +206,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, late map[string]string, 
 		}
 		return skip(fmt.Sprintf("the hub could not be read (%v), so it cannot be converted", err))
 	}
-	si.HubItems = append(si.HubItems, a.hubStale(name)...)
+	si.HubItems = append(si.HubItems, a.hubStale(rs, name)...)
 	pkg, level := hub.SelectFrom(row.Candidates(pkgs, hc.arch), hc.wanted)
 	if level == hub.NotFound {
 		return skip("the hub has none of those packages for " + hc.arch + ", so it cannot be converted")
@@ -240,10 +240,11 @@ func (a *App) mkdirTemp() (string, error) {
 
 // hubStale says, when the list of the hub is an old copy from disk, which copy
 // and why.
-func (a *App) hubStale(service string) []plan.Item {
+func (a *App) hubStale(rs *runState, service string) []plan.Item {
 	when, cause := a.Hub.Stale()
-	if when.IsZero() {
+	if when.IsZero() || rs.staleSaid {
 		return nil
 	}
+	rs.staleSaid = true
 	return []plan.Item{hubNote(service, "hub", fmt.Sprintf("the list of the hub is a copy of %s, because the hub could not be read (%v)", when.UTC().Format("2006-01-02"), cause))}
 }

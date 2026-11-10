@@ -87,11 +87,11 @@ func TestSelectExact(t *testing.T) {
 func TestSelectNearIsTheClosestOfTheSameSeries(t *testing.T) {
 	pkgs := []Package{pkg("eyberg", "nginx", "1.15.6", "x86_64"), pkg("eyberg", "nginx", "1.28.3", "x86_64"), pkg("eyberg", "nginx", "1.18.0", "x86_64"), pkg("eyberg", "nginx", "2.0.0", "x86_64")}
 	p, lvl := Select(pkgs, "nginx", "1.25.3", "amd64")
-	if lvl != Near || p.Version != "1.18.0" {
+	if lvl != Near || p.Version != "1.28.3" {
 		t.Errorf("got %v %v", p.Version, lvl)
 	}
 	p, lvl = Select(pkgs, "nginx", "1.17.9", "amd64")
-	if lvl != Near || p.Version != "1.15.6" {
+	if lvl != Near || p.Version != "1.18.0" {
 		t.Errorf("got %v %v", p.Version, lvl)
 	}
 }
@@ -337,6 +337,10 @@ func TestParseTables(t *testing.T) {
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a#\"}\n",
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"{\"}\n",
 		row("    base_volume_size: lots\n"),
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: c\n    settings:\n      - {name: n, value: v}\n",
+		row("    params_flag: g\n"),
+		row("    compare: [\"a b\"]\n"),
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n      - {name: n, value: w}\n",
 		"version_env:\n  Postgres: [PG_VERSION]\n",
 		"version_env:\n  postgres: []\n",
 	} {
@@ -354,7 +358,14 @@ func TestSelectTakesTheNewestReleaseNotNewerThanTheVersionAsked(t *testing.T) {
 		level    Level
 	}{
 		{"17", []string{"16.1", "16.4"}, "16.4", Far},
-		{"1.25.3", []string{"1.24.0", "1.24.9"}, "1.24.9", Near},
+		{"1.25.3", []string{"1.24.0", "1.24.9"}, "1.24.0", Near},
+		{"1.25.3", []string{"1.15.6", "1.28.3"}, "1.28.3", Near},
+		{"1.24.0", []string{"1.22.0", "1.26.0"}, "1.22.0", Near},
+		{"1.25.3", []string{"1.25.1", "1.25.5"}, "1.25.1", Near},
+		{"1.25.3", []string{"1.25.1", "1.25.4"}, "1.25.4", Near},
+		{"16.1", []string{"16.0", "16.2"}, "16.0", Near},
+		{"14.5", []string{"11.3.0", "16.0", "16.2"}, "16.2", Far},
+		{"17.1", []string{"11.3.0", "16.0", "16.2"}, "16.2", Far},
 		{"1.0", []string{"1.5", "1.2"}, "1.2", Near},
 		{"16.3", []string{"15.9", "16.1", "17.0"}, "16.1", Near},
 		{"16", []string{"15.0", "17.0"}, "15.0", Far},
@@ -378,5 +389,20 @@ func TestAShortHubVersionIsNotExactForALongerOne(t *testing.T) {
 	both := []Package{pkg("eyberg", "x", "1.25", "x86_64"), pkg("zeta", "x", "1.25.0", "x86_64")}
 	if p, lvl := Select(both, "x", "1.25.0", "amd64"); p.Version != "1.25.0" || lvl != Exact {
 		t.Errorf("%v %v", p.Version, lvl)
+	}
+}
+
+func TestApart(t *testing.T) {
+	rows := [][3]string{
+		{"1.25.3", "1.28.3", "3 minor releases apart"},
+		{"1.25.3", "1.25.5", "2 patch releases apart"},
+		{"1.25.3", "1.25.3", "the same release"},
+		{"1.25.3", "2.0.0", ""},
+		{"x", "1.0", ""},
+	}
+	for _, r := range rows {
+		if got := Apart(r[0], r[1]); got != r[2] {
+			t.Errorf("Apart(%q, %q) = %q, want %q", r[0], r[1], got, r[2])
+		}
 	}
 }
