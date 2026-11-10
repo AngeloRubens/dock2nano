@@ -106,6 +106,15 @@ jobs:
           if [ -n "$dnsip" ]; then
             ping -c 2 -W 2 $dnsip 2>&1 | tail -3
             curl -s -m 5 -o /dev/null -w 'dns control port 8080: %{http_code}\n' "http://$dnsip:8080/" || true
+            # what the dns does with a name with and without the suffix, whatever ops registered
+            echo "--- add by hand"
+            curl -s -m 5 "http://$dnsip:8080/add?svc=plainprobe&ip=10.9.9.9" -w ' [%{http_code}]\n' || true
+            curl -s -m 5 "http://$dnsip:8080/add?svc=suffixprobe.service&ip=10.9.9.8" -w ' [%{http_code}]\n' || true
+            curl -s -m 5 "http://$dnsip:8080/add?svc=dotprobe.&ip=10.9.9.7" -w ' [%{http_code}]\n' || true
+            for name in plainprobe suffixprobe.service dotprobe; do
+              echo "--- dig $name -> $(dig +short +time=3 +tries=1 @$dnsip $name A 2>&1 | tr '\n' ' ')"
+              dig +time=3 +tries=1 @$dnsip $name A 2>&1 | grep -a "status:" | head -1
+            done
             for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
               for name in $svc $svc.service; do
                 echo "--- dig $name"; dig +time=3 +tries=1 @$dnsip $name A 2>&1 | grep -a -v "^;; Query time\|^;; WHEN\|^;; MSG\|^$\|^; <<>>" | head -12
