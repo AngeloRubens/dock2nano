@@ -84,6 +84,15 @@ func (v Version) Compare(o Version) int {
 	if c := cmpNums(v.Nums, o.Nums); c != 0 {
 		return c
 	}
+	// 1.2.3rc1 comes before 1.2.3
+	switch {
+	case v.Suffix == o.Suffix:
+		return 0
+	case v.Suffix == "":
+		return 1
+	case o.Suffix == "":
+		return -1
+	}
 	return strings.Compare(v.Suffix, o.Suffix)
 }
 
@@ -160,16 +169,15 @@ func NormalizeArch(s string) string {
 	}
 }
 
-// namespaceRank puts the namespaces of the maintainers of ops first when two
+// namespaceRank puts the namespaces of hints/hub-tables.yaml first when two
 // packages fit equally.
 func namespaceRank(ns string) int {
-	switch ns {
-	case "eyberg":
-		return 0
-	case "nanovms":
-		return 1
+	for i, n := range loadedTables().NamespacePreference {
+		if n == ns {
+			return i
+		}
 	}
-	return 2
+	return len(loadedTables().NamespacePreference)
 }
 
 // Select picks the package of the hub that fits name, version and architecture
@@ -204,7 +212,10 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 		if c := a.Compare(b); c != 0 {
 			return c > 0
 		}
-		return namespaceRank(sorted[i].Namespace) < namespaceRank(sorted[j].Namespace)
+		if ra, rb := namespaceRank(sorted[i].Namespace), namespaceRank(sorted[j].Namespace); ra != rb {
+			return ra < rb
+		}
+		return sorted[i].Ref() < sorted[j].Ref()
 	})
 	best := sorted[0]
 	if !known {
@@ -212,7 +223,8 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 	}
 	got, _ := ParseVersion(best.Version)
 	switch {
-	case got.Compare(w) == 0:
+	case got.Compare(w) == 0 && len(w.Nums) >= len(got.Nums):
+		// "1.25" is not the version 1.25.0: it may be any 1.25.x
 		return best, Exact
 	case got.SameSeries(w):
 		return best, Near
@@ -251,37 +263,44 @@ func imageTag(ref string) string {
 
 // ImageVersion is the version the user runs, as numbers only: the tag of the
 // image when it starts with one ("1.25-alpine" is "1.25"), else the value of
-// the variable NAME_VERSION that many images set (NGINX_VERSION), else "".
+// the variable NAME_VERSION that many images set (NGINX_VERSION), or one of
+// those named for the image in hints/hub-tables.yaml; else "". When the tag
+// gives fewer numbers than the variable and the variable starts with them
+// (tag 1.25, NGINX_VERSION=1.25.5), the variable is the more exact one.
 func ImageVersion(ref string, env []string) string {
-	if v, ok := ParseVersion(imageTag(ref)); ok {
-		return v.String()
-	}
-	name := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(ImageName(ref)))
-	names := []string{name + "_VERSION"}
-	if name == "POSTGRES" || name == "POSTGRESQL" {
-		names = append(names, "PG_VERSION")
-	}
+	tag, tagOK := ParseVersion(imageTag(ref))
+	name := ImageName(ref)
+	up := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(name))
+	names := append([]string{up + "_VERSION"}, loadedTables().VersionEnv[name]...)
+	var fromEnv Version
+	envOK := false
 	for _, want := range names {
 		for _, e := range env {
-			if k, val, ok := strings.Cut(e, "="); ok && k == want {
-				if v, ok := ParseVersion(val); ok {
-					return v.String()
-				}
+			if k, val, ok := strings.Cut(e, "="); ok && k == want && !envOK {
+				fromEnv, envOK = ParseVersion(val)
 			}
 		}
+	}
+	switch {
+	case tagOK && envOK && len(fromEnv.Nums) > len(tag.Nums) && cmpNums(fromEnv.Nums[:len(tag.Nums)], tag.Nums) == 0:
+		return fromEnv.String()
+	case tagOK:
+		return tag.String()
+	case envOK:
+		return fromEnv.String()
 	}
 	return ""
 }
 
 // ProgramName is the name of a program for the hub: the last element of its
-// path, with a trailing version taken off when nothing is left otherwise
-// (python3.11 is python).
+// path, with a trailing version taken off when at least two characters are left
+// (python3.11 is python; x264 stays x264).
 func ProgramName(program string) string {
 	base := strings.ToLower(program)
 	if i := strings.LastIndex(base, "/"); i >= 0 {
 		base = base[i+1:]
 	}
-	if trimmed := strings.TrimRight(base, "0123456789."); trimmed != "" {
+	if trimmed := strings.TrimRight(base, "0123456789."); len(trimmed) >= 2 {
 		return trimmed
 	}
 	return base

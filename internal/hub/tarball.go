@@ -16,15 +16,24 @@ import (
 	"strings"
 )
 
-// maxTarball is the largest tarball that is downloaded.
-const maxTarball = 2 << 30
+// The limits are variables so that tests can lower them.
+var (
+	// maxTarball is the largest tarball that is downloaded.
+	maxTarball int64 = 2 << 30
+
+	// maxExtracted is the most bytes written by FetchWhole.
+	maxExtracted int64 = 4 << 30
+
+	// maxDecompressed is the most bytes a tarball may expand to.
+	maxDecompressed int64 = 8 << 30
+
+	// maxEntries is the most entries a tarball may hold.
+	maxEntries = 200000
+)
 
 // maxSmallFile is the largest file read into memory from a tarball: the
 // package manifest, config.json and the configuration files of the recipe.
 const maxSmallFile = 1 << 20
-
-// maxExtracted is the most bytes written by FetchWhole.
-const maxExtracted = 4 << 30
 
 // RunConfig is the part of the run configuration of a package that is read.
 type RunConfig struct {
@@ -71,8 +80,12 @@ type Recipe struct {
 	Files map[string][]byte
 
 	// Skipped counts the entries of a whole extraction that were not written
-	// (hard links, devices and the like).
+	// (devices, and links that could not be placed).
 	Skipped int
+
+	// NotRead are the sysroot files that were asked for and are in the
+	// package, but could not be read: links, or too large.
+	NotRead []string
 }
 
 // Source is what the conversion needs from the hub. *Client implements it.
@@ -117,7 +130,7 @@ func (c *Client) withTarball(ctx context.Context, p Package, fn func(f *os.File)
 		return fmt.Errorf("downloading %s %s: %w", p.Ref(), p.Version, err)
 	}
 	if n > maxTarball {
-		return fmt.Errorf("the tarball of %s %s is larger than %d bytes", p.Ref(), p.Version, int64(maxTarball))
+		return fmt.Errorf("the tarball of %s %s is larger than %d bytes", p.Ref(), p.Version, maxTarball)
 	}
 	if n == 0 {
 		return fmt.Errorf("the tarball of %s %s is empty", p.Ref(), p.Version)
@@ -131,18 +144,36 @@ func (c *Client) withTarball(ctx context.Context, p Package, fn func(f *os.File)
 	return fn(f)
 }
 
+// capReader fails when more than n bytes are read through it.
+type capReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n -= int64(n)
+	if c.n < 0 {
+		return n, fmt.Errorf("the tarball expands to more than %d bytes", maxDecompressed)
+	}
+	return n, err
+}
+
 // eachEntry reads a gzip tarball and calls visit with every entry, giving the
 // path inside the top folder of the package ("package.manifest",
-// "sysroot/etc/passwd"). The entries that are the folder itself, or outside
-// it, are not passed.
+// "sysroot/etc/passwd"). The top folder is the first folder, or the first
+// file inside a folder, of the tarball. The entries that are the folder
+// itself, or outside it, or global headers, are not passed. A tarball with
+// too many entries, or that expands to too much, is an error.
 func eachEntry(r io.Reader, visit func(rel string, h *tar.Header, body io.Reader) error) error {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("the tarball is not gzip: %w", err)
 	}
 	defer zr.Close()
-	tr := tar.NewReader(zr)
+	tr := tar.NewReader(&capReader{r: zr, n: maxDecompressed})
 	top := ""
+	count := 0
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -151,12 +182,21 @@ func eachEntry(r io.Reader, visit func(rel string, h *tar.Header, body io.Reader
 		if err != nil {
 			return fmt.Errorf("reading the tarball: %w", err)
 		}
+		if count++; count > maxEntries {
+			return fmt.Errorf("the tarball holds more than %d entries", maxEntries)
+		}
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
 		name := path.Clean(strings.TrimPrefix(h.Name, "./"))
 		first, rel, _ := strings.Cut(name, "/")
 		if first == "." || first == ".." || path.IsAbs(name) {
 			continue
 		}
 		if top == "" {
+			if rel == "" && h.Typeflag != tar.TypeDir {
+				continue
+			}
 			top = first
 		}
 		if first != top || rel == "" {
@@ -206,10 +246,14 @@ func scanRecipe(f io.Reader, p Package, files []string) (*Recipe, error) {
 			if !contains(files, inside) {
 				return nil
 			}
-			if data, ok, err := readSmall(h, body); err != nil {
+			data, ok, err := readSmall(h, body)
+			if err != nil {
 				return err
-			} else if ok {
+			}
+			if ok {
 				rec.Files[inside] = data
+			} else if h.Typeflag != tar.TypeDir {
+				rec.NotRead = append(rec.NotRead, inside)
 			}
 		}
 		return nil
@@ -258,26 +302,30 @@ func (c *Client) FetchWhole(ctx context.Context, p Package, dest string) (*Recip
 }
 
 // extract writes the sysroot of a package into dest, and its program at the
-// top of dest under the name it has. Only directories, regular files and
-// symbolic links are written; nothing is written outside dest, nor through a
-// symbolic link. It returns how many entries it left out.
+// top of dest under the name it has. Directories, regular files, symbolic
+// links and hard links (written as copies) are written; nothing is written
+// outside dest, nor through a symbolic link. It returns how many entries it
+// left out (devices, and links that point at nothing written).
 func extract(r io.Reader, dest, program string) (int, error) {
 	_, programRel, _ := strings.Cut(path.Clean(program), "/")
 	if programRel == "" {
 		programRel = path.Clean(program)
 	}
+	// where an entry of the package goes in dest; "" for one that is left out
+	place := func(rel string) string {
+		switch {
+		case strings.HasPrefix(rel, "sysroot/"):
+			return strings.TrimPrefix(rel, "sysroot/")
+		case rel == programRel:
+			return path.Base(rel)
+		}
+		return ""
+	}
 	skipped := 0
 	var total int64
 	err := eachEntry(r, func(rel string, h *tar.Header, body io.Reader) error {
-		var target string
-		switch {
-		case rel == "sysroot":
-			return nil
-		case strings.HasPrefix(rel, "sysroot/"):
-			target = strings.TrimPrefix(rel, "sysroot/")
-		case rel == programRel:
-			target = path.Base(rel)
-		default:
+		target := place(rel)
+		if target == "" {
 			return nil
 		}
 		full, err := safeJoin(dest, target)
@@ -296,14 +344,52 @@ func extract(r io.Reader, dest, program string) (int, error) {
 		case tar.TypeReg:
 			total += h.Size
 			if total > maxExtracted {
-				return fmt.Errorf("the package holds more than %d bytes", int64(maxExtracted))
+				return fmt.Errorf("the package holds more than %d bytes", maxExtracted)
 			}
 			return writeFile(full, os.FileMode(h.Mode&0o777)|0o600, body)
+		case tar.TypeLink:
+			_, linkRel, _ := strings.Cut(path.Clean(strings.TrimPrefix(h.Linkname, "./")), "/")
+			from := place(linkRel)
+			if from == "" {
+				skipped++
+				return nil
+			}
+			src, err := safeJoin(dest, from)
+			if err != nil {
+				return err
+			}
+			fi, err := os.Lstat(src)
+			if err != nil || !fi.Mode().IsRegular() {
+				skipped++
+				return nil
+			}
+			total += fi.Size()
+			if total > maxExtracted {
+				return fmt.Errorf("the package holds more than %d bytes", maxExtracted)
+			}
+			return copyInto(src, full, fi.Mode()&0o777|0o600)
 		}
 		skipped++
 		return nil
 	})
-	return skipped, err
+	if err != nil {
+		return skipped, err
+	}
+	// a package whose program is not there cannot run
+	if fi, err := os.Lstat(filepath.Join(dest, path.Base(programRel))); err != nil || !fi.Mode().IsRegular() {
+		return skipped, fmt.Errorf("the program %s of the package is not a regular file in the package", program)
+	}
+	return skipped, nil
+}
+
+// copyInto copies the file src to dst.
+func copyInto(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	return writeFile(dst, mode, in)
 }
 
 // safeJoin joins a path of a tarball to dest. It refuses a path that leaves

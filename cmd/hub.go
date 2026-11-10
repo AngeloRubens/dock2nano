@@ -38,7 +38,7 @@ type hubCase struct {
 // program is in the table of builds that the hub holds and must be used whole.
 // It never fails the conversion, except that the context ended: what the hub
 // did or could not do is in si.HubItems, or in the skip reason of the service.
-func (a *App) hubStep(ctx context.Context, o *options, skipped map[string]string, s *compose.Service, image string, built bool, si *gen.ServiceInput) error {
+func (a *App) hubStep(ctx context.Context, o *options, late map[string]string, s *compose.Service, image string, built bool, si *gen.ServiceInput) error {
 	obs := si.Observed
 	if obs == nil {
 		return nil
@@ -57,7 +57,7 @@ func (a *App) hubStep(ctx context.Context, o *options, skipped map[string]string
 		stand = hc.imageName
 	}
 	if row := hub.MatchRequired(a.HubRequired, stand, obs.Program); row != nil {
-		return a.hubWhole(ctx, o, skipped, hc, row, si)
+		return a.hubWhole(ctx, o, late, hc, row, si)
 	}
 	why := hubTrigger(obs)
 	if why == "" {
@@ -151,12 +151,12 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 // hubWhole uses a package of the hub whole, for a program of the table of
 // required builds. Without the hub the service is not convertible, and the
 // service is skipped with the reason.
-func (a *App) hubWhole(ctx context.Context, o *options, skipped map[string]string, hc hubCase, row *hub.Required, si *gen.ServiceInput) error {
+func (a *App) hubWhole(ctx context.Context, o *options, late map[string]string, hc hubCase, row *hub.Required, si *gen.ServiceInput) error {
 	name := hc.service.Name
 	obs := si.Observed
 	program := path.Base(obs.Program)
 	skip := func(why string) error {
-		skipped[name] = fmt.Sprintf("%s runs as several processes and the hub holds a build that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
+		late[name] = fmt.Sprintf("%s runs as several processes and the hub holds a build that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
 		return nil
 	}
 	if o.noHub {

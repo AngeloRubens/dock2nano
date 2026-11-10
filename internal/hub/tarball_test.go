@@ -148,7 +148,7 @@ func wholeTarball(t *testing.T, extra ...entry) []byte {
 
 func TestFetchWhole(t *testing.T) {
 	f := newFakeHub(t)
-	p := f.add(pkg("francescolavra", "postgres", "16.2", "x86_64"), wholeTarball(t, entry{name: "pg_16.2/sysroot/hard", typ: tar.TypeLink, link: "usr/lib.so"}))
+	p := f.add(pkg("francescolavra", "postgres", "16.2", "x86_64"), wholeTarball(t, entry{name: "pg_16.2/sysroot/hard", typ: tar.TypeLink, link: "pg_16.2/sysroot/usr/lib.so"}, entry{name: "pg_16.2/sysroot/dev0", typ: tar.TypeChar}))
 	dest := t.TempDir()
 	rec, err := f.client(t).FetchWhole(context.Background(), p, dest)
 	if err != nil {
@@ -157,7 +157,7 @@ func TestFetchWhole(t *testing.T) {
 	if !reflect.DeepEqual(rec.Manifest.Args, []string{"./postgres", "-D", "db"}) {
 		t.Errorf("args: %v", rec.Manifest.Args)
 	}
-	for path, want := range map[string]string{"postgres": "ELF", "usr/lib.so": "lib"} {
+	for path, want := range map[string]string{"postgres": "ELF", "usr/lib.so": "lib", "hard": "lib"} {
 		got, err := os.ReadFile(filepath.Join(dest, path))
 		if err != nil || string(got) != want {
 			t.Errorf("%s: %q %v", path, got, err)
@@ -172,7 +172,7 @@ func TestFetchWhole(t *testing.T) {
 		}
 	}
 	if rec.Skipped != 1 {
-		t.Errorf("skipped %d entries, want the hard link only", rec.Skipped)
+		t.Errorf("skipped %d entries, want the device only", rec.Skipped)
 	}
 }
 
@@ -217,5 +217,139 @@ func TestSafeJoin(t *testing.T) {
 	}
 	if _, err := safeJoin(dest, "a/../../b"); err == nil {
 		t.Error("..")
+	}
+}
+
+func TestFetchWholeCopiesAHardLinkAndLeavesOutOneThatPointsAtNothing(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), wholeTarball(t,
+		entry{name: "pg_16.2/sysroot/ok", typ: tar.TypeLink, link: "pg_16.2/sysroot/usr/lib.so"},
+		entry{name: "pg_16.2/sysroot/nowhere", typ: tar.TypeLink, link: "pg_16.2/sysroot/missing"},
+		entry{name: "pg_16.2/sysroot/outside", typ: tar.TypeLink, link: "pg_16.2/README.md"}))
+	dest := t.TempDir()
+	rec, err := f.client(t).FetchWhole(context.Background(), p, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "ok")); err != nil || string(b) != "lib" {
+		t.Errorf("%q %v", b, err)
+	}
+	if rec.Skipped != 2 {
+		t.Errorf("skipped %d, want 2", rec.Skipped)
+	}
+}
+
+func TestFetchWholeKeepsTheExecuteBitsAndMakesTheFilesWritable(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), wholeTarball(t, entry{name: "pg_16.2/postgres", body: "ELF2", mode: 0o4555, typ: tar.TypeReg}))
+	dest := t.TempDir()
+	if _, err := f.client(t).FetchWhole(context.Background(), p, dest); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(filepath.Join(dest, "postgres"))
+	if err != nil || fi.Mode() != 0o755 {
+		t.Errorf("%v %v", fi, err)
+	}
+}
+
+func TestFetchWholeNeedsTheProgram(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{
+		dir("pg_16.2/"),
+		file("pg_16.2/package.manifest", `{"Program":"pg_16.2/postgres"}`),
+		file("pg_16.2/sysroot/etc/x", "x"),
+	}))
+	if _, err := f.client(t).FetchWhole(context.Background(), p, t.TempDir()); err == nil || !strings.Contains(err.Error(), "program") {
+		t.Errorf("a package without its program: %v", err)
+	}
+	q := f.add(pkg("a", "y", "1.0", "x86_64"), tarball(t, []entry{
+		dir("pg_16.2/"),
+		symlink("pg_16.2/postgres", "/bin/sh"),
+		file("pg_16.2/package.manifest", `{"Program":"pg_16.2/postgres"}`),
+	}))
+	if _, err := f.client(t).FetchWhole(context.Background(), q, t.TempDir()); err == nil {
+		t.Error("a program that is a link was accepted")
+	}
+}
+
+func TestEntriesThatAreNotThePackageAreIgnored(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{
+		{name: "pax_global_header", typ: tar.TypeXGlobalHeader, pax: map[string]string{"comment": "abc"}},
+		file("stray", "x"),
+		dir("pg_16.2/"),
+		file("pg_16.2/package.manifest", `{"Program":"pg_16.2/postgres"}`),
+	}))
+	rec, err := f.client(t).FetchRecipe(context.Background(), p, nil)
+	if err != nil || rec.Manifest.Program != "pg_16.2/postgres" {
+		t.Errorf("%+v %v", rec, err)
+	}
+}
+
+func TestTheFolderOfAPackageCanBeNamedByItsFirstFile(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{file("top/package.manifest", `{"Program":"top/p"}`)}))
+	if rec, err := f.client(t).FetchRecipe(context.Background(), p, nil); err != nil || rec.Manifest.Program != "top/p" {
+		t.Errorf("%+v %v", rec, err)
+	}
+}
+
+func TestSysrootFilesThatCannotBeReadAreNamed(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{
+		dir("n/"),
+		file("n/package.manifest", `{"Program":"n/n"}`),
+		symlink("n/sysroot/etc/nginx/nginx.conf", "/elsewhere"),
+	}))
+	rec, err := f.client(t).FetchRecipe(context.Background(), p, []string{"/etc/nginx/nginx.conf"})
+	if err != nil || len(rec.Files) != 0 || !reflect.DeepEqual(rec.NotRead, []string{"/etc/nginx/nginx.conf"}) {
+		t.Errorf("%+v %v", rec, err)
+	}
+}
+
+// lowered sets a limit for the length of a test.
+func lowered[T int | int64](t *testing.T, v *T, to T) {
+	old := *v
+	*v = to
+	t.Cleanup(func() { *v = old })
+}
+
+func TestATarballWithTooManyEntriesIsRefused(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), wholeTarball(t))
+	lowered(t, &maxEntries, 3)
+	if _, err := f.client(t).FetchRecipe(context.Background(), p, nil); err == nil || !strings.Contains(err.Error(), "entries") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestATarballThatExpandsTooMuchIsRefused(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{
+		dir("n/"),
+		file("n/package.manifest", `{"Program":"n/n"}`),
+		file("n/sysroot/big", strings.Repeat("0", 100000)),
+	}))
+	lowered(t, &maxDecompressed, 5000)
+	if _, err := f.client(t).FetchRecipe(context.Background(), p, nil); err == nil || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestATarballThatIsTooLargeIsRefused(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), wholeTarball(t))
+	lowered(t, &maxTarball, 50)
+	if _, err := f.client(t).FetchRecipe(context.Background(), p, nil); err == nil || !strings.Contains(err.Error(), "larger") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestAPackageThatWritesTooMuchIsRefused(t *testing.T) {
+	f := newFakeHub(t)
+	p := f.add(pkg("a", "x", "1.0", "x86_64"), wholeTarball(t))
+	lowered(t, &maxExtracted, 4)
+	if _, err := f.client(t).FetchWhole(context.Background(), p, t.TempDir()); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("%v", err)
 	}
 }

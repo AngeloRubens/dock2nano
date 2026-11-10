@@ -137,7 +137,7 @@ func TestRequiredCandidates(t *testing.T) {
 		t.Errorf("16.0: %v %v", p.Version, lvl)
 	}
 	p, lvl = SelectFrom(got, "11.3")
-	if p.Ref() != "eyberg/postgresql" || lvl != Exact {
+	if p.Ref() != "eyberg/postgresql" || lvl != Near {
 		t.Errorf("11.3: %v %v", p.Ref(), lvl)
 	}
 	p, lvl = SelectFrom(got, "14.5")

@@ -360,6 +360,25 @@ func TestRequiredBuildWithAHubThatFailsIsNotConvertible(t *testing.T) {
 	}
 }
 
+func TestAServiceTheHubCannotConvertIsStillStartedForTheOnesThatNeedIt(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.28.0", nginxObserved(0))
+	h.write("compose.yaml", "services:\n  web:\n    image: app:1\n    depends_on: [db]\n  db:\n    image: nginx:1.28.0\n")
+	h.dock.have["app:1"] = true
+	h.dock.images["app:1"] = &docker.ImageConfig{Architecture: "amd64"}
+	rows, _ := hub.ParseRequired([]byte(hubTestRows))
+	h.app.HubRequired = rows
+	h.mustRun(0, "convert", "--no-hub")
+	if len(h.started) != 1 || h.started[0].Image != "nginx:1.28.0" {
+		t.Errorf("db was not started for the observation of web: %+v", h.started)
+	}
+	if len(h.plan.Services) != 1 || h.plan.Services[0].Name != "web" {
+		t.Errorf("services: %+v", h.plan.Services)
+	}
+	if !strings.Contains(h.stdout.String(), "--no-hub turns the hub off") {
+		t.Errorf("the report:\n%s", h.stdout)
+	}
+}
+
 func TestNoHubFlagIsParsed(t *testing.T) {
 	h := newHarness(t)
 	o, err := h.app.parseConvert([]string{"--no-hub"})

@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +27,8 @@ func TestManifestIsReadOnceAndOnlyWithGET(t *testing.T) {
 	if n := f.requests(); n != 1 {
 		t.Errorf("%d requests for three reads", n)
 	}
+	// the client sends requests from one place, get, which always says GET: this
+	// documents the rule, and cannot fail by reverting something
 	for _, m := range f.methods {
 		if m != http.MethodGet {
 			t.Errorf("the hub received %s", m)
@@ -48,7 +50,7 @@ func TestManifestKeptOnDisk(t *testing.T) {
 	if _, err := mk().Manifest(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(filepath.Join(cache, "hub-manifest-v2.json"), now, now); err != nil {
+	if err := os.Chtimes(mk().cachePath(), now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mk().Manifest(context.Background()); err != nil {
@@ -70,11 +72,11 @@ func TestManifestCorruptCopyOnDiskIsReadAgain(t *testing.T) {
 	f := newFakeHub(t)
 	f.manifest = []Package{pkg("eyberg", "nginx", "1.28.3", "x86_64")}
 	cache := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cache, "hub-manifest-v2.json"), []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	c := f.client(t)
 	c.CacheDir = cache
+	if err := os.WriteFile(c.cachePath(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	pkgs, err := c.Manifest(context.Background())
 	if err != nil || len(pkgs) != 1 {
 		t.Fatalf("%v %v", pkgs, err)
@@ -82,6 +84,133 @@ func TestManifestCorruptCopyOnDiskIsReadAgain(t *testing.T) {
 	if f.requests() != 1 {
 		t.Errorf("%d requests", f.requests())
 	}
+}
+
+func TestManifestFailureIsRemembered(t *testing.T) {
+	f := newFakeHub(t)
+	f.status = http.StatusInternalServerError
+	c := f.client(t)
+	for i := 0; i < 3; i++ {
+		if _, err := c.Manifest(context.Background()); err == nil {
+			t.Fatal("no error")
+		}
+	}
+	if n := f.requests(); n != 1 {
+		t.Errorf("%d requests for three reads of a hub that fails", n)
+	}
+}
+
+func TestManifestCancelledIsNotRemembered(t *testing.T) {
+	f := newFakeHub(t)
+	f.manifest = []Package{pkg("eyberg", "nginx", "1.28.3", "x86_64")}
+	c := f.client(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Manifest(ctx); err == nil {
+		t.Fatal("no error")
+	}
+	if pkgs, err := c.Manifest(context.Background()); err != nil || len(pkgs) != 1 {
+		t.Errorf("%v %v", pkgs, err)
+	}
+}
+
+func TestManifestOldCopyOnDiskIsUsedWhenTheNetworkFails(t *testing.T) {
+	f := newFakeHub(t)
+	f.manifest = []Package{pkg("eyberg", "nginx", "1.28.3", "x86_64")}
+	cache := t.TempDir()
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	mk := func() *Client {
+		c := f.client(t)
+		c.CacheDir = cache
+		c.Now = func() time.Time { return now }
+		return c
+	}
+	if _, err := mk().Manifest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mk().cachePath(), now, now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(48 * time.Hour)
+	f.status = http.StatusBadGateway
+	pkgs, err := mk().Manifest(context.Background())
+	if err != nil || len(pkgs) != 1 {
+		t.Errorf("%v %v", pkgs, err)
+	}
+	// with no copy at all it is an error
+	c := f.client(t)
+	c.CacheDir = t.TempDir()
+	if _, err := c.Manifest(context.Background()); err == nil {
+		t.Error("no copy and no network, and no error")
+	}
+}
+
+// slowDoer never answers until the request is cancelled.
+type slowDoer struct{}
+
+func (slowDoer) Do(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func TestManifestHasATimeout(t *testing.T) {
+	c := &Client{BaseURL: "https://hub.invalid", HTTP: slowDoer{}, ManifestTimeout: 20 * time.Millisecond}
+	start := time.Now()
+	if _, err := c.Manifest(context.Background()); err == nil {
+		t.Fatal("no error")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("it took %v", time.Since(start))
+	}
+}
+
+func TestManifestCopiesOfTwoHubsAreKeptApart(t *testing.T) {
+	a := &Client{BaseURL: "https://a.invalid", CacheDir: "/x"}
+	b := &Client{BaseURL: "https://b.invalid", CacheDir: "/x"}
+	if a.cachePath() == b.cachePath() {
+		t.Errorf("one file for two hubs: %s", a.cachePath())
+	}
+}
+
+func TestManifestCopyOnDiskThatIsTooLargeIsNotRead(t *testing.T) {
+	c := &Client{BaseURL: "https://a.invalid", CacheDir: t.TempDir()}
+	if err := os.WriteFile(c.cachePath(), make([]byte, maxManifest+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.readCache(true); ok {
+		t.Error("a copy larger than the list may be was read")
+	}
+}
+
+func TestRedirectsMustBeHTTPS(t *testing.T) {
+	if err := refuseInsecureRedirect(&http.Request{URL: mustURL(t, "http://storage.example/x")}, nil); err == nil {
+		t.Error("a redirect to http was followed")
+	}
+	if err := refuseInsecureRedirect(&http.Request{URL: mustURL(t, "https://storage.example/x")}, nil); err != nil {
+		t.Errorf("a redirect to another host over https: %v", err)
+	}
+	if err := refuseInsecureRedirect(&http.Request{URL: mustURL(t, "https://storage.example/x")}, make([]*http.Request, 10)); err == nil {
+		t.Error("eleven redirects were followed")
+	}
+	// the client that NewClient makes uses it
+	f := newFakeHub(t)
+	f.add(pkg("eyberg", "a", "1.0", "x86_64"), nginxTarball(t))
+	c := NewClient("dock2nano-test")
+	c.BaseURL = f.srv.URL
+	c.CacheDir = ""
+	c.TmpDir = t.TempDir()
+	if _, err := c.FetchRecipe(context.Background(), f.manifest[0], nil); err == nil || !strings.Contains(err.Error(), "not https") {
+		t.Errorf("the redirect of the test hub is to http: %v", err)
+	}
+}
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func TestManifestErrors(t *testing.T) {

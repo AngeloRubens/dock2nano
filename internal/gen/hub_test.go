@@ -251,32 +251,29 @@ func TestApplyHubRecipeConfigAlreadyRightChangesNothingAndSaysTheProgramIsNotCha
 	}
 }
 
-func TestApplyHubRecipeTakesNoValueThatIsNotAPlainWord(t *testing.T) {
+func TestApplyHubRecipeNeverUsesTheValuesOfTheHubPackage(t *testing.T) {
 	obs := hubObs(t)
 	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
-	u.Recipe.Files["/usr/local/nginx/conf/nginx.conf"] = []byte("worker_processes 1 2;\ndaemon \"off\";\nmaster_process off;\n")
-	ApplyHubRecipe(u, obs)
-	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
-	if !strings.Contains(string(b), "worker_processes 1;") || !strings.Contains(string(b), "daemon off;") || strings.Contains(string(b), "1 2") {
-		t.Errorf("%s", b)
-	}
-}
-
-func TestApplyHubRecipeTakesTheValuesTheHubPackageSets(t *testing.T) {
-	obs := hubObs(t)
-	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
-	u.Recipe.Files["/usr/local/nginx/conf/nginx.conf"] = []byte("worker_processes 2;\ndaemon off;\nmaster_process off;\n")
+	u.Recipe.Files["/usr/local/nginx/conf/nginx.conf"] = []byte("worker_processes 2;\ndaemon on;\nmaster_process on;\n")
 	items := ApplyHubRecipe(u, obs)
 	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
-	if !strings.Contains(string(b), "worker_processes 2;") {
-		t.Errorf("%s", b)
+	for _, want := range []string{"worker_processes 1;", "daemon off;", "master_process off;"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%q is not in the config:\n%s", want, b)
+		}
 	}
-	if c := hubFind(items, "hub config"); len(c) == 0 || !strings.Contains(c[0].Message, "the values of the hub package where it sets them") {
-		t.Errorf("config: %+v", c)
+	var found bool
+	for _, it := range hubFind(items, "hub config") {
+		if strings.Contains(it.Message, "worker_processes: hub [2], yours [1]") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the values of the hub are not in the report:\n%s", hubText(items))
 	}
 }
 
-func TestApplyHubRecipeWithoutAHubConfigUsesTheUsualValues(t *testing.T) {
+func TestApplyHubRecipeWithoutAHubConfigStillSetsTheValues(t *testing.T) {
 	obs := hubObs(t)
 	u := hubUse(hub.Far, "", "1.28.3")
 	u.Recipe.Files = nil
@@ -302,33 +299,95 @@ func TestApplyHubRecipeForAProgramWithNoKnownDirectives(t *testing.T) {
 	}
 }
 
-func TestApplyHubRecipeAdoptsTheArgumentsOfTheRecipe(t *testing.T) {
-	obs := &observe.Result{Sysroot: hubSysroot(t, map[string]string{"/etc/app.conf": "x"}), Program: "/usr/bin/app", Argv: []string{"app", "--old", "secret-value"}}
-	u := hubUse(hub.Exact, "1.0", "1.0")
-	u.Recipe.Manifest.Args = []string{"./app", "--single", "-c", "/etc/app.conf"}
+func TestApplyHubRecipeNeverReplacesTheCommandLineOfTheUser(t *testing.T) {
+	obs := hubObs(t)
+	obs.Sysroot = hubSysroot(t, map[string]string{"/etc/nginx/site.conf": "worker_processes 4;\nevents {}\n", "/etc/nginx/nginx.conf": "worker_processes 4;\nevents {}\n"})
+	obs.Argv = []string{"nginx", "-c", "/etc/nginx/site.conf", "-g", "secret-value"}
+	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
+	u.Recipe.Manifest.Args = []string{"nginx", "-c", "/etc/nginx/nginx.conf"}
 	items := ApplyHubRecipe(u, obs)
-	if !reflect.DeepEqual(obs.Argv, []string{"app", "--single", "-c", "/etc/app.conf"}) {
+	if !reflect.DeepEqual(obs.Argv, []string{"nginx", "-c", "/etc/nginx/site.conf", "-g", "secret-value"}) {
 		t.Errorf("argv: %v", obs.Argv)
+	}
+	site, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/site.conf"))
+	stock, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
+	if !strings.Contains(string(site), "master_process off;") || strings.Contains(string(stock), "master_process") {
+		t.Errorf("the file the program is started with must get the directives, and only it:\nsite:\n%s\nstock:\n%s", site, stock)
 	}
 	text := hubText(items)
 	if strings.Contains(text, "secret-value") {
 		t.Errorf("an observed argument is in the report:\n%s", text)
 	}
-	if v := hubFind(items, "hub result"); len(v) != 1 || v[0].Kind != plan.Approximated {
+	if a := hubFind(items, "hub arguments"); len(a) != 1 || a[0].Kind != plan.Note || !strings.Contains(a[0].Message, "-c /etc/nginx/nginx.conf") || !strings.Contains(a[0].Message, "not applied") {
+		t.Errorf("arguments: %+v", a)
+	}
+}
+
+func TestApplyHubRecipeDoesNotReadOrWriteThroughALinkInTheSysroot(t *testing.T) {
+	obs := hubObs(t)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "nginx.conf"), []byte("worker_processes 9;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sys := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sys, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sys, "etc/nginx")); err != nil {
+		t.Fatal(err)
+	}
+	obs.Sysroot = sys
+	items := ApplyHubRecipe(hubUse(hub.Exact, "1.28.3", "1.28.3"), obs)
+	if b, _ := os.ReadFile(filepath.Join(outside, "nginx.conf")); string(b) != "worker_processes 9;\n" {
+		t.Errorf("a file outside the sysroot was written: %q", b)
+	}
+	if c := hubFind(items, "hub config"); len(c) == 0 || c[0].Kind != plan.Unsupported || !strings.Contains(c[0].Message, "cannot be reached") {
+		t.Errorf("config: %+v", c)
+	}
+	// the same for the file named by the option of the program
+	obs.Argv = []string{"nginx", "-c", "/etc/nginx/nginx.conf"}
+	items = ApplyHubRecipe(hubUse(hub.Exact, "1.28.3", "1.28.3"), obs)
+	if b, _ := os.ReadFile(filepath.Join(outside, "nginx.conf")); string(b) != "worker_processes 9;\n" {
+		t.Errorf("a file outside the sysroot was written: %q", b)
+	}
+	if v := hubFind(items, "hub result"); len(v) != 1 || v[0].Kind != plan.Unsupported {
 		t.Errorf("verdict: %+v", v)
 	}
 }
 
-func TestApplyHubRecipeDoesNotAdoptAPathThatIsNotInTheImage(t *testing.T) {
-	obs := &observe.Result{Sysroot: t.TempDir(), Program: "/usr/bin/app", Argv: []string{"app", "-x"}}
-	u := hubUse(hub.Exact, "1.0", "1.0")
-	u.Recipe.Manifest.Args = []string{"app", "-c", "/hub/only/app.conf"}
-	items := ApplyHubRecipe(u, obs)
-	if !reflect.DeepEqual(obs.Argv, []string{"app", "-x"}) {
-		t.Errorf("argv: %v", obs.Argv)
+func TestApplyHubRecipeDoesNotAddWhatAnIncludedFileMayHold(t *testing.T) {
+	obs := hubObs(t)
+	obs.Sysroot = hubSysroot(t, map[string]string{"/etc/nginx/nginx.conf": "include /etc/nginx/main.d/*.conf;\nworker_processes 4;\nevents {}\n"})
+	items := ApplyHubRecipe(hubUse(hub.Exact, "1.28.3", "1.28.3"), obs)
+	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
+	if strings.Contains(string(b), "master_process") || strings.Contains(string(b), "daemon") || !strings.Contains(string(b), "worker_processes 1;") {
+		t.Errorf("%s", b)
 	}
-	if a := hubFind(items, "hub arguments"); len(a) != 1 || a[0].Kind != plan.Note || !strings.Contains(a[0].Message, "/hub/only/app.conf") {
-		t.Errorf("arguments: %+v", a)
+	var found bool
+	for _, it := range hubFind(items, "hub config") {
+		if it.Kind == plan.Unsupported && strings.Contains(it.Message, "includes other files") && strings.Contains(it.Message, "master_process off") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the report does not say the directives were not added:\n%s", hubText(items))
+	}
+}
+
+func TestApplyHubRecipeSaysWhenTheHubConfigIsALink(t *testing.T) {
+	obs := hubObs(t)
+	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
+	u.Recipe.Files = nil
+	u.Recipe.NotRead = []string{"/usr/local/nginx/conf/nginx.conf"}
+	items := ApplyHubRecipe(u, obs)
+	var found bool
+	for _, it := range hubFind(items, "hub config") {
+		if strings.Contains(it.Message, "is a link or too large") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("%s", hubText(items))
 	}
 }
 
@@ -441,5 +500,17 @@ func TestHubItemsReachTheReport(t *testing.T) {
 	p := mustGen(t, in)
 	if got := itemsOf(p, "web", plan.Approximated, "hub"); len(got) != 1 || got[0].Message != "from the hub" {
 		t.Errorf("%+v", p.Report)
+	}
+}
+
+func TestApplyHubWholeSaysWhatWasNotWritten(t *testing.T) {
+	u := hubWholeUse(hub.Exact, "16.2", "16.2")
+	u.Recipe.Skipped = 3
+	items := ApplyHubWhole(u, hubWholeObs())
+	if f := hubFind(items, "hub files"); len(f) != 2 || !strings.Contains(f[1].Message, "3 entries") {
+		t.Errorf("%+v", f)
+	}
+	if f := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), hubWholeObs()), "hub files"); len(f) != 1 {
+		t.Errorf("nothing was left out: %+v", f)
 	}
 }

@@ -80,7 +80,7 @@ func (s *scanner) word() string {
 			}
 			continue
 		}
-		if c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ';' || c == '{' || c == '}' || c == '#' {
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ';' || c == '{' || c == '}' {
 			break
 		}
 		s.pos++
@@ -145,8 +145,9 @@ func ParseDirectives(text string) []Directive {
 
 // Setting is a directive to set at the top level.
 type Setting struct {
-	Name  string
-	Value string
+	Name string `yaml:"name"`
+
+	Value string `yaml:"value"`
 }
 
 // Change is what SetTopLevel did for one setting.
@@ -166,9 +167,10 @@ type Change struct {
 // SetTopLevel makes the top level of a configuration carry the settings: a
 // directive that is there with another value is rewritten in place (every
 // copy of it), one that is missing is put at the first line. Everything else
-// stays as it is. It returns the new text and what changed; a setting that is
+// stays as it is. It returns the new text, what changed, and the settings that
+// were missing and not added because addMissing is false. A setting that is
 // already as asked changes nothing.
-func SetTopLevel(text string, settings []Setting) (string, []Change) {
+func SetTopLevel(text string, settings []Setting, addMissing bool) (string, []Change, []Setting) {
 	ds := ParseDirectives(text)
 	type edit struct {
 		start, end int
@@ -177,6 +179,7 @@ func SetTopLevel(text string, settings []Setting) (string, []Change) {
 	var edits []edit
 	var changes []Change
 	var added []string
+	var skipped []Setting
 	for _, st := range settings {
 		found := false
 		old := ""
@@ -193,6 +196,8 @@ func SetTopLevel(text string, settings []Setting) (string, []Change) {
 			}
 		}
 		switch {
+		case !found && !addMissing:
+			skipped = append(skipped, st)
 		case !found:
 			added = append(added, st.Name+" "+st.Value+";")
 			changes = append(changes, Change{Name: st.Name, New: st.Value, Added: true})
@@ -207,7 +212,18 @@ func SetTopLevel(text string, settings []Setting) (string, []Change) {
 	if len(added) > 0 {
 		text = strings.Join(added, "\n") + "\n" + text
 	}
-	return text, changes
+	return text, changes, skipped
+}
+
+// HasTopLevelInclude tells whether the top level of a configuration includes
+// other files, which may hold directives that are not seen here.
+func HasTopLevelInclude(text string) bool {
+	for _, d := range ParseDirectives(text) {
+		if d.Block == "" && !d.IsBlock && d.Name == "include" {
+			return true
+		}
+	}
+	return false
 }
 
 // TopLevelValue is the value of the first top-level directive of that name.

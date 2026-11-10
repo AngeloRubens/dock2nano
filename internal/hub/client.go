@@ -6,7 +6,10 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,6 +103,9 @@ type Client struct {
 	// Now is the clock; the default is time.Now.
 	Now func() time.Time
 
+	// ManifestTimeout bounds the read of the list; zero means 30 seconds.
+	ManifestTimeout time.Duration
+
 	// TmpDir is where a tarball is kept while it is checked; empty uses the
 	// temporary directory of the machine.
 	TmpDir string
@@ -107,17 +113,30 @@ type Client struct {
 	mu     sync.Mutex
 	loaded bool
 	pkgs   []Package
+	err    error
 }
 
 // NewClient is a client of the hub with the real network and the folder of
 // the user for the copy of the list. The folder is optional: where the
 // machine has none, the list is not kept.
 func NewClient(toolName string) *Client {
-	c := &Client{BaseURL: DefaultBaseURL, HTTP: &http.Client{Timeout: 10 * time.Minute}}
+	c := &Client{BaseURL: DefaultBaseURL, HTTP: &http.Client{Timeout: 10 * time.Minute, CheckRedirect: refuseInsecureRedirect}}
 	if dir, err := os.UserCacheDir(); err == nil {
 		c.CacheDir = filepath.Join(dir, toolName)
 	}
 	return c
+}
+
+// refuseInsecureRedirect lets a redirect go to another host (the tarballs are
+// on a storage service) but only over https, and not more than ten times.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("the hub redirects to %s, which is not https", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return errors.New("the hub redirects more than 10 times")
+	}
+	return nil
 }
 
 func (c *Client) now() time.Time {
@@ -145,19 +164,54 @@ func (c *Client) get(ctx context.Context, address string) (io.ReadCloser, error)
 }
 
 // Manifest returns the list of packages of the hub. It is read once per
-// client, from the copy on disk when that is recent, else from the network.
+// client, from the copy on disk when that is recent, else from the network. A
+// failure is remembered for the life of the client, so that the hub is not
+// tried again for every service; when the network fails an old copy on disk
+// is used.
 func (c *Client) Manifest(ctx context.Context) ([]Package, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.loaded {
 		return c.pkgs, nil
 	}
-	if data, ok := c.readCache(); ok {
+	if c.err != nil {
+		return nil, c.err
+	}
+	if data, ok := c.readCache(false); ok {
 		if pkgs, err := parseManifest(data); err == nil {
 			c.pkgs, c.loaded = pkgs, true
 			return pkgs, nil
 		}
 	}
+	data, err := c.fetchManifest(ctx)
+	if err == nil {
+		var pkgs []Package
+		if pkgs, err = parseManifest(data); err == nil {
+			c.writeCache(data)
+			c.pkgs, c.loaded = pkgs, true
+			return pkgs, nil
+		}
+	}
+	if stale, ok := c.readCache(true); ok {
+		if pkgs, perr := parseManifest(stale); perr == nil {
+			c.pkgs, c.loaded = pkgs, true
+			return pkgs, nil
+		}
+	}
+	if ctx.Err() == nil {
+		c.err = err
+	}
+	return nil, err
+}
+
+// fetchManifest reads the list from the network, within ManifestTimeout.
+func (c *Client) fetchManifest(ctx context.Context) ([]byte, error) {
+	limit := c.ManifestTimeout
+	if limit <= 0 {
+		limit = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
 	body, err := c.get(ctx, c.BaseURL+"/v2/manifest.json")
 	if err != nil {
 		return nil, err
@@ -170,13 +224,7 @@ func (c *Client) Manifest(ctx context.Context) ([]Package, error) {
 	if len(data) > maxManifest {
 		return nil, fmt.Errorf("the list of the hub is larger than %d bytes", maxManifest)
 	}
-	pkgs, err := parseManifest(data)
-	if err != nil {
-		return nil, err
-	}
-	c.writeCache(data)
-	c.pkgs, c.loaded = pkgs, true
-	return pkgs, nil
+	return data, nil
 }
 
 // parseManifest reads the list: {"Version":2,"Packages":[...]}.
@@ -194,28 +242,32 @@ func parseManifest(data []byte) ([]Package, error) {
 	return m.Packages, nil
 }
 
+// cachePath is the copy of the list on disk; its name depends on the address
+// of the hub, so that two hubs do not share one.
 func (c *Client) cachePath() string {
 	if c.CacheDir == "" {
 		return ""
 	}
-	return filepath.Join(c.CacheDir, "hub-manifest-v2.json")
+	sum := sha256.Sum256([]byte(c.BaseURL))
+	return filepath.Join(c.CacheDir, "hub-manifest-v2-"+hex.EncodeToString(sum[:4])+".json")
 }
 
-// readCache returns the copy on disk when it is younger than MaxAge.
-func (c *Client) readCache() ([]byte, bool) {
+// readCache returns the copy on disk when it is younger than MaxAge, or at
+// any age when stale is true. A copy larger than the list may be is not read.
+func (c *Client) readCache(stale bool) ([]byte, bool) {
 	p := c.cachePath()
 	if p == "" {
 		return nil, false
 	}
 	fi, err := os.Stat(p)
-	if err != nil || !fi.Mode().IsRegular() {
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxManifest {
 		return nil, false
 	}
 	age := c.MaxAge
 	if age <= 0 {
 		age = defaultMaxAge
 	}
-	if c.now().Sub(fi.ModTime()) > age {
+	if !stale && c.now().Sub(fi.ModTime()) > age {
 		return nil, false
 	}
 	data, err := os.ReadFile(p)

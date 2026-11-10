@@ -21,6 +21,7 @@ type entry struct {
 	mode int64
 	typ  byte
 	link string
+	pax  map[string]string
 }
 
 func file(name, body string) entry {
@@ -40,7 +41,7 @@ func tarball(t *testing.T, entries []entry) []byte {
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
 	for _, e := range entries {
-		h := &tar.Header{Name: e.name, Mode: e.mode, Typeflag: e.typ, Linkname: e.link, Size: int64(len(e.body))}
+		h := &tar.Header{Name: e.name, Mode: e.mode, Typeflag: e.typ, Linkname: e.link, Size: int64(len(e.body)), PAXRecords: e.pax}
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
@@ -126,6 +127,8 @@ func (f *fakeHub) client(t *testing.T) *Client {
 	c := NewClient("dock2nano-test")
 	c.BaseURL = f.srv.URL
 	c.CacheDir = ""
+	// the test server is plain http; refuseInsecureRedirect has its own test
+	c.HTTP = &http.Client{}
 	c.TmpDir = t.TempDir()
 	return c
 }

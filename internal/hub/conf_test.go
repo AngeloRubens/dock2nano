@@ -93,7 +93,7 @@ func TestParseDirectivesEndsAtAFault(t *testing.T) {
 }
 
 func TestSetTopLevelRewritesAndAdds(t *testing.T) {
-	out, changes := SetTopLevel(userNginx, []Setting{{"master_process", "off"}, {"daemon", "off"}, {"worker_processes", "1"}})
+	out, changes, _ := SetTopLevel(userNginx, []Setting{{"master_process", "off"}, {"daemon", "off"}, {"worker_processes", "1"}}, true)
 	if !strings.HasPrefix(out, "master_process off;\ndaemon off;\n# the user's file\n") {
 		t.Errorf("the missing directives are not at the top:\n%s", out)
 	}
@@ -117,7 +117,7 @@ func TestSetTopLevelRewritesAndAdds(t *testing.T) {
 
 func TestSetTopLevelLeavesWhatIsRight(t *testing.T) {
 	text := "daemon off;\nworker_processes 1;\nevents {}\nhttp { server { daemon on; } }\n"
-	out, changes := SetTopLevel(text, []Setting{{"daemon", "off"}, {"worker_processes", "1"}})
+	out, changes, _ := SetTopLevel(text, []Setting{{"daemon", "off"}, {"worker_processes", "1"}}, true)
 	if out != text || len(changes) != 0 {
 		t.Errorf("changed: %q %+v", out, changes)
 	}
@@ -125,14 +125,14 @@ func TestSetTopLevelLeavesWhatIsRight(t *testing.T) {
 
 func TestSetTopLevelDoesNotTouchNestedDirectives(t *testing.T) {
 	text := "http {\n  daemon on;\n}\n"
-	out, changes := SetTopLevel(text, []Setting{{"daemon", "off"}})
+	out, changes, _ := SetTopLevel(text, []Setting{{"daemon", "off"}}, true)
 	if !strings.Contains(out, "  daemon on;\n") || !strings.HasPrefix(out, "daemon off;\n") || len(changes) != 1 || !changes[0].Added {
 		t.Errorf("%q %+v", out, changes)
 	}
 }
 
 func TestSetTopLevelRewritesEveryCopy(t *testing.T) {
-	out, _ := SetTopLevel("daemon on;\nworker_processes 4;\ndaemon on;\n", []Setting{{"daemon", "off"}})
+	out, _, _ := SetTopLevel("daemon on;\nworker_processes 4;\ndaemon on;\n", []Setting{{"daemon", "off"}}, true)
 	if strings.Count(out, "daemon off;") != 2 || strings.Contains(out, "daemon on") || !strings.Contains(out, "worker_processes 4;") {
 		t.Errorf("%q", out)
 	}
@@ -150,5 +150,37 @@ func TestTopLevelValueAndValues(t *testing.T) {
 	}
 	if got := Values(userNginx, "http"); got != nil {
 		t.Errorf("a block is not a value: %v", got)
+	}
+}
+
+func TestAHashInsideAWordIsNotAComment(t *testing.T) {
+	text := "http {\n  server {\n    return 301 https://example.com/#a;\n  }\n}\nworker_processes 4;\n"
+	if v, ok := TopLevelValue(text, "worker_processes"); !ok || v != "4" {
+		t.Errorf("%q %v", v, ok)
+	}
+	out, changes, _ := SetTopLevel(text, []Setting{{"worker_processes", "1"}}, true)
+	if len(changes) != 1 || changes[0].Old != "4" || !strings.Contains(out, "return 301 https://example.com/#a;") || !strings.HasSuffix(out, "worker_processes 1;\n") {
+		t.Errorf("%q %+v", out, changes)
+	}
+	// a hash that starts a word is a comment
+	if v, ok := TopLevelValue("a 1; # b 2;\nb 3;\n", "b"); !ok || v != "3" {
+		t.Errorf("%q %v", v, ok)
+	}
+}
+
+func TestAnIncludeAtTheTopLevelStopsTheAdditions(t *testing.T) {
+	text := "include /etc/nginx/modules/*.conf;\nworker_processes 4;\nevents {}\n"
+	if !HasTopLevelInclude(text) {
+		t.Fatal("the include is not seen")
+	}
+	if HasTopLevelInclude("http {\n  include mime.types;\n}\n") {
+		t.Error("an include inside a block is not at the top level")
+	}
+	out, changes, skipped := SetTopLevel(text, []Setting{{"daemon", "off"}, {"worker_processes", "1"}}, false)
+	if strings.Contains(out, "daemon") || !strings.Contains(out, "worker_processes 1;") {
+		t.Errorf("%q", out)
+	}
+	if len(changes) != 1 || changes[0].Name != "worker_processes" || len(skipped) != 1 || skipped[0].Name != "daemon" {
+		t.Errorf("%+v %+v", changes, skipped)
 	}
 }

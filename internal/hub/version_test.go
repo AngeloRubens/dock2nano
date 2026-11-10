@@ -79,8 +79,8 @@ func TestSelectExact(t *testing.T) {
 		t.Errorf("got %v %v", p.Version, lvl)
 	}
 	p, lvl = Select(pkgs, "nginx", "1.18", "amd64")
-	if lvl != Exact || p.Version != "1.18.0" {
-		t.Errorf("1.18 is 1.18.0: got %v %v", p.Version, lvl)
+	if lvl != Near || p.Version != "1.18.0" {
+		t.Errorf("1.18 may be any 1.18.x, so it is not exactly 1.18.0: got %v %v", p.Version, lvl)
 	}
 }
 
@@ -219,7 +219,11 @@ func TestImageNameAndVersion(t *testing.T) {
 		{"nginx:alpine", nil, ""},
 		{"postgres:latest", []string{"PG_VERSION=16.2-1.pgdg120+1"}, "16.2"},
 		{"my-app:latest", []string{"MY_APP_VERSION=3.1"}, "3.1"},
-		{"redis:7", []string{"REDIS_VERSION=7.2.4"}, "7"},
+		{"redis:7", []string{"REDIS_VERSION=7.2.4"}, "7.2.4"},
+		{"nginx:1.25", []string{"NGINX_VERSION=1.25.5"}, "1.25.5"},
+		{"nginx:1.25", []string{"NGINX_VERSION=1.26.0"}, "1.25"},
+		{"nginx:1.25.3", []string{"NGINX_VERSION=1.25.5"}, "1.25.3"},
+		{"nginx:1.25", nil, "1.25"},
 	}
 	for _, r := range rows {
 		if got := ImageVersion(r.ref, r.env); got != r.want {
@@ -229,7 +233,7 @@ func TestImageNameAndVersion(t *testing.T) {
 }
 
 func TestProgramNameAndNames(t *testing.T) {
-	for _, r := range [][2]string{{"/usr/sbin/nginx", "nginx"}, {"python3.11", "python"}, {"/usr/local/bin/node", "node"}, {"/bin/123", "123"}} {
+	for _, r := range [][2]string{{"/usr/sbin/nginx", "nginx"}, {"python3.11", "python"}, {"/usr/local/bin/node", "node"}, {"/bin/123", "123"}, {"x264", "x264"}, {"/usr/bin/s3", "s3"}} {
 		if got := ProgramName(r[0]); got != r[1] {
 			t.Errorf("ProgramName(%q) = %q, want %q", r[0], got, r[1])
 		}
@@ -253,6 +257,78 @@ func TestLevelString(t *testing.T) {
 	for _, r := range rows {
 		if r.l.String() != r.want {
 			t.Errorf("%d: %q", r.l, r.l.String())
+		}
+	}
+}
+
+func TestTagLessExactThanTheVariableIsRefinedByIt(t *testing.T) {
+	pkgs := []Package{pkg("eyberg", "nginx", "1.25.0", "x86_64"), pkg("eyberg", "nginx", "1.25.5", "x86_64")}
+	want := ImageVersion("nginx:1.25", []string{"NGINX_VERSION=1.25.5"})
+	p, lvl := Select(pkgs, "nginx", want, "amd64")
+	if p.Version != "1.25.5" || lvl != Exact {
+		t.Errorf("%v %v", p.Version, lvl)
+	}
+	// without the variable, 1.25 is not known to be 1.25.0
+	p, lvl = Select(pkgs[:1], "nginx", ImageVersion("nginx:1.25", nil), "amd64")
+	if p.Version != "1.25.0" || lvl != Near {
+		t.Errorf("%v %v", p.Version, lvl)
+	}
+}
+
+func TestAPrereleaseComesBeforeTheRelease(t *testing.T) {
+	rc, _ := ParseVersion("1.2.3rc1")
+	rel, _ := ParseVersion("1.2.3")
+	if rc.Compare(rel) >= 0 || rel.Compare(rc) <= 0 {
+		t.Errorf("%d %d", rc.Compare(rel), rel.Compare(rc))
+	}
+	pkgs := []Package{pkg("eyberg", "x", "1.2.3rc1", "x86_64"), pkg("eyberg", "x", "1.2.3", "x86_64")}
+	p, lvl := Select(pkgs, "x", "", "amd64")
+	if p.Version != "1.2.3" || lvl != Far {
+		t.Errorf("the newest is the release: %v %v", p.Version, lvl)
+	}
+}
+
+func TestEqualPackagesAreOrderedByTheirName(t *testing.T) {
+	a := pkg("zeta", "x", "1.0", "x86_64")
+	b := pkg("alpha", "x", "1.0", "x86_64")
+	for _, order := range [][]Package{{a, b}, {b, a}} {
+		if p, _ := Select(order, "x", "1.0", "amd64"); p.Namespace != "alpha" {
+			t.Errorf("got %s", p.Namespace)
+		}
+	}
+}
+
+func TestTheShippedTablesAreRead(t *testing.T) {
+	tb := loadedTables()
+	if len(tb.NamespacePreference) == 0 || tb.NamespacePreference[0] != "eyberg" {
+		t.Errorf("namespaces: %v", tb.NamespacePreference)
+	}
+	if !contains(tb.VersionEnv["postgres"], "PG_VERSION") {
+		t.Errorf("version variables: %v", tb.VersionEnv)
+	}
+	sp, ok := SingleProcessFor("NGINX")
+	if !ok || sp.ConfigFlag != "-c" || len(sp.Settings) != 3 || sp.Settings[0] != (Setting{"master_process", "off"}) || sp.Settings[2] != (Setting{"worker_processes", "1"}) {
+		t.Errorf("nginx: %+v %v", sp, ok)
+	}
+	if _, ok := SingleProcessFor("other"); ok {
+		t.Error("a program that is not in the table")
+	}
+}
+
+func TestParseTables(t *testing.T) {
+	good := "namespace_preference: [a]\nsingle_process:\n  x:\n    config_paths: [/x.conf]\n    settings:\n      - {name: n, value: v}\n"
+	tb, err := ParseTables([]byte(good))
+	if err != nil || tb.SingleProcess["x"].Settings[0].Value != "v" {
+		t.Fatalf("%+v %v", tb, err)
+	}
+	for _, bad := range []string{
+		"typo: 1\n",
+		"single_process:\n  x:\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    settings:\n      - {name: n}\n",
+	} {
+		if _, err := ParseTables([]byte(bad)); err == nil {
+			t.Errorf("accepted: %q", bad)
 		}
 	}
 }
