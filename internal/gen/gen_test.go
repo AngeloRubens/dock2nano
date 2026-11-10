@@ -1124,7 +1124,7 @@ func TestLauncherProgramWithoutReadableScript(t *testing.T) {
 	o.Program = "/bin/sh"
 	o.Argv = []string{"sh", "-c", "yarn start"}
 	p := mustGen(t, in)
-	want1(t, p, "web", plan.Unsupported, "launcher", "the observed program is yarn")
+	want1(t, p, "web", plan.Unsupported, "launcher", "the observed program runs yarn")
 	want1(t, p, "web", plan.Unsupported, "launcher", "could not be read")
 }
 
