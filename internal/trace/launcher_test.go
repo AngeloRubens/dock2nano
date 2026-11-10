@@ -49,7 +49,7 @@ func TestLauncher(t *testing.T) {
 		{"env -i prefix", "/bin/sh", []string{"sh", "-c", "env -i PATH=/bin npm start"}, "npm", []string{"start"}},
 		{"node require option with a value", "/usr/local/bin/node", []string{"node", "-r", "dotenv/config", "/usr/local/bin/npm", "start"}, "npm", []string{"start"}},
 		{"node import option with a value", "/usr/local/bin/node", []string{"node", "--import", "x", "/usr/local/bin/npm", "start"}, "npm", []string{"start"}},
-		{"node eval", "/usr/local/bin/node", []string{"node", "-e", "require('/usr/local/bin/npm')"}, "", nil},
+		{"node eval", "/usr/local/bin/node", []string{"node", "-e", "/usr/local/bin/npm"}, "", nil},
 		{"node print", "/usr/local/bin/node", []string{"node", "-p", "/usr/local/bin/npm"}, "", nil},
 		{"node stdin", "/usr/local/bin/node", []string{"node", "-", "/usr/local/bin/npm"}, "", nil},
 		{"node value of an option is not the script", "/usr/local/bin/node", []string{"node", "--title", "/usr/local/bin/npm", "server.js"}, "", nil},
