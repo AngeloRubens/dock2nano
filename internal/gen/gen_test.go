@@ -1672,3 +1672,28 @@ func TestStartOrderNoteIsNotMadeWhenTheOrderIsRight(t *testing.T) {
 	web.DependsOn = []compose.Dependency{{Service: "db"}}
 	wantNone(t, mustGen(t, newInput(&fake{}, web, db)), "web", plan.Note, "start order")
 }
+
+func TestNameAtStartNoteForConfigurationNamingAnotherService(t *testing.T) {
+	proxy, backend := svc("proxy"), svc("backend")
+	proxy.DependsOn = []compose.Dependency{{Service: "backend"}}
+	f := &fake{files: map[string]string{}}
+	f.files["/tmp/sys-proxy/etc/nginx/conf.d/default.conf"] = "upstream x { server backend.service:80; }"
+	f.files["/tmp/sys-proxy/etc/nginx/other.conf"] = "server_name backends;"
+	in := newInput(f, backend, proxy)
+	in.Services["proxy"].Observed.ConfigurationFiles = []string{"/etc/nginx/conf.d/default.conf", "/etc/nginx/other.conf"}
+	p := mustGen(t, in)
+	want1(t, p, "proxy", plan.Note, "name at start", "/etc/nginx/conf.d/default.conf")
+	got := itemsOf(p, "proxy", plan.Note, "name at start")
+	if strings.Contains(got[0].Message, "other.conf") {
+		t.Errorf("a file that does not name a service is listed: %q", got[0].Message)
+	}
+	wantNone(t, p, "backend", plan.Note, "name at start")
+}
+
+func TestNameAtStartNoteIsNotMadeWithoutAName(t *testing.T) {
+	proxy, backend := svc("proxy"), svc("backend")
+	f := &fake{files: map[string]string{"/tmp/sys-proxy/etc/app.conf": "listen 80;"}}
+	in := newInput(f, backend, proxy)
+	in.Services["proxy"].Observed.ConfigurationFiles = []string{"/etc/app.conf"}
+	wantNone(t, mustGen(t, in), "proxy", plan.Note, "name at start")
+}

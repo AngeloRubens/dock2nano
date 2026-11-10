@@ -177,6 +177,7 @@ func Generate(in Input) (*plan.Plan, error) {
 	}
 	g.networkNote(pkgOf)
 	g.startOrderNote()
+	g.nameAtStartNote(pkgOf)
 	g.envNote()
 	if len(g.plan.Services) == 0 {
 		return g.plan, errors.New("no service could be converted: see the report")
@@ -782,6 +783,50 @@ func (g *generator) startOrderNote() {
 			if len(vars) > 0 {
 				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml starts %s before %s and the compose file does not say that %s depends on %s: ops compose starts the packages in that order and waits only for an address, so %s may start before %s is there; list %s first in compose.yaml if it does not connect", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, other.Name))
 			}
+		}
+	}
+}
+
+// nameAtStartNote says, for a service whose configuration files name another converted service,
+// that the program may look the name up when it starts, before the network of the guest has an
+// address, and exit with "host not found". nginx does this for the host of an upstream or of
+// proxy_pass: with the plain compose file it ends with "host not found in upstream". Starting the
+// other service first does not help, since the lookup fails on the network of this guest. The
+// files of the user are not changed: the report says what to do. Only the names of the files are
+// given, never their content.
+func (g *generator) nameAtStartNote(pkgOf map[string]string) {
+	for _, svc := range g.plan.Services {
+		si := g.in.Services[svc.Name]
+		if si.Observed == nil || si.Observed.Sysroot == "" {
+			continue
+		}
+		var files []string
+		for _, f := range si.Observed.ConfigurationFiles {
+			switch f {
+			case "/etc/hosts", "/etc/resolv.conf", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf":
+				continue
+			}
+			data, err := g.in.ReadFile(filepath.Join(si.Observed.Sysroot, f))
+			if err != nil {
+				continue
+			}
+			named := false
+			for _, t := range nameTokens(string(data)) {
+				for _, other := range g.plan.Services {
+					if other.Name == svc.Name {
+						continue
+					}
+					if t == other.Name || t == other.Name+".service" || t == pkgOf[other.Name] || t == pkgOf[other.Name]+".service" {
+						named = true
+					}
+				}
+			}
+			if named {
+				files = append(files, f)
+			}
+		}
+		if len(files) > 0 {
+			g.add(svc.Name, plan.Note, "name at start", "the configuration "+listed(files)+" names another service; a program that looks the name up when it starts (nginx, for the host of an upstream or proxy_pass) can exit with \"host not found\" because the network of the guest has no address yet, even when the other service is started first; if it does, use a form that looks the name up when a request comes (in nginx a resolver directive and a variable in proxy_pass) or start the service again once it is up")
 		}
 	}
 }
