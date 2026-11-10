@@ -790,14 +790,24 @@ func (g *generator) startOrderNote() {
 
 // hostWords returns the words of a line that can be a host name: the words of nameTokens, without
 // a trailing dot, and without those that follow a slash (a path segment such as /srv/backend),
-// except right after "://", where the host of a URL starts.
+// except right after "//" (the host of a URL, or of a protocol-relative //host). Text after an
+// unquoted " #" or tab and # is an inline comment and is skipped; ';' comments of .ini and .cnf
+// files are not skipped. It can over-report: a path written with backslashes and the groups of an
+// IPv6 address are split into words like any other text.
+const hostWordChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+
 func hostWords(line string) []string {
 	var out []string
+	for _, mark := range []string{" #", "\t#"} {
+		if i := strings.Index(line, mark); i >= 0 {
+			line = line[:i]
+		}
+	}
 	pos := 0
 	for _, t := range nameTokens(line) {
 		i := pos + strings.Index(line[pos:], t)
 		pos = i + len(t)
-		if i > 0 && line[i-1] == '/' && !(i >= 3 && line[i-3:i] == "://") {
+		if i > 0 && line[i-1] == '/' && !(i >= 2 && line[i-2] == '/' && (i == 2 || line[i-3] != '/' && !strings.ContainsRune(hostWordChars, rune(line[i-3])) || line[i-3] == ':')) {
 			continue
 		}
 		if t = strings.TrimRight(t, "."); t != "" {
@@ -815,11 +825,12 @@ func hostWords(line string) []string {
 // answers <pkg>.service; with --short-names <pkg> also resolves through the search line of
 // resolv.conf; a bare compose name does not resolve. A resolver of the program needs the address
 // of the dns and the .service form: nginx does not read the search line of resolv.conf for its
-// resolver directive. Only the files in ConfigurationFiles are read: the files under /etc and
-// those outside /etc with one of the extensions .conf .cnf .ini .yaml .yml .toml .properties
+// resolver directive. Only the files in ConfigurationFiles are read: the files under /etc that the
+// trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
+// extensions .conf .cnf .ini .yaml .yml .toml .properties, matched in lower case only
 // (haproxy.cfg under /etc is read, one outside /etc is not); names on the command line or in
 // environment variables are not checked here. Lines that start with # are skipped, words that
-// follow a slash are path segments and are skipped (except after ://), files over 1 MiB or with a
+// follow a slash are path segments and are skipped (except after //), files over 1 MiB or with a
 // NUL byte in the first 4 KB are skipped. Every distinct word found in a file is reported, with
 // the name of the file and the word, never the content.
 func (g *generator) nameAtStartNote(pkgOf map[string]string) {
@@ -864,15 +875,20 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			if err != nil || len(data) > 1<<20 || slices.Contains(data[:min(len(data), 4096)], 0) {
 				continue
 			}
-			hits := map[string]cand{}
+			// keyed by the lower case word; the first spelling is kept for the report
+			type hit struct {
+				word string
+				c    cand
+			}
+			hits := map[string]hit{}
 			for _, line := range strings.Split(string(data), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "#") {
 					continue
 				}
 				for _, t := range hostWords(line) {
 					if x, ok := cands[strings.ToLower(t)]; ok {
-						if _, seen := hits[t]; !seen {
-							hits[t] = x
+						if _, seen := hits[strings.ToLower(t)]; !seen {
+							hits[strings.ToLower(t)] = hit{t, x}
 						}
 					}
 				}
@@ -882,8 +898,8 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 				words = append(words, w)
 			}
 			sort.Strings(words)
-			for _, w := range words {
-				c := hits[w]
+			for _, k := range words {
+				w, c := hits[k].word, hits[k].c
 				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
 				if c.ok {
 					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", head, c.service, pkgOf[c.service]))
@@ -942,7 +958,7 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	}
 	var msg string
 	if g.in.ShortNames {
-		msg = "a service reaches another by its compose name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
+		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
 	} else {
 		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
 	}
