@@ -958,3 +958,20 @@ func ConfigurationFiles(sysroot string) []string {
 
 	return found
 }
+
+// LinkHostFile makes a symbolic link with the text it had at name in sysroot, unless something is
+// there already. The text is relative, so it leads to the same file from the new place as it did in
+// the image, provided that file was carried.
+func LinkHostFile(sysroot string, text string, name string) error {
+	destination := filepath.Join(sysroot, name)
+	if _, err := os.Lstat(destination); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return fmt.Errorf("link %s: %w", destination, err)
+	}
+	if err := os.Symlink(text, destination); err != nil {
+		return fmt.Errorf("link %s: %w", destination, err)
+	}
+	return nil
+}

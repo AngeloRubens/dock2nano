@@ -513,11 +513,17 @@ func TestObserveSuccess(t *testing.T) {
 		}
 		return string(b)
 	}
-	equal(t, "alias is a copy of the link target", read("lib/libc.so"), "libc")
+	equal(t, "a relative link reads as its target", read("lib/libc.so"), "libc")
 	equal(t, "console link is empty", read("var/log/app.log"), "")
 	equal(t, "relative path read against the start directory of the container", read("app/rel.txt"), "relative")
-	if st, err := os.Lstat(filepath.Join(res.Sysroot, "lib/libc.so")); err != nil || !st.Mode().IsRegular() {
-		t.Errorf("lib/libc.so is not a regular file: %v %v", st, err)
+	// a relative link stays a link, with the text it had: its target is found beside the file it
+	// really is
+	if text, err := os.Readlink(filepath.Join(res.Sysroot, "lib/libc.so")); err != nil || text != "libc.so.6" {
+		t.Errorf("lib/libc.so is not a link to libc.so.6: %q %v", text, err)
+	}
+	// an absolute link is not kept: it names a path of the machine that builds the image
+	if st, err := os.Lstat(filepath.Join(res.Sysroot, "var/log/app.log")); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("var/log/app.log is a link: %v %v", st, err)
 	}
 
 	// the program and its command line come from /proc

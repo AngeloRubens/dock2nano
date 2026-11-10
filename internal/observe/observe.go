@@ -1427,9 +1427,11 @@ func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (f
 }
 
 // copyTouched copies the files that were opened out of the container into sysroot. A package does
-// not carry a symbolic link: an absolute one names a path of the machine that builds the image, not
-// of the image. What a link leads to is carried instead, under the name of the link and under its
-// own. A path that Docker cannot give (a file that was there at the time and is not any more, a
+// not carry an absolute symbolic link: it names a path of the machine that builds the image, not
+// of the image. What such a link leads to is carried instead, under the name of the link and under
+// its own. A relative link is kept as a link when what it leads to is carried: a program finds its
+// own files beside the file it really is (npm is a link, and its modules are found from the file
+// the link leads to, which a copy under the name of the link would not have beside it). A path that Docker cannot give (a file that was there at the time and is not any more, a
 // socket, a device) is a warning; a failure to write to the sysroot, or the end of ctx, is an
 // error.
 func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths []string) error {
@@ -1438,7 +1440,16 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	carried := map[string]bool{}
 	// the names a path was reached by, through links
 	aliases := map[string][]string{}
+	// the text of the relative links, by the name they were reached by
+	relative := map[string]string{}
 	queue := slices.Clone(paths)
+	// place puts what link leads to under name: a link with the text it had, or a copy
+	place := func(link, name string) error {
+		if text, ok := relative[name]; ok {
+			return trace.LinkHostFile(sysroot, text, name)
+		}
+		return trace.CopyHostFile(sysroot, link, name)
+	}
 
 	notCarried := func(p string, why string) {
 		text := r.redact(fmt.Sprintf("not carried %s: %s", p, why))
@@ -1479,6 +1490,9 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 		switch got.kind {
 		case kindLink:
 			link := trace.ResolveLink(p, got.link)
+			if !strings.HasPrefix(got.link, "/") {
+				relative[p] = got.link
+			}
 			names := append([]string{p}, aliases[p]...)
 			aliases[link] = append(aliases[link], names...)
 			switch {
@@ -1498,7 +1512,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 			case done[link]:
 				// it was carried already, under its own name
 				for _, name := range names {
-					if err := trace.CopyHostFile(sysroot, link, name); err != nil {
+					if err := place(link, name); err != nil {
 						return fmt.Errorf("observe: copying %s to %s: %w", link, name, err)
 					}
 				}
@@ -1508,7 +1522,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 		case kindDir, kindFile:
 			carried[p] = true
 			for _, name := range aliases[p] {
-				if err := trace.CopyHostFile(sysroot, p, name); err != nil {
+				if err := place(p, name); err != nil {
 					return fmt.Errorf("observe: copying %s to %s: %w", p, name, err)
 				}
 			}

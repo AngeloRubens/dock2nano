@@ -76,10 +76,23 @@ jobs:
             echo "no changes for ${{ matrix.name }}"
           fi
       - name: compose up
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           cd /tmp/out
-          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1 || echo "ops compose up failed: $?"
+          # ops finds the address of a guest with ps and arp, which does not always turn it up in
+          # the 30 seconds it waits: ops now says so and exits with an error, then try again from a
+          # clean state, up to three times
+          for attempt in 1 2 3; do
+            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
+              echo "ops compose up: ok (attempt $attempt)"; break
+            fi
+            echo "ops compose up failed (attempt $attempt)"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" /tmp/out/up.log | cut -c1-200 | tail -6
+            cp /tmp/out/up.log /tmp/out/up-attempt-$attempt.log
+            test "$attempt" -lt 3 || break
+            sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true
+            sleep 5
+          done
           grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | cut -c1-300 | tail -30
       - name: probe
         if: always()
