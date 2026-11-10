@@ -1,0 +1,18 @@
+# Programs for which the ops package hub (https://repo.ops.city) holds a
+# special build that has to be used whole: its files, not the files of the
+# image of the user. A row matches by the name of the image and the program
+# that was observed, and a package of the hub is taken only if its namespace
+# and name are listed.
+#
+# No row is active yet. A row becomes active only after a CI run shows that
+# the package of the hub starts and answers on nanos. This is the row that
+# is waiting for that proof (postgres forks one process per connection,
+# nanos has no fork, and the hub builds use threads):
+#
+#  - images: [postgres, postgresql]
+#    programs: [postgres]
+#    packages:
+#      - francescolavra/postgres
+#      - eyberg/postgresql
+#    reason: postgres starts a process per connection; the hub builds run it with threads
+rows: []

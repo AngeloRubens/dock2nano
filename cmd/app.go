@@ -14,6 +14,7 @@ import (
 
 	"github.com/AngeloRubens/dock2nano/internal/docker"
 	"github.com/AngeloRubens/dock2nano/internal/gen"
+	"github.com/AngeloRubens/dock2nano/internal/hub"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/output"
 	"github.com/AngeloRubens/dock2nano/internal/plan"
@@ -72,6 +73,12 @@ Flags of convert:
                      the compose file does not say it needs; the service is also listed before
                      them in compose.yaml
   --service NAME     convert only this service (can be repeated)
+  --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this flag
+                     the hub is read only for a program that did not start as one process (the
+                     container stopped, or the program started child processes), to take from the
+                     nearest package its recipe: arguments, directives of the configuration,
+                     environment. The files stay the ones of your image, and the report names the
+                     package, its digest and how its version differs from yours
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
 item in the report.
@@ -125,6 +132,14 @@ type App struct {
 	UserHomeDir func() (string, error)
 	// RemoveAll removes the sysroots that are not used any more.
 	RemoveAll func(string) error
+	// Hub reads the hub of ops packages. It is not used with --no-hub.
+	Hub hub.Source
+	// HubRequired is the table of programs whose build of the hub must be used
+	// whole.
+	HubRequired []hub.Required
+	// MkdirTemp makes the directory a package of the hub is written to; the
+	// default is os.MkdirTemp.
+	MkdirTemp func(dir, pattern string) (string, error)
 }
 
 // Run runs the command line with the real Docker, the real observer and the
@@ -178,6 +193,10 @@ func newApp() *App {
 	a.ReadFile = os.ReadFile
 	a.UserHomeDir = os.UserHomeDir
 	a.RemoveAll = os.RemoveAll
+	a.Hub = hub.NewClient(ToolName)
+	// the table that ships in the binary is checked by a test
+	a.HubRequired, _ = hub.DefaultRequired()
+	a.MkdirTemp = os.MkdirTemp
 	return a
 }
 
@@ -194,6 +213,7 @@ type options struct {
 	force       bool
 	strict      bool
 	shortNames  bool
+	noHub       bool
 	exercise    []string
 	exerciseCmd []string
 	with        []string
@@ -254,6 +274,7 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	set.BoolVar(&o.force, "force", false, "")
 	set.BoolVar(&o.strict, "strict", false, "")
 	set.BoolVar(&o.shortNames, "short-names", false, "")
+	set.BoolVar(&o.noHub, "no-hub", false, "")
 	set.Func("with", "", func(v string) error {
 		if v == "" {
 			return errors.New("the service of --with is empty")

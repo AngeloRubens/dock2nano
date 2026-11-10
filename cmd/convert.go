@@ -527,6 +527,9 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
+	if err := a.hubStep(ctx, o, rs.skipped, s, image, s.Build != nil, &si); err != nil {
+		return si, err
+	}
 	return si, nil
 }
 

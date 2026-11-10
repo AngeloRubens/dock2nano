@@ -49,6 +49,10 @@ type ServiceInput struct {
 	// Stage is the final stage of the Dockerfile of the service, when the
 	// service is built from one. It may be nil.
 	Stage *dockerfile.Stage
+
+	// HubItems are the report items about the hub of ops packages for this
+	// service (see ApplyHubRecipe); they are added to the report as they are.
+	HubItems []plan.Item
 }
 
 // Input is everything Generate needs.
@@ -360,6 +364,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.identity(s, si, obs, &m)
 	g.unknown(s, si)
 	g.observed(s, obs)
+	g.plan.Report = append(g.plan.Report, si.HubItems...)
 	m.BaseVolumeSz = volumeSize(obs.Sysroot)
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
 }
