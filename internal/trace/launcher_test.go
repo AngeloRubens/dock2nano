@@ -62,7 +62,7 @@ func TestLauncher(t *testing.T) {
 		{"corepack in a shell line", "/bin/sh", []string{"sh", "-c", "corepack yarn start"}, "yarn", []string{"start"}},
 		{"corepack alone", "/usr/local/bin/corepack", []string{"corepack", "enable"}, "", nil},
 		{"corepack store", "/usr/local/bin/node", []string{"node", "/root/.cache/node/corepack/v1/yarn/1.22.19/bin/yarn.js", "start"}, "yarn", []string{"start"}},
-		{"a directory that only has corepack in its name", "/usr/local/bin/node", []string{"node", "/app/corepack-demo/yarn.js", "start"}, "", nil},
+		{"a directory of the user called corepack", "/usr/local/bin/node", []string{"node", "/app/corepack/yarn.js", "start"}, "", nil},
 		{"shell option cluster -ec", "/bin/sh", []string{"sh", "-ec", "npm start"}, "npm", []string{"start"}},
 		{"shell option cluster -lc", "/bin/bash", []string{"bash", "-lc", "yarn start"}, "yarn", []string{"start"}},
 		{"shell -x is not a command option", "/bin/sh", []string{"sh", "-x", "npm start"}, "", nil},
