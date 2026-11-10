@@ -155,11 +155,15 @@ func (slowDoer) Do(req *http.Request) (*http.Response, error) {
 
 func TestManifestHasATimeout(t *testing.T) {
 	c := &Client{BaseURL: "https://hub.invalid", HTTP: slowDoer{}, ManifestTimeout: 20 * time.Millisecond}
+	// the context ends after three seconds, so that a missing timeout shows
+	// as a slow answer and not as a test that never ends
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	start := time.Now()
-	if _, err := c.Manifest(context.Background()); err == nil {
+	if _, err := c.Manifest(ctx); err == nil {
 		t.Fatal("no error")
 	}
-	if time.Since(start) > 5*time.Second {
+	if time.Since(start) > 2*time.Second {
 		t.Errorf("it took %v", time.Since(start))
 	}
 }

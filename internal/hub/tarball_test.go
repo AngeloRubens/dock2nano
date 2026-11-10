@@ -275,7 +275,7 @@ func TestFetchWholeNeedsTheProgram(t *testing.T) {
 func TestEntriesThatAreNotThePackageAreIgnored(t *testing.T) {
 	f := newFakeHub(t)
 	p := f.add(pkg("a", "x", "1.0", "x86_64"), tarball(t, []entry{
-		{name: "pax_global_header", typ: tar.TypeXGlobalHeader, pax: map[string]string{"comment": "abc"}},
+		{name: "g/pax_global_header", typ: tar.TypeXGlobalHeader, pax: map[string]string{"comment": "abc"}},
 		file("stray", "x"),
 		dir("pg_16.2/"),
 		file("pg_16.2/package.manifest", `{"Program":"pg_16.2/postgres"}`),
