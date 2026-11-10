@@ -2595,6 +2595,37 @@ func TestObservePassesOverALauncherToTheProgramItStarted(t *testing.T) {
 	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start"})
 }
 
+func TestObservePassedOverCommandLineIsRedacted(t *testing.T) {
+	s := newScene(t)
+	s.o.Env = []string{"API_KEY=supersecretvalue"}
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "-c", "exec npm start -- --key supersecretvalue"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/npm", ["npm", "start", "--", "--key", "supersecretvalue"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.PassedOver) != 2 {
+		t.Fatalf("passed over %q, want 2 command lines", res.PassedOver)
+	}
+	for _, c := range res.PassedOver {
+		if strings.Contains(c, "supersecretvalue") {
+			t.Errorf("command line %q holds the value of API_KEY", c)
+		}
+	}
+}
+
+func TestObservePassedOverWithoutArgvIsGivenByPath(t *testing.T) {
+	s := newScene(t)
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */`, `"/usr/local/bin/npm", 0x7ffd, 0x7ffd /* 4 vars */`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "passed over", res.PassedOver, []string{"/usr/local/bin/npm"})
+}
+
 func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
 	s := newScene(t)
 	// the paths are asked for in order: the file first, then the link that leads to it

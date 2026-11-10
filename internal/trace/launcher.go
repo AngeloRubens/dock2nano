@@ -27,6 +27,16 @@ var berryFile = regexp.MustCompile(`^yarn-\d[^/]*\.c?js$`)
 // yarnClassicDir is the directory of yarn 1 as the image of node installs it (/opt/yarn-v1.22.19/bin).
 var yarnClassicDir = regexp.MustCompile(`/yarn-v[^/]+/bin$`)
 
+// corepackStore is the directory the store of corepack keeps the package managers in.
+var corepackStore = regexp.MustCompile(`/(node/corepack|corepack/v\d+)/`)
+
+// nvmBin, voltaBin and npmGlobalBin are the bin directories that node version managers and
+// "npm config set prefix" make: the links to the launchers are there.
+var (
+	nvmBin       = regexp.MustCompile(`/node/v[^/]+/bin$`)
+	npmGlobalBin = regexp.MustCompile(`/\.npm-global/bin$`)
+)
+
 // nodeExtension is the extension of a file node runs.
 func nodeExtension(b string) string {
 	for _, ext := range []string{".js", ".cjs", ".mjs"} {
@@ -44,13 +54,21 @@ func launcherFile(p string) string {
 	switch {
 	case binDirs[d] && launcherSet[b]:
 		return b
+	case (nvmBin.MatchString(d) || npmGlobalBin.MatchString(d) || (strings.Contains(d, "/.volta/") && strings.HasSuffix(d, "/bin"))) && launcherSet[b]:
+		return b
+	case (binDirs[d] || nvmBin.MatchString(d) || npmGlobalBin.MatchString(d)) && b == "corepack":
+		return "corepack"
+	case strings.HasSuffix(d, "/node_modules/corepack/dist") && nodeExtension(b) == "corepack":
+		return "corepack"
+	case strings.HasSuffix(d, "/node_modules/yarn/bin") && (b == "yarn.js" || b == "yarn"):
+		return "yarn"
 	case strings.HasSuffix(d, "/node_modules/npm/bin") && (b == "npm-cli.js" || b == "npx-cli.js"):
 		return strings.TrimSuffix(b, "-cli.js")
 	case (strings.HasSuffix(d, "/node_modules/pnpm/bin") || strings.HasSuffix(d, "/node_modules/pnpm/dist")) && (b == "pnpm.cjs" || b == "pnpm.js"):
 		return "pnpm"
 	case strings.HasSuffix(d, "/node_modules/corepack/dist") && launcherSet[nodeExtension(b)] && nodeExtension(b) != b:
 		return nodeExtension(b)
-	case strings.Contains(d, "/corepack/") && launcherSet[nodeExtension(b)] && nodeExtension(b) != b:
+	case corepackStore.MatchString(d+"/") && launcherSet[nodeExtension(b)] && nodeExtension(b) != b:
 		return nodeExtension(b)
 	case yarnClassicDir.MatchString(d) && (nodeExtension(b) == "yarn" || nodeExtension(b) == "yarnpkg"):
 		return nodeExtension(b)
@@ -89,6 +107,18 @@ var compound = []string{"&", "|", ";", "\n", "`", "$(", `"`, "'"}
 // env, env -i or variable assignments. A busybox that is a shell by argv[0] counts as a shell.
 // rest is the arguments the launcher was given.
 func Launcher(program string, argv []string) (name string, rest []string, ok bool) {
+	name, rest, ok = launcherRaw(program, argv)
+	if ok && name == "corepack" {
+		// corepack <package manager> <arguments>
+		if len(rest) > 0 && launcherSet[rest[0]] {
+			return rest[0], rest[1:], true
+		}
+		return "", nil, false
+	}
+	return name, rest, ok
+}
+
+func launcherRaw(program string, argv []string) (name string, rest []string, ok bool) {
 	if n := launcherFile(program); n != "" {
 		if len(argv) > 0 {
 			rest = argv[1:]
@@ -141,7 +171,7 @@ func Launcher(program string, argv []string) (name string, rest []string, ok boo
 	}
 	// a shell: only the form "-c command"
 	for i, a := range args {
-		if a != "-c" || i+1 >= len(args) {
+		if !shellCommandOption(a) || i+1 >= len(args) {
 			continue
 		}
 		text := args[i+1]
@@ -151,12 +181,21 @@ func Launcher(program string, argv []string) (name string, rest []string, ok boo
 			}
 		}
 		words := strings.Fields(text)
-		for len(words) > 0 && (words[0] == "exec" || words[0] == "env" || words[0] == "-i" || (!strings.HasPrefix(words[0], "-") && strings.Contains(words[0], "="))) {
-			words = words[1:]
+	strip:
+		for len(words) > 0 {
+			switch {
+			case words[0] == "-u" && len(words) > 1:
+				// env -u NAME
+				words = words[2:]
+			case words[0] == "exec" || words[0] == "env" || words[0] == "-i" || (!strings.HasPrefix(words[0], "-") && strings.Contains(words[0], "=")):
+				words = words[1:]
+			default:
+				break strip
+			}
 		}
 		if len(words) > 0 {
 			// the command is looked up in PATH: it is a launcher by its name
-			if launcherSet[words[0]] {
+			if launcherSet[words[0]] || words[0] == "corepack" {
 				return words[0], words[1:], true
 			}
 			if n := launcherFile(words[0]); n != "" {
@@ -166,6 +205,20 @@ func Launcher(program string, argv []string) (name string, rest []string, ok boo
 		return "", nil, false
 	}
 	return "", nil, false
+}
+
+// shellCommandOption tells whether an argument of a shell is -c, or a cluster of single letter
+// options that ends in c (-ec, -lc), which is followed by the command.
+func shellCommandOption(a string) bool {
+	if len(a) < 2 || a[0] != '-' || a[len(a)-1] != 'c' {
+		return false
+	}
+	for _, r := range a[1:] {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func firstOf(argv []string) string {
@@ -180,6 +233,14 @@ func firstOf(argv []string) string {
 var dirOptions = map[string]bool{
 	"--cwd": true, "-C": true, "--dir": true, "--prefix": true, "--filter": true, "-F": true,
 	"-w": true, "--workspace": true,
+}
+
+// valueOptions are the other options, per launcher, that take the next argument as their value, so
+// that the value is not taken for the name of a script.
+var valueOptions = map[string]map[string]bool{
+	"npm":  {"--loglevel": true, "--userconfig": true, "--cache": true, "--registry": true, "--script-shell": true},
+	"yarn": {"--network-timeout": true, "--mutex": true, "--modules-folder": true, "--cache-folder": true},
+	"pnpm": {"--reporter": true, "--loglevel": true},
 }
 
 // builtins are the commands of yarn and pnpm that are not the name of a script.
@@ -213,6 +274,8 @@ loop:
 				if !hasValue && !(name == "-w" && launcher == "pnpm") {
 					i++
 				}
+			} else if !hasValue && valueOptions[strings.TrimSuffix(launcher, "pkg")][name] {
+				i++
 			}
 		default:
 			words = append(words, a)

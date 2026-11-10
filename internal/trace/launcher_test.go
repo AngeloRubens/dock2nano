@@ -52,6 +52,21 @@ func TestLauncher(t *testing.T) {
 		{"node eval", "/usr/local/bin/node", []string{"node", "-e", "/usr/local/bin/npm"}, "", nil},
 		{"node print", "/usr/local/bin/node", []string{"node", "-p", "/usr/local/bin/npm"}, "", nil},
 		{"node stdin", "/usr/local/bin/node", []string{"node", "-", "/usr/local/bin/npm"}, "", nil},
+		{"nvm layout", "/root/.nvm/versions/node/v20.15.0/bin/node", []string{"node", "/root/.nvm/versions/node/v20.15.0/bin/npm", "start"}, "npm", []string{"start"}},
+		{"nvm link as the program", "/home/app/.nvm/versions/node/v18.0.0/bin/yarn", []string{"yarn", "dev"}, "yarn", []string{"dev"}},
+		{"npm-global layout", "/usr/local/bin/node", []string{"node", "/home/app/.npm-global/bin/pnpm", "dev"}, "pnpm", []string{"dev"}},
+		{"volta layout", "/usr/local/bin/node", []string{"node", "/root/.volta/bin/yarn", "start"}, "yarn", []string{"start"}},
+		{"yarn from npm", "/usr/local/bin/node", []string{"node", "/usr/local/lib/node_modules/yarn/bin/yarn.js", "start"}, "yarn", []string{"start"}},
+		{"corepack runs a package manager", "/usr/local/bin/node", []string{"node", "/usr/local/lib/node_modules/corepack/dist/corepack.js", "yarn", "start"}, "yarn", []string{"start"}},
+		{"corepack link as the program", "/usr/local/bin/corepack", []string{"corepack", "pnpm", "run", "dev"}, "pnpm", []string{"run", "dev"}},
+		{"corepack in a shell line", "/bin/sh", []string{"sh", "-c", "corepack yarn start"}, "yarn", []string{"start"}},
+		{"corepack alone", "/usr/local/bin/corepack", []string{"corepack", "enable"}, "", nil},
+		{"corepack store", "/usr/local/bin/node", []string{"node", "/root/.cache/node/corepack/v1/yarn/1.22.19/bin/yarn.js", "start"}, "yarn", []string{"start"}},
+		{"a directory that only has corepack in its name", "/usr/local/bin/node", []string{"node", "/app/corepack-demo/yarn.js", "start"}, "", nil},
+		{"shell option cluster -ec", "/bin/sh", []string{"sh", "-ec", "npm start"}, "npm", []string{"start"}},
+		{"shell option cluster -lc", "/bin/bash", []string{"bash", "-lc", "yarn start"}, "yarn", []string{"start"}},
+		{"shell -x is not a command option", "/bin/sh", []string{"sh", "-x", "npm start"}, "", nil},
+		{"env -u", "/bin/sh", []string{"sh", "-c", "env -u FOO npm start"}, "npm", []string{"start"}},
 		{"node value of an option is not the script", "/usr/local/bin/node", []string{"node", "--title", "/usr/local/bin/npm", "server.js"}, "", nil},
 	}
 	for _, tt := range tests {
@@ -98,6 +113,11 @@ func TestScriptOf(t *testing.T) {
 		{"pnpm", []string{"-w", "dev"}, "dev", true},
 		{"pnpm", []string{"exec", "x"}, "", false},
 		{"pnpm", []string{"dlx", "x"}, "", false},
+		{"yarn", []string{"--network-timeout", "100000", "start"}, "start", false},
+		{"pnpm", []string{"--reporter", "silent", "start"}, "start", false},
+		{"npm", []string{"--loglevel", "silent", "start"}, "start", false},
+		{"npm", []string{"--registry", "http://r", "run", "dev"}, "dev", false},
+		{"yarnpkg", []string{"--mutex", "network", "dev"}, "dev", false},
 		{"npx", []string{"serve", "-s"}, "", false},
 		{"pnpx", []string{"serve"}, "", false},
 	}
@@ -149,6 +169,16 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/worker", ["worker"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/app/npm.js"}, Line: 0}},
+		{"a shell that is itself a launcher is passed over", `1     execve("/bin/sh", ["sh", "-c", "npm start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 4,
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "npm start"}, Line: 0},
+				{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 2},
+			}}},
 		{"a launcher with two running children stays", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "a.js"], 0x7ffd1 /* 1 vars */) = 0

@@ -17,11 +17,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
 	"github.com/AngeloRubens/dock2nano/internal/docker"
@@ -752,8 +754,15 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 	if !ok {
 		return false
 	}
-	msg := fmt.Sprintf("the observed program is %s, a launcher that starts your command as a child process; nanos has no fork, so it cannot run on nanos as it is", name)
-	const advice = "if the script runs a single node program, run that program directly (node <file>) and give it to the image as its command; a script that starts other launchers or several commands needs the same at each step"
+	verb := "is"
+	if runsThroughShell(obs) {
+		verb = "runs"
+	}
+	msg := fmt.Sprintf("the observed program %s %s, a launcher that starts your command as a child process; nanos has no fork, so it cannot run on nanos as it is", verb, name)
+	advice := "if the script runs a single node program, run that program directly (node <file>) and give it to the image as its command; a script that starts other launchers or several commands needs the same at each step"
+	if name == "npx" || name == "pnpx" {
+		advice = "if the package it runs is a single node program, run its file directly (node <file>) and give it to the image as its command"
+	}
 	script, elsewhere := trace.ScriptOf(name, rest)
 	switch {
 	case script == "":
@@ -762,13 +771,20 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 		msg += fmt.Sprintf(". It was asked to run the script %q of another package or directory (an option of the command line points there), which was not read. %s", script, advice)
 	default:
 		cmd, state := packageScript(obs.Sysroot, obs.WorkingDir, script)
+		const option = "; if that word is the value of an option, it is not a script"
 		switch {
 		case state == scriptFound:
 			msg += fmt.Sprintf(". It was asked to run the package.json script %q, whose command is %q. %s", script, hideSecrets(cmd), advice)
 		case state == scriptMissing && name == "npm" && script == "start":
-			msg += ". npm start was asked and package.json has no start script, in which case npm runs node server.js: run that directly"
+			msg += ". npm start was asked and package.json has no start script: npm then runs node server.js if that file exists; run that directly"
+		case state == scriptMissing && name == "npm" && script == "restart":
+			msg += ". npm restart was asked and package.json has no restart script: npm then runs its stop and start scripts. " + advice
+		case state == scriptMissing && name == "npm":
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: npm run fails for it%s", script, option)
+		case state == scriptMissing && script == "start":
+			msg += fmt.Sprintf(". It was asked to run the script \"start\", which package.json does not have: %s then may run node server.js if that file exists%s", name, option)
 		case state == scriptMissing:
-			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have", script)
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: %s then runs the binary of that name from node_modules/.bin if there is one (pnpm falls back to pnpm exec)%s", script, name, option)
 		default:
 			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
 		}
@@ -777,8 +793,28 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 	return true
 }
 
+// runsThroughShell tells whether the observed program is a shell (or busybox) that runs the
+// launcher, as against the launcher itself.
+func runsThroughShell(obs *observe.Result) bool {
+	for _, p := range []string{obs.Program, firstArg(obs.Argv)} {
+		switch path.Base(p) {
+		case "sh", "bash", "dash", "ash", "busybox":
+			return true
+		}
+	}
+	return false
+}
+
+func firstArg(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return argv[0]
+}
+
 // passedOverNote says what the observation passed over: the image starts a launcher and the
-// package runs the program the launcher started, which is a different thing.
+// package runs the program the launcher started, which is a different thing. The command line of
+// the program is not printed, only where it is.
 func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	if len(obs.PassedOver) == 0 {
 		return
@@ -787,19 +823,71 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	for _, c := range obs.PassedOver {
 		started = append(started, hideSecrets(c))
 	}
-	g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the image starts %s and the package runs %s, the command the launcher started. The npm_* variables are kept as observed, and what the launcher did around the command is lost: the lifecycle scripts (pre and post), and the signals it passes to the command", strings.Join(started, ", then "), hideSecrets(strings.Join(obs.Argv, " "))))
+	g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the image starts %s and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command", strings.Join(started, ", then ")))
 }
 
-// hideSecrets hides the value of the NAME=value words of a command line when NAME looks like the
-// name of a secret.
-func hideSecrets(cmd string) string {
-	words := strings.Fields(cmd)
-	for i, w := range words {
-		if name, _, ok := strings.Cut(w, "="); ok && name != "" && !strings.HasPrefix(name, "-") && observe.SecretName(name) {
-			words[i] = name + "=***"
+// secretWord is a NAME=value word or an option, whose name can be tested for a secret.
+var secretWord = regexp.MustCompile(`^-{0,2}[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// urlUserinfo is the user and password of a URL.
+var urlUserinfo = regexp.MustCompile(`(\w+://)[^/\s:@'"]+:[^/\s@'"]*@`)
+
+// secretLike tells whether the name of a variable or of an option looks like a secret.
+func secretLike(name string) bool {
+	if !secretWord.MatchString(name) {
+		return false
+	}
+	return observe.SecretName(strings.ReplaceAll(strings.TrimLeft(name, "-"), "-", "_"))
+}
+
+// hideSecrets hides, in a command line, the value of NAME=value and --name=value when the name looks
+// like the name of a secret (the value may be quoted, with spaces), the word after --name when it
+// does, and the user and password of a URL. The spacing of the text is kept.
+func hideSecrets(text string) string {
+	var out strings.Builder
+	var word strings.Builder
+	var quote rune
+	hideNext := false
+	flush := func() {
+		if word.Len() == 0 {
+			return
+		}
+		w := word.String()
+		word.Reset()
+		name, _, hasValue := strings.Cut(w, "=")
+		switch {
+		case hideNext && !strings.HasPrefix(w, "-"):
+			w = "***"
+			hideNext = false
+		case hasValue && secretLike(name):
+			w = name + "=***"
+			hideNext = false
+		case !hasValue && strings.HasPrefix(w, "--") && secretLike(w):
+			hideNext = true
+		default:
+			hideNext = false
+		}
+		out.WriteString(urlUserinfo.ReplaceAllString(w, "${1}***@"))
+	}
+	for _, r := range text {
+		switch {
+		case quote != 0:
+			word.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+			word.WriteRune(r)
+		case unicode.IsSpace(r):
+			flush()
+			out.WriteRune(r)
+		default:
+			word.WriteRune(r)
 		}
 	}
-	return strings.Join(words, " ")
+	flush()
+	return out.String()
 }
 
 const (
@@ -817,17 +905,22 @@ func packageScript(sysroot, dir, script string) (string, int) {
 	if sysroot == "" {
 		return "", scriptUnreadable
 	}
+	// the links of the image are followed inside the sysroot; os.Root refuses what still leads out of
+	// it (a chain of links that InSysroot gave up on, a link to a path of this machine)
 	inside := trace.InSysroot(sysroot, path.Join("/", dir, "package.json"))
-	host := filepath.Join(sysroot, filepath.FromSlash(inside))
-	info, err := os.Lstat(host)
-	if err != nil || !info.Mode().IsRegular() {
+	root, err := os.OpenRoot(sysroot)
+	if err != nil {
 		return "", scriptUnreadable
 	}
-	f, err := os.Open(host)
+	defer root.Close()
+	f, err := root.Open(strings.TrimPrefix(inside, "/"))
 	if err != nil {
 		return "", scriptUnreadable
 	}
 	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return "", scriptUnreadable
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maxPackageJSON+1))
 	if err != nil || len(data) > maxPackageJSON {
 		return "", scriptUnreadable

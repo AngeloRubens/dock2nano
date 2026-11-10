@@ -1246,7 +1246,7 @@ func TestLauncherAdviceSaysWhatToDoWithSeveralCommands(t *testing.T) {
 
 func TestLauncherWithBusyboxProgram(t *testing.T) {
 	in, _ := launcherInput(t, "/bin/busybox", []string{"sh", "-c", "npm start"}, `{"scripts":{"start":"node a.js"}}`)
-	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "the observed program is npm")
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "the observed program runs npm")
 }
 
 func TestLauncherNoteOnACompoundShellCommandIsNotAdded(t *testing.T) {
@@ -1264,7 +1264,10 @@ func TestPassedOverLauncherIsANote(t *testing.T) {
 	in.Services["web"].Observed.PassedOver = []string{"node /usr/local/bin/npm run dev TOKEN=abcdef"}
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Note, "launcher passed over", "the image starts node /usr/local/bin/npm run dev TOKEN=***")
-	want1(t, p, "web", plan.Note, "launcher passed over", "the package runs node server.js")
+	want1(t, p, "web", plan.Note, "launcher passed over", "the package runs the command the launcher started (in package.manifest)")
+	if got := itemsOf(p, "web", plan.Note, "launcher passed over"); strings.Contains(got[0].Message, "server.js") {
+		t.Errorf("message %q prints the command line of the program", got[0].Message)
+	}
 	want1(t, p, "web", plan.Note, "launcher passed over", "npm_* variables")
 	wantNone(t, p, "web", plan.Unsupported, "launcher")
 	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
@@ -1281,6 +1284,114 @@ func TestProcessesItemPointsToTheLauncher(t *testing.T) {
 	if got := itemsOf(p, "web", plan.Unsupported, "processes"); len(got) != 1 || strings.Contains(got[0].Message, "launcher") {
 		t.Errorf("items %+v: a program that is not a launcher points to one", got)
 	}
+}
+
+func TestHideSecrets(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"variable", "API_TOKEN=abc123 PORT=80 node a.js", "API_TOKEN=*** PORT=80 node a.js"},
+		{"option with equals", "node a.js --api-token=abc123 --port=80", "node a.js --api-token=*** --port=80"},
+		{"option with a separate value", "node a.js --token abc123 --port 80", "node a.js --token *** --port 80"},
+		{"option that is not secret keeps its value", "node a.js --name abc123", "node a.js --name abc123"},
+		{"quoted value with spaces", `API_KEY="ab cd" node x`, "API_KEY=*** node x"},
+		{"single quoted value with spaces", "API_KEY='ab cd' node x", "API_KEY=*** node x"},
+		{"url with userinfo", "node a.js postgres://u:pass@db/x", "node a.js postgres://***@db/x"},
+		{"url without a password", "node a.js http://host:80/x", "node a.js http://host:80/x"},
+		{"spacing is kept", "a  B_SECRET=1   c\td", "a  B_SECRET=***   c\td"},
+		{"nothing", "node server.js", "node server.js"},
+	}
+	for _, tt := range tests {
+		if got := hideSecrets(tt.in); got != tt.want {
+			t.Errorf("%s: hideSecrets(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestLauncherScriptQuotedHidesOptionsAndURLs(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"dev":"node a.js --api-token=abc123 postgres://u:pass@db/x"}}`)
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "launcher")
+	if len(got) != 1 || strings.Contains(got[0].Message, "abc123") || strings.Contains(got[0].Message, "pass@") {
+		t.Errorf("items %+v: a secret is printed", got)
+	}
+}
+
+func TestPassedOverNoteHidesSecrets(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in.Services["web"].Observed.PassedOver = []string{"npm start --token abc123 postgres://u:pass@db/x"}
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Note, "launcher passed over")
+	if len(got) != 1 || strings.Contains(got[0].Message, "abc123") || strings.Contains(got[0].Message, "pass@") {
+		t.Errorf("items %+v: a secret is printed", got)
+	}
+}
+
+func TestLauncherPackageJSONThroughAChainOfFortyOneLinksIsNotRead(t *testing.T) {
+	in, sysroot := launcherInput(t, "/usr/local/bin/node", npmRunDev, "")
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "package.json"), []byte(`{"scripts":{"dev":"HOST-SECRET"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 41; i++ {
+		target := fmt.Sprintf("l%d", i+1)
+		if i == 41 {
+			target = host
+		}
+		if err := os.Symlink(target, filepath.Join(sysroot, fmt.Sprintf("l%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in.Services["web"].Observed.WorkingDir = "/l1"
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "launcher")
+	if len(got) != 1 || strings.Contains(got[0].Message, "HOST-SECRET") {
+		t.Errorf("items %+v: the file of the host was read", got)
+	}
+}
+
+func TestLauncherMissingScriptTexts(t *testing.T) {
+	tests := []struct {
+		name    string
+		argv    []string
+		pkg     string
+		want    string
+		notWant string
+	}{
+		{"npm start", []string{"node", "/usr/local/bin/npm", "start"}, `{"scripts":{}}`, "if that file exists", ""},
+		{"npm restart", []string{"node", "/usr/local/bin/npm", "restart"}, `{"scripts":{}}`, "stop and start scripts", "which package.json does not have"},
+		{"yarn script", []string{"node", "/opt/yarn-v1.22.19/bin/yarn.js", "foo"}, `{"scripts":{}}`, "binary of that name from node_modules/.bin", ""},
+		{"pnpm script", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "foo"}, `{"scripts":{}}`, "pnpm falls back to pnpm exec", ""},
+		{"pnpm start", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "start"}, `{"scripts":{}}`, "may run node server.js if that file exists", "binary of that name"},
+		{"option value hint", []string{"node", "/usr/local/bin/npm", "run", "dev"}, `{"scripts":{}}`, "value of an option", ""},
+	}
+	for _, tt := range tests {
+		in, _ := launcherInput(t, "/usr/local/bin/node", tt.argv, tt.pkg)
+		p := mustGen(t, in)
+		got := itemsOf(p, "web", plan.Unsupported, "launcher")
+		if len(got) != 1 {
+			t.Fatalf("%s: got %d items", tt.name, len(got))
+		}
+		if !strings.Contains(got[0].Message, tt.want) {
+			t.Errorf("%s: message %q does not hold %q", tt.name, got[0].Message, tt.want)
+		}
+		if tt.notWant != "" && strings.Contains(got[0].Message, tt.notWant) {
+			t.Errorf("%s: message %q holds %q", tt.name, got[0].Message, tt.notWant)
+		}
+	}
+}
+
+func TestLauncherNpxAdviceTalksAboutThePackage(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/local/lib/node_modules/npm/bin/npx-cli.js", "serve"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", "the package it runs is a single node program")
+	if got := itemsOf(p, "web", plan.Unsupported, "launcher"); strings.Contains(got[0].Message, "the script runs") {
+		t.Errorf("message %q talks about a script", got[0].Message)
+	}
+}
+
+func TestPassedOverNoteSaysPreAndPostIfTheLauncherRunsThem(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in.Services["web"].Observed.PassedOver = []string{"npm start"}
+	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "the pre and post scripts, if the launcher runs them")
 }
 
 func TestEffectiveCommand(t *testing.T) {

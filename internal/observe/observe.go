@@ -706,10 +706,11 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	var passedOver []string
 	for _, l := range final.PassedOver {
 		if len(l.Argv) == 0 {
-			passedOver = append(passedOver, l.Path)
+			passedOver = append(passedOver, r.redact(l.Path))
 			continue
 		}
-		passedOver = append(passedOver, strings.Join(l.Argv, " "))
+		// the values of Options.Env that a shell expanded into the command line are hidden
+		passedOver = append(passedOver, r.redact(strings.Join(l.Argv, " ")))
 	}
 	r.vlogf("the program is %s, process %s\n", program, pid)
 
