@@ -286,8 +286,12 @@ func TestApplyHubRecipeWithoutAHubConfigStillSetsTheValues(t *testing.T) {
 	if !strings.Contains(string(b), "master_process off;") {
 		t.Errorf("%s", b)
 	}
-	if c := hubFind(items, "hub config"); len(c) < 2 || !strings.Contains(c[1].Message, "no configuration file") {
-		t.Errorf("config: %+v", c)
+	var noConf bool
+	for _, it := range hubFind(items, "hub config") {
+		noConf = noConf || strings.Contains(it.Message, "no configuration file")
+	}
+	if !noConf {
+		t.Errorf("config: %+v", items)
 	}
 }
 

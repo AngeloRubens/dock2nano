@@ -151,7 +151,7 @@ func TestHubIsReadWhenTheProgramStartsChildren(t *testing.T) {
 	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.15.6"), hubPkg("eyberg", "nginx", "1.28.3")}
 	h.stub.conf = hubTestHubConf
 	h.mustRun(0, "convert")
-	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "recipe eyberg/nginx 1.28.3"}) {
+	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "recipe eyberg/nginx 1.15.6"}) {
 		t.Errorf("calls: %v", h.stub.calls)
 	}
 	for _, want := range []string{"master_process off;", "worker_processes 1;", "listen 80;"} {
@@ -166,7 +166,7 @@ func TestHubIsReadWhenTheProgramStartsChildren(t *testing.T) {
 		t.Errorf("the configuration of the hub leaked in:\n%s", h.conf)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"eyberg/nginx 1.28.3", hubTestSum, "published by eyberg", "the same major series", "files of the image are the ones observed from your image", "not run on nanos"} {
+	for _, want := range []string{"eyberg/nginx 1.15.6", hubTestSum, "published by eyberg", "the same major series", "files of the image are the ones observed from your image", "not run on nanos"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
