@@ -1653,7 +1653,7 @@ func TestWithStartsTheServiceForTheObservationOfTheOthers(t *testing.T) {
 	h.dock.have["b"] = true
 	h.dock.have["d"] = true
 	h.mustRun(0, "convert", "--with", "db")
-	if len(h.dock.started) != 1 || h.dock.started[0].Image != "d" {
-		t.Fatalf("started %v, want the image d", h.dock.started)
+	if len(h.started) != 1 || h.started[0].Image != "d" {
+		t.Fatalf("started %v, want the image d", h.started)
 	}
 }
