@@ -102,6 +102,14 @@ jobs:
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u) dns; do
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
           done
+          # what the dns of the session answers, asked from this machine
+          dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-dns.txt 2>/dev/null | tail -1 | awk '{print $2}')
+          echo "dns at: $dnsip"
+          if [ -n "$dnsip" ]; then
+            for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
+              echo "dig $svc -> [$(dig +short +time=3 +tries=1 @$dnsip $svc A)]  dig $svc.service -> [$(dig +short +time=3 +tries=1 @$dnsip $svc.service A)]"
+            done
+          fi
           for p in ${{ matrix.probe }}; do
             svc=${p%%:*}; rest=${p#*:}; port=${rest%%:*}; kind=${rest##*:}
             ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
