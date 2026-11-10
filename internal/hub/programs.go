@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -22,6 +23,14 @@ type SingleProcess struct {
 
 	// ConfigFlag is the option of the program that names the file.
 	ConfigFlag string `yaml:"config_flag"`
+
+	// ParamsFlag is the option that gives directives on the command line
+	// ("-g"); empty when the program has none.
+	ParamsFlag string `yaml:"params_flag"`
+
+	// BaseVolumeSize is the least size of the writable volume the program
+	// needs ("200m"); empty when there is none.
+	BaseVolumeSize string `yaml:"base_volume_size"`
 
 	// Settings are the top-level directives that make it run in one process,
 	// with the values that are always used.
@@ -52,14 +61,14 @@ func ParseTables(data []byte) (*Tables, error) {
 	if err := dec.Decode(&t); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("the table of hub decisions is not readable: %w", err)
 	}
-	for name, sp := range t.SingleProcess {
-		if len(sp.ConfigPaths) == 0 || len(sp.Settings) == 0 {
-			return nil, fmt.Errorf("the table of hub decisions: %s needs config_paths and settings", name)
+	for name, vars := range t.VersionEnv {
+		if name != strings.ToLower(name) || len(vars) == 0 {
+			return nil, fmt.Errorf("the table of hub decisions: version_env %q must be lower case and list variables", name)
 		}
-		for _, s := range sp.Settings {
-			if s.Name == "" || s.Value == "" {
-				return nil, fmt.Errorf("the table of hub decisions: %s has a setting without a name or a value", name)
-			}
+	}
+	for name, sp := range t.SingleProcess {
+		if err := checkSingleProcess(name, sp); err != nil {
+			return nil, fmt.Errorf("the table of hub decisions: %w", err)
 		}
 	}
 	return &t, nil
@@ -88,4 +97,35 @@ func loadedTables() *Tables {
 func SingleProcessFor(program string) (SingleProcess, bool) {
 	sp, ok := loadedTables().SingleProcess[strings.ToLower(program)]
 	return sp, ok
+}
+
+// plainWord tells whether s is one word that can be written into a
+// configuration file as it is.
+func plainWord(s string) bool {
+	return s != "" && !strings.ContainsAny(s, " \t\r\n;{}#\"'\\")
+}
+
+var volumeSizeText = regexp.MustCompile(`^[0-9]+[mg]$`)
+
+func checkSingleProcess(name string, sp SingleProcess) error {
+	if name != strings.ToLower(name) {
+		return fmt.Errorf("%s: the name must be lower case", name)
+	}
+	if len(sp.ConfigPaths) == 0 || len(sp.Settings) == 0 || sp.ConfigFlag == "" {
+		return fmt.Errorf("%s needs config_paths, config_flag and settings", name)
+	}
+	for _, p := range sp.ConfigPaths {
+		if !strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
+			return fmt.Errorf("%s: the path %q must be absolute and without ..", name, p)
+		}
+	}
+	for _, s := range sp.Settings {
+		if !plainWord(s.Name) || !plainWord(s.Value) {
+			return fmt.Errorf("%s: the setting %q %q must be plain words", name, s.Name, s.Value)
+		}
+	}
+	if sp.BaseVolumeSize != "" && !volumeSizeText.MatchString(sp.BaseVolumeSize) {
+		return fmt.Errorf("%s: base_volume_size %q must be a number and m or g", name, sp.BaseVolumeSize)
+	}
+	return nil
 }

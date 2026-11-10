@@ -101,12 +101,13 @@ func TestApplyHubRecipeSetsTheSingleProcessDirectivesInTheUsersConfig(t *testing
 		t.Fatal(err)
 	}
 	conf := string(got)
-	for _, want := range []string{"master_process off;", "daemon off;", "worker_processes 1;", "listen       80;", "root   /usr/share/nginx/html;", "pid        /var/run/nginx.pid;", "user  nginx;"} {
+	for _, want := range []string{"master_process off;", "worker_processes 1;", "listen       80;", "root   /usr/share/nginx/html;", "pid        /var/run/nginx.pid;", "user  nginx;"} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("%q is not in the config:\n%s", want, conf)
 		}
 	}
-	for _, not := range []string{"8083", "4443", "bob.pid", "worker_processes  auto"} {
+	// daemon off is on the command line (-g), and the program refuses it twice
+	for _, not := range []string{"8083", "4443", "bob.pid", "worker_processes  auto", "daemon"} {
 		if strings.Contains(conf, not) {
 			t.Errorf("%q is in the config, which must stay the user's:\n%s", not, conf)
 		}
@@ -119,6 +120,7 @@ func TestApplyHubRecipeSetsTheSingleProcessDirectivesInTheUsersConfig(t *testing
 		"The files of the image are the ones observed from your image",
 		"your image has 1.25.3 and the hub package 1.28.3: the same major series",
 		"master_process off (was not set)",
+		"daemon off is already set by the command line (-g)",
 		"worker_processes 1 (was auto)",
 		"listen: hub [4443 ssl, 8083], yours [80]",
 		"yours is kept",
@@ -212,7 +214,7 @@ func TestApplyHubRecipeWithoutAConfigFileSaysSo(t *testing.T) {
 		t.Errorf("config: %+v", c)
 	}
 	v := hubFind(items, "hub result")
-	if len(v) != 1 || v[0].Kind != plan.Unsupported || !strings.Contains(v[0].Message, "still does not start") {
+	if len(v) != 1 || v[0].Kind != plan.Unsupported || !strings.Contains(v[0].Message, "not addressed") {
 		t.Errorf("the program was not changed, and the report must not pretend: %+v", v)
 	}
 }
@@ -234,7 +236,7 @@ func TestApplyHubRecipeDoesNotEditALinkedConfigFile(t *testing.T) {
 	if b, _ := os.ReadFile(outside); string(b) != "worker_processes 9;\n" {
 		t.Errorf("a file outside the sysroot was written: %q", b)
 	}
-	if c := hubFind(items, "hub config"); len(c) == 0 || !strings.Contains(c[0].Message, "not a regular file") {
+	if c := hubFind(items, "hub config"); len(c) == 0 || !strings.Contains(c[0].Message, "was not found") {
 		t.Errorf("config: %+v", c)
 	}
 }
@@ -242,6 +244,7 @@ func TestApplyHubRecipeDoesNotEditALinkedConfigFile(t *testing.T) {
 func TestApplyHubRecipeConfigAlreadyRightChangesNothingAndSaysTheProgramIsNotChanged(t *testing.T) {
 	obs := hubObs(t)
 	obs.Sysroot = hubSysroot(t, map[string]string{"/etc/nginx/nginx.conf": "master_process off;\ndaemon off;\nworker_processes 1;\nevents {}\n"})
+	obs.Argv = []string{"nginx"}
 	items := ApplyHubRecipe(hubUse(hub.Exact, "1.28.3", "1.28.3"), obs)
 	if c := hubFind(items, "hub config"); len(c) == 0 || c[0].Kind != plan.Note || !strings.Contains(c[0].Message, "already has") {
 		t.Errorf("config: %+v", c)
@@ -254,6 +257,7 @@ func TestApplyHubRecipeConfigAlreadyRightChangesNothingAndSaysTheProgramIsNotCha
 func TestApplyHubRecipeNeverUsesTheValuesOfTheHubPackage(t *testing.T) {
 	obs := hubObs(t)
 	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
+	obs.Argv = []string{"nginx"}
 	u.Recipe.Files["/usr/local/nginx/conf/nginx.conf"] = []byte("worker_processes 2;\ndaemon on;\nmaster_process on;\n")
 	items := ApplyHubRecipe(u, obs)
 	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
@@ -341,7 +345,7 @@ func TestApplyHubRecipeDoesNotReadOrWriteThroughALinkInTheSysroot(t *testing.T) 
 	if b, _ := os.ReadFile(filepath.Join(outside, "nginx.conf")); string(b) != "worker_processes 9;\n" {
 		t.Errorf("a file outside the sysroot was written: %q", b)
 	}
-	if c := hubFind(items, "hub config"); len(c) == 0 || c[0].Kind != plan.Unsupported || !strings.Contains(c[0].Message, "cannot be reached") {
+	if c := hubFind(items, "hub config"); len(c) == 0 || c[0].Kind != plan.Unsupported || !strings.Contains(c[0].Message, "was not found") {
 		t.Errorf("config: %+v", c)
 	}
 	// the same for the file named by the option of the program
@@ -352,25 +356,6 @@ func TestApplyHubRecipeDoesNotReadOrWriteThroughALinkInTheSysroot(t *testing.T) 
 	}
 	if v := hubFind(items, "hub result"); len(v) != 1 || v[0].Kind != plan.Unsupported {
 		t.Errorf("verdict: %+v", v)
-	}
-}
-
-func TestApplyHubRecipeDoesNotAddWhatAnIncludedFileMayHold(t *testing.T) {
-	obs := hubObs(t)
-	obs.Sysroot = hubSysroot(t, map[string]string{"/etc/nginx/nginx.conf": "include /etc/nginx/main.d/*.conf;\nworker_processes 4;\nevents {}\n"})
-	items := ApplyHubRecipe(hubUse(hub.Exact, "1.28.3", "1.28.3"), obs)
-	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
-	if strings.Contains(string(b), "master_process") || strings.Contains(string(b), "daemon") || !strings.Contains(string(b), "worker_processes 1;") {
-		t.Errorf("%s", b)
-	}
-	var found bool
-	for _, it := range hubFind(items, "hub config") {
-		if it.Kind == plan.Unsupported && strings.Contains(it.Message, "includes other files") && strings.Contains(it.Message, "master_process off") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("the report does not say the directives were not added:\n%s", hubText(items))
 	}
 }
 

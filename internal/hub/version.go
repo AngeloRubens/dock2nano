@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -193,43 +192,91 @@ func Select(pkgs []Package, name, want, arch string) (Package, Level) {
 }
 
 // SelectFrom picks among packages that are already filtered (usable, of the
-// right architecture): the same version, else the nearest of the same major
-// series, else the nearest of all, else, when want is not known, the newest.
+// right architecture). With a version asked for: the nearest major series
+// (the same one, else the one whose number is nearest, the older on a tie),
+// and in it the newest release that is not newer than the version asked for,
+// else the oldest release. When want is not known: the newest package. Of
+// equal versions the one spelled with as many numbers as want comes first,
+// then the namespace preference, then the name.
 func SelectFrom(cands []Package, want string) (Package, Level) {
 	if len(cands) == 0 {
 		return Package{}, NotFound
 	}
 	w, known := ParseVersion(want)
-	sorted := append([]Package(nil), cands...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		a, _ := ParseVersion(sorted[i].Version)
-		b, _ := ParseVersion(sorted[j].Version)
+	type cand struct {
+		p Package
+		v Version
+	}
+	all := make([]cand, len(cands))
+	for i, p := range cands {
+		v, _ := ParseVersion(p.Version)
+		all[i] = cand{p, v}
+	}
+	// tie says that a comes before b when their versions are equal
+	tie := func(a, b cand) bool {
 		if known {
-			if c := cmpNums(w.distance(a), w.distance(b)); c != 0 {
-				return c < 0
+			if ea, eb := len(a.v.Nums) == len(w.Nums), len(b.v.Nums) == len(w.Nums); ea != eb {
+				return ea
 			}
 		}
-		if c := a.Compare(b); c != 0 {
-			return c > 0
-		}
-		if ra, rb := namespaceRank(sorted[i].Namespace), namespaceRank(sorted[j].Namespace); ra != rb {
+		if ra, rb := namespaceRank(a.p.Namespace), namespaceRank(b.p.Namespace); ra != rb {
 			return ra < rb
 		}
-		return sorted[i].Ref() < sorted[j].Ref()
-	})
-	best := sorted[0]
+		return a.p.Ref() < b.p.Ref()
+	}
+	// pick returns the newest (or the oldest) of the list
+	pick := func(list []cand, newest bool) cand {
+		best := list[0]
+		for _, c := range list[1:] {
+			switch cmp := c.v.Compare(best.v); {
+			case cmp == 0 && tie(c, best):
+				best = c
+			case cmp > 0 && newest, cmp < 0 && !newest:
+				best = c
+			}
+		}
+		return best
+	}
 	if !known {
-		return best, Far
+		return pick(all, true).p, Far
 	}
-	got, _ := ParseVersion(best.Version)
+	series := all[0].v.series()
+	for _, c := range all[1:] {
+		cur := cmpNums(seriesDistance(w, c.v), seriesDistance(w, Version{Nums: series}))
+		if cur < 0 || cur == 0 && cmpNums(c.v.series(), series) < 0 {
+			series = c.v.series()
+		}
+	}
+	var group, below []cand
+	for _, c := range all {
+		if cmpNums(c.v.series(), series) != 0 {
+			continue
+		}
+		group = append(group, c)
+		if c.v.Compare(w) <= 0 {
+			below = append(below, c)
+		}
+	}
+	var best cand
+	if len(below) > 0 {
+		best = pick(below, true)
+	} else {
+		best = pick(group, false)
+	}
 	switch {
-	case got.Compare(w) == 0 && len(w.Nums) >= len(got.Nums):
-		// "1.25" is not the version 1.25.0: it may be any 1.25.x
-		return best, Exact
-	case got.SameSeries(w):
-		return best, Near
+	case best.v.Compare(w) == 0 && len(w.Nums) == len(best.v.Nums):
+		// "1.25" is not the version 1.25.0: it may be any 1.25.x, and the
+		// other way round
+		return best.p, Exact
+	case best.v.SameSeries(w):
+		return best.p, Near
 	}
-	return best, Far
+	return best.p, Far
+}
+
+// seriesDistance is the distance between the major series of two versions.
+func seriesDistance(a, b Version) []int {
+	return Version{Nums: a.series()}.distance(Version{Nums: b.series()})
 }
 
 // ImageName is the name of an image without registry, path, tag and digest:

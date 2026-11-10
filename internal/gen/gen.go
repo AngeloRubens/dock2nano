@@ -53,6 +53,10 @@ type ServiceInput struct {
 	// HubItems are the report items about the hub of ops packages for this
 	// service (see ApplyHubRecipe); they are added to the report as they are.
 	HubItems []plan.Item
+
+	// MinVolume is the least size of the writable volume the hub recipe for the
+	// program asks for ("200m"); empty when there is none.
+	MinVolume string
 }
 
 // Input is everything Generate needs.
@@ -366,6 +370,10 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.observed(s, obs)
 	g.plan.Report = append(g.plan.Report, si.HubItems...)
 	m.BaseVolumeSz = volumeSize(obs.Sysroot)
+	if si.MinVolume != "" {
+		m.BaseVolumeSz = volumeAtLeast(m.BaseVolumeSz, si.MinVolume)
+		g.add(s.Name, plan.Note, "hub volume", "the hub recipe for the program asks for a writable volume of at least "+si.MinVolume+" (the hub package fails with No space left on device on the default disk); the package has "+m.BaseVolumeSz)
+	}
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
 }
 

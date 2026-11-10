@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -44,6 +45,11 @@ func ParseRequired(data []byte) ([]Required, error) {
 	for i, r := range doc.Rows {
 		if len(r.Images) == 0 || len(r.Programs) == 0 || len(r.Packages) == 0 || r.Reason == "" {
 			return nil, fmt.Errorf("row %d of the table of required builds needs images, programs, packages and a reason", i+1)
+		}
+		for _, n := range append(slices.Clone(r.Images), r.Programs...) {
+			if n != strings.ToLower(n) || strings.Contains(n, "/") {
+				return nil, fmt.Errorf("row %d of the table of required builds: %q must be lower case, a name and not a path", i+1, n)
+			}
 		}
 		for _, p := range r.Packages {
 			ns, name, ok := strings.Cut(p, "/")

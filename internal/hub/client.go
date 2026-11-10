@@ -114,6 +114,11 @@ type Client struct {
 	loaded bool
 	pkgs   []Package
 	err    error
+
+	// staleFrom and staleErr say that the list is an old copy from disk and
+	// why the network was not used.
+	staleFrom time.Time
+	staleErr  error
 }
 
 // NewClient is a client of the hub with the real network and the folder of
@@ -177,7 +182,7 @@ func (c *Client) Manifest(ctx context.Context) ([]Package, error) {
 	if c.err != nil {
 		return nil, c.err
 	}
-	if data, ok := c.readCache(false); ok {
+	if data, _, ok := c.readCache(false); ok {
 		if pkgs, err := parseManifest(data); err == nil {
 			c.pkgs, c.loaded = pkgs, true
 			return pkgs, nil
@@ -192,9 +197,10 @@ func (c *Client) Manifest(ctx context.Context) ([]Package, error) {
 			return pkgs, nil
 		}
 	}
-	if stale, ok := c.readCache(true); ok {
+	if stale, when, ok := c.readCache(true); ok {
 		if pkgs, perr := parseManifest(stale); perr == nil {
 			c.pkgs, c.loaded = pkgs, true
+			c.staleFrom, c.staleErr = when, err
 			return pkgs, nil
 		}
 	}
@@ -202,6 +208,14 @@ func (c *Client) Manifest(ctx context.Context) ([]Package, error) {
 		c.err = err
 	}
 	return nil, err
+}
+
+// Stale implements Source: when the list is a copy from disk that is older
+// than it should be, the date of the copy and why the hub was not read.
+func (c *Client) Stale() (time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.staleFrom, c.staleErr
 }
 
 // fetchManifest reads the list from the network, within ManifestTimeout.
@@ -254,27 +268,28 @@ func (c *Client) cachePath() string {
 
 // readCache returns the copy on disk when it is younger than MaxAge, or at
 // any age when stale is true. A copy larger than the list may be is not read.
-func (c *Client) readCache(stale bool) ([]byte, bool) {
+func (c *Client) readCache(stale bool) ([]byte, time.Time, bool) {
 	p := c.cachePath()
 	if p == "" {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	fi, err := os.Stat(p)
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxManifest {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	age := c.MaxAge
-	if age <= 0 {
-		age = defaultMaxAge
+	maxAge := c.MaxAge
+	if maxAge <= 0 {
+		maxAge = defaultMaxAge
 	}
-	if !stale && c.now().Sub(fi.ModTime()) > age {
-		return nil, false
+	// a date in the future is not fresh
+	if age := c.now().Sub(fi.ModTime()); !stale && (age < 0 || age > maxAge) {
+		return nil, time.Time{}, false
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	return data, true
+	return data, fi.ModTime(), true
 }
 
 // writeCache keeps a copy on disk. Failing to is not an error: the next run

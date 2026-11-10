@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AngeloRubens/dock2nano/internal/docker"
 	"github.com/AngeloRubens/dock2nano/internal/hub"
@@ -31,7 +32,11 @@ type stubHub struct {
 	wholeFiles  map[string]string
 	args        []string
 	conf        string
+	staleFrom   time.Time
+	staleErr    error
 }
+
+func (s *stubHub) Stale() (time.Time, error) { return s.staleFrom, s.staleErr }
 
 func (s *stubHub) Manifest(ctx context.Context) ([]hub.Package, error) {
 	s.calls = append(s.calls, "manifest")
@@ -149,10 +154,13 @@ func TestHubIsReadWhenTheProgramStartsChildren(t *testing.T) {
 	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "recipe eyberg/nginx 1.28.3"}) {
 		t.Errorf("calls: %v", h.stub.calls)
 	}
-	for _, want := range []string{"master_process off;", "daemon off;", "worker_processes 1;", "listen 80;"} {
+	for _, want := range []string{"master_process off;", "worker_processes 1;", "listen 80;"} {
 		if !strings.Contains(h.conf, want) {
 			t.Errorf("%q is not in the configuration:\n%s", want, h.conf)
 		}
+	}
+	if strings.Contains(h.conf, "daemon") {
+		t.Errorf("daemon off is on the command line (-g) and must not be written again:\n%s", h.conf)
 	}
 	if strings.Contains(h.conf, "8083") {
 		t.Errorf("the configuration of the hub leaked in:\n%s", h.conf)
@@ -379,6 +387,63 @@ func TestAServiceTheHubCannotConvertIsStillStartedForTheOnesThatNeedIt(t *testin
 	}
 }
 
+func TestAStoppedContainerWithStatusZeroIsNotAProblemForTheHub(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.25.3", func(sysroot string) *observe.Result {
+		r := nginxObserved(0)(sysroot)
+		r.StoppedEarly, r.ExitCode = true, 0
+		return r
+	})
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.mustRun(0, "convert")
+	if len(h.stub.calls) != 0 {
+		t.Errorf("the hub was read for a job that ended well: %v", h.stub.calls)
+	}
+}
+
+func TestTheVersionIsReadFromTheEnvironmentOfTheImageToo(t *testing.T) {
+	h := newHubHarness(t, "nginx", func(sysroot string) *observe.Result {
+		r := nginxObserved(2)(sysroot)
+		r.Env = nil
+		return r
+	})
+	h.dock.images["nginx"] = &docker.ImageConfig{Architecture: "amd64", Env: []string{"NGINX_VERSION=1.25.3"}}
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.mustRun(0, "convert")
+	if !strings.Contains(h.stdout.String(), "your image has 1.25.3") {
+		t.Errorf("the report:\n%s", h.stdout)
+	}
+}
+
+func TestTheTagOfAnImageOfTheUserIsNotTheVersionOfItsProgram(t *testing.T) {
+	h := newHubHarness(t, "myco/app:3", nginxObserved(2))
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.mustRun(0, "convert")
+	out := h.stdout.String()
+	if !strings.Contains(out, "your image has 1.25.3") || strings.Contains(out, "your image has 3 ") {
+		t.Errorf("the report:\n%s", out)
+	}
+}
+
+func TestAnOldCopyOfTheListIsSaid(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.25.3", nginxObserved(2))
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.stub.staleFrom = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	h.stub.staleErr = errors.New("connection refused")
+	h.mustRun(0, "convert")
+	if !strings.Contains(h.stdout.String(), "the list of the hub is a copy of 2026-11-01, because the hub could not be read (connection refused)") {
+		t.Errorf("the report:\n%s", h.stdout)
+	}
+}
+
+func TestTheRecipeVolumeIsAskedFor(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.25.3", nginxObserved(2))
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.mustRun(0, "convert")
+	if !strings.Contains(h.stdout.String(), "hub volume") || !strings.Contains(h.stdout.String(), "at least 200m") {
+		t.Errorf("the report:\n%s", h.stdout)
+	}
+}
+
 func TestNoHubFlagIsParsed(t *testing.T) {
 	h := newHarness(t)
 	o, err := h.app.parseConvert([]string{"--no-hub"})
@@ -397,6 +462,12 @@ func TestHubTrigger(t *testing.T) {
 	}
 	if got := hubTrigger(&observe.Result{Children: 3}); !strings.Contains(got, "3 child processes") {
 		t.Errorf("children: %q", got)
+	}
+	if got := hubTrigger(&observe.Result{Children: 1}); !strings.Contains(got, "1 child process ") {
+		t.Errorf("one child: %q", got)
+	}
+	if got := hubTrigger(&observe.Result{StoppedEarly: true}); got != "" {
+		t.Errorf("a job that ended with status 0: %q", got)
 	}
 	if got := hubTrigger(&observe.Result{StoppedEarly: true, ExitCode: 137}); !strings.Contains(got, "status 137") {
 		t.Errorf("stopped: %q", got)

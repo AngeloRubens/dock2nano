@@ -19,6 +19,8 @@ single_process:
       - /usr/local/nginx/conf/nginx.conf
       - /usr/local/etc/nginx/nginx.conf
     config_flag: -c
+    params_flag: -g
+    base_volume_size: 200m
     settings:
       - {name: master_process, value: "off"}
       - {name: daemon, value: "off"}

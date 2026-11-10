@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
@@ -23,6 +24,12 @@ type hubCase struct {
 	// imageName is the name of the image, or "" for an image built here,
 	// whose name is ours.
 	imageName string
+
+	// imageRef is the reference of the image, or "" for an image built here.
+	imageRef string
+
+	// env is the environment of the image, with the observed one after it.
+	env []string
 
 	// wanted is the version the user runs, or "".
 	wanted string
@@ -48,14 +55,17 @@ func (a *App) hubStep(ctx context.Context, o *options, late map[string]string, s
 		return nil
 	}
 	hc := hubCase{service: s, arch: arch}
+	// the environment of the image first: the program may overwrite its own
+	if si.Image != nil {
+		hc.env = slices.Clone(si.Image.Env)
+	}
+	hc.env = append(hc.env, obs.Env...)
 	stand := hub.ProgramName(obs.Program)
-	if built {
-		hc.wanted = hub.ImageVersion(stand, obs.Env)
-	} else {
-		hc.imageName = hub.ImageName(image)
-		hc.wanted = hub.ImageVersion(image, obs.Env)
+	if !built {
+		hc.imageName, hc.imageRef = hub.ImageName(image), image
 		stand = hc.imageName
 	}
+	hc.wanted = hc.wantedFor(stand)
 	if row := hub.MatchRequired(a.HubRequired, stand, obs.Program); row != nil {
 		return a.hubWhole(ctx, o, late, hc, row, si)
 	}
@@ -66,16 +76,34 @@ func (a *App) hubStep(ctx context.Context, o *options, late map[string]string, s
 	return a.hubRecipe(ctx, o, hc, why, si)
 }
 
+// wantedFor is the version the user runs, for a match by the name n. The tag
+// of the image is the version of the program only when the match is by the
+// name of the image; for a match by the name of the program (an image of the
+// user, with a tag of its own) it is the variable of the environment.
+func (hc hubCase) wantedFor(n string) string {
+	if hc.imageName != "" && n == hc.imageName {
+		return hub.ImageVersion(hc.imageRef, hc.env)
+	}
+	return hub.ImageVersion(n, hc.env)
+}
+
 // hubTrigger says why the program did not start as one process, or "" when
 // it did.
 func hubTrigger(obs *observe.Result) string {
 	switch {
-	case obs.StoppedEarly:
+	case obs.StoppedEarly && obs.ExitCode != 0:
 		return fmt.Sprintf("the container stopped with status %d before the end of the observation", obs.ExitCode)
 	case obs.Children > 0:
-		return fmt.Sprintf("the program started %d child processes (fork or clone) and nanos runs one process", obs.Children)
+		return fmt.Sprintf("the program started %d %s (fork or clone) and nanos runs one process", obs.Children, plural(obs.Children))
 	}
 	return ""
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "child process"
+	}
+	return "child processes"
 }
 
 // hubArch is the architecture of the packages for the image, or "" when it is
@@ -118,12 +146,15 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 		si.HubItems = append(si.HubItems, hubNote(name, "hub", fmt.Sprintf("the hub of ops packages could not be read (%v) although %s; nothing was taken from it", err, why)))
 		return nil
 	}
+	si.HubItems = append(si.HubItems, a.hubStale(name)...)
 	var pkg hub.Package
 	level := hub.NotFound
+	wanted := hc.wanted
 	names := hub.Names(hc.imageName, obs.Program)
 	for _, n := range names {
-		if p, l := hub.Select(pkgs, n, hc.wanted, hc.arch); l != hub.NotFound {
-			pkg, level = p, l
+		w := hc.wantedFor(n)
+		if p, l := hub.Select(pkgs, n, w, hc.arch); l != hub.NotFound {
+			pkg, level, wanted = p, l, w
 			break
 		}
 	}
@@ -143,8 +174,11 @@ func (a *App) hubRecipe(ctx context.Context, o *options, hc hubCase, why string,
 		si.HubItems = append(si.HubItems, hubNote(name, "hub", fmt.Sprintf("the package %s %s of the hub of ops packages could not be fetched or checked (%v) although %s; nothing was taken from it", pkg.Ref(), pkg.Version, err, why)))
 		return nil
 	}
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, Why: why, Recipe: rec}
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: wanted, ImageEnv: hc.env, Why: why, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubRecipe(use, obs)...)
+	if sp, ok := hub.SingleProcessFor(path.Base(obs.Program)); ok {
+		si.MinVolume = sp.BaseVolumeSize
+	}
 	return nil
 }
 
@@ -172,6 +206,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, late map[string]string, 
 		}
 		return skip(fmt.Sprintf("the hub could not be read (%v), so it cannot be converted", err))
 	}
+	si.HubItems = append(si.HubItems, a.hubStale(name)...)
 	pkg, level := hub.SelectFrom(row.Candidates(pkgs, hc.arch), hc.wanted)
 	if level == hub.NotFound {
 		return skip("the hub has none of those packages for " + hc.arch + ", so it cannot be converted")
@@ -190,7 +225,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, late map[string]string, 
 	}
 	a.RemoveAll(obs.Sysroot)
 	obs.Sysroot = dest
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, Why: row.Reason, Recipe: rec}
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
 	return nil
 }
@@ -201,4 +236,14 @@ func (a *App) mkdirTemp() (string, error) {
 		return a.MkdirTemp("", ToolName+"-hub-")
 	}
 	return os.MkdirTemp("", ToolName+"-hub-")
+}
+
+// hubStale says, when the list of the hub is an old copy from disk, which copy
+// and why.
+func (a *App) hubStale(service string) []plan.Item {
+	when, cause := a.Hub.Stale()
+	if when.IsZero() {
+		return nil
+	}
+	return []plan.Item{hubNote(service, "hub", fmt.Sprintf("the list of the hub is a copy of %s, because the hub could not be read (%v)", when.UTC().Format("2006-01-02"), cause))}
 }

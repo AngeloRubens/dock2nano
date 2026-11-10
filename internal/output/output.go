@@ -450,6 +450,8 @@ type manifestDoc struct {
 
 	RebootOnExit bool
 
+	BaseVolumeSz string
+
 	DisableArgsCopy bool
 
 	RunConfig runConfigDoc

@@ -1,11 +1,7 @@
 package gen
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"os"
 	"path"
 	"slices"
 	"sort"
@@ -30,6 +26,10 @@ type HubUse struct {
 	// Wanted is the version of the image of the user, or "" when it is not
 	// known.
 	Wanted string
+
+	// ImageEnv is the environment of the image of the user, which the observed
+	// program may have overwritten; it is read together with the observed one.
+	ImageEnv []string
 
 	// Why says why the hub was consulted: what the observation showed, or the
 	// reason of the row that requires it.
@@ -73,7 +73,7 @@ func (u HubUse) versions() string {
 // comes from, that its files are not used, what was applied, and what the
 // hub and the user have different.
 func ApplyHubRecipe(u HubUse, obs *observe.Result) []plan.Item {
-	items := []plan.Item{u.item(plan.Approximated, "hub", fmt.Sprintf("the hub of ops packages was consulted because %s. Package %s. The files of the image are the ones observed from your image; from the hub only the recipe is taken (arguments, directives of the configuration, environment). Versions: %s", u.Why, u.source(), u.versions()))}
+	items := []plan.Item{u.item(plan.Approximated, "hub", fmt.Sprintf("the hub of ops packages was consulted because %s. Package %s. The files of the image are the ones observed from your image. From the hub package only environment variables are taken; its arguments are reported, not applied. The directives that make the program run as one process come from hints/hub-tables.yaml of this tool, not from the package. Versions: %s", u.Why, u.source(), u.versions()))}
 	items = append(items, hubArgs(u)...)
 	items = append(items, hubEnv(u, obs)...)
 	cfgItems, cfgDone := hubConfig(u, obs)
@@ -98,7 +98,7 @@ func hubArgs(u HubUse) []plan.Item {
 // variable the image sets keeps its value. Only names are reported.
 func hubEnv(u HubUse, obs *observe.Result) []plan.Item {
 	have := map[string]string{}
-	for _, e := range obs.Env {
+	for _, e := range append(slices.Clone(u.ImageEnv), obs.Env...) {
 		if k, v, ok := strings.Cut(e, "="); ok {
 			have[k] = v
 		}
@@ -157,113 +157,9 @@ func sortedKeys(m map[string]any) []string {
 // nothing here is run on nanos.
 func hubVerdict(u HubUse, changed bool) plan.Item {
 	if changed {
-		return u.item(plan.Approximated, "hub result", "the hub recipe was applied to the files of your image. It was not run on nanos here: it is not known whether the program now starts and keeps running. What was seen when it was observed: "+u.Why)
+		return u.item(plan.Approximated, "hub result", "the directives for one process were set in the copy of your configuration in the package, and the environment variables of the hub recipe were added. It was not run on nanos here: it is not known whether the program now starts and keeps running. What was seen when it was observed: "+u.Why)
 	}
-	return u.item(plan.Unsupported, "hub result", "nothing was applied that changes how the program is started (the arguments of the recipe are never applied, and no single-process directive could be set in the configuration file), so the program is as it was observed and it still does not start as one process. What was seen when it was observed: "+u.Why)
-}
-
-// hubConfig sets, in the configuration file of the user, the directives that
-// make the program run as one process, with the values of the table (never
-// the values of the hub package). It reports the directives and where the
-// configuration of the hub package and the one of the user differ. The file
-// is reached only through the sysroot: a link that leaves it is refused. The
-// second result tells whether the file was changed.
-func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, bool) {
-	program := path.Base(obs.Program)
-	sp, ok := hub.SingleProcessFor(program)
-	if !ok {
-		return []plan.Item{u.item(plan.Note, "hub config", "no directives that make "+program+" run as one process are known; its configuration was not changed")}, false
-	}
-	hubText := ""
-	for _, p := range sp.ConfigPaths {
-		if data, ok := u.Recipe.Files[p]; ok {
-			hubText = string(data)
-			break
-		}
-	}
-	fail := func(why string) ([]plan.Item, bool) {
-		return []plan.Item{u.item(plan.Unsupported, "hub config", why+"; the directives "+settingsText(sp.Settings)+" were not applied")}, false
-	}
-	root, err := os.OpenRoot(obs.Sysroot)
-	if err != nil {
-		return fail("the files carried from your image cannot be opened (" + err.Error() + ")")
-	}
-	defer root.Close()
-	inImage, err := userConfig(root, obs, sp)
-	if err != nil {
-		return fail(err.Error())
-	}
-	data, mode, err := readInRoot(root, inImage)
-	if err != nil {
-		return fail("the configuration file " + inImage + " cannot be read (" + err.Error() + ")")
-	}
-	addMissing := !hub.HasTopLevelInclude(string(data))
-	out, changes, skipped := hub.SetTopLevel(string(data), sp.Settings, addMissing)
-	var items []plan.Item
-	if len(changes) > 0 {
-		f, err := root.OpenFile(strings.TrimPrefix(inImage, "/"), os.O_WRONLY|os.O_TRUNC, mode)
-		if err == nil {
-			_, err = f.WriteString(out)
-			if cerr := f.Close(); err == nil {
-				err = cerr
-			}
-		}
-		if err != nil {
-			return fail("the configuration file " + inImage + " cannot be written (" + err.Error() + ")")
-		}
-		items = append(items, u.item(plan.Approximated, "hub config", "in your "+inImage+", at the top level: "+changesText(changes)+" (the values for one process; the values of the hub package are not used). Everything else in your file, the ports, servers and paths included, is as it was"))
-	} else if len(skipped) == 0 {
-		items = append(items, u.item(plan.Note, "hub config", "your "+inImage+" already has "+settingsText(sp.Settings)+" at the top level; nothing was changed"))
-	}
-	if len(skipped) > 0 {
-		items = append(items, u.item(plan.Unsupported, "hub config", "your "+inImage+" includes other files at the top level, which may hold the directives; "+settingsText(skipped)+" were not added, because a second copy would stop the program; if it still starts several processes, set them in the included file"))
-	}
-	return append(items, hubDivergence(u, sp, hubText, out)...), len(changes) > 0
-}
-
-// userConfig finds the configuration file of the user among the files carried
-// from the image: the one named by the option of the program, else the first
-// of the usual places that exists. It returns the path inside the image.
-func userConfig(root *os.Root, obs *observe.Result, sp hub.SingleProcess) (string, error) {
-	places := sp.ConfigPaths
-	for i, a := range obs.Argv {
-		if a == sp.ConfigFlag && i+1 < len(obs.Argv) {
-			if !strings.HasPrefix(obs.Argv[i+1], "/") {
-				return "", fmt.Errorf("the program is started with %s %s, a relative path, which is not followed", sp.ConfigFlag, obs.Argv[i+1])
-			}
-			places = []string{obs.Argv[i+1]}
-			break
-		}
-	}
-	for _, p := range places {
-		fi, err := root.Lstat(strings.TrimPrefix(path.Clean(p), "/"))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("the configuration file %s cannot be reached inside the files carried from your image (%v), so it is not edited", p, err)
-		}
-		if !fi.Mode().IsRegular() {
-			return "", fmt.Errorf("the configuration file %s is not a regular file (a link, for example), so it is not edited", p)
-		}
-		return p, nil
-	}
-	return "", fmt.Errorf("the configuration file was not found among the files carried from your image (looked at %s)", strings.Join(places, ", "))
-}
-
-// readInRoot reads a file of the image through the root of the sysroot.
-func readInRoot(root *os.Root, p string) ([]byte, fs.FileMode, error) {
-	f, err := root.Open(strings.TrimPrefix(p, "/"))
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	data, err := io.ReadAll(f)
-	return data, fi.Mode().Perm(), err
+	return u.item(plan.Unsupported, "hub result", "no directive for one process could be set in the configuration file (and the arguments of the recipe are never applied), so what was seen when the program was observed is not addressed: "+u.Why+". The package is as it was observed")
 }
 
 func settingsText(settings []hub.Setting) string {
@@ -333,7 +229,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	obs.UID, obs.GID = 0, 0
 	dropped := ""
 	if obs.Children > 0 {
-		dropped = fmt.Sprintf(" The %d child processes seen when your image was observed do not apply to this build.", obs.Children)
+		dropped = fmt.Sprintf(" The %d %s seen when your image was observed do not apply to this build.", obs.Children, plural(obs.Children, "child process", "child processes"))
 	}
 	obs.Children, obs.ChildCalls = 0, nil
 	obs.StoppedEarly = false
@@ -345,6 +241,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Approximated, "hub package", fmt.Sprintf("this program must use the build of the hub whole (%s). The package is %s, with its own files, program and arguments; the files observed from your image are not in it.%s Versions: %s", u.Why, u.source(), dropped, u.versions())),
 		u.item(plan.Unsupported, "hub files", "the configuration, extensions and data of your image are not carried: the package holds the files of the hub build, so your configuration files do not apply to it"),
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
+		u.item(plan.Unsupported, "hub credentials", "the hub builds of postgres and mysql do not apply the password variables of the environment (POSTGRES_PASSWORD, MYSQL_ROOT_PASSWORD): they accept connections with trust authentication, or have root/root baked in, so the passwords of your image are not in effect; check how the package authenticates before it is reachable by anything else"),
 	}
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
@@ -358,4 +255,12 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		items = append(items, u.item(plan.Unsupported, "hub data", "DATA VOLUMES ARE NOT COMPATIBLE: this build is the nearest of the hub, and its version is in another major series than the one of your image ("+u.versions()+"); data written by your version cannot be read by it"))
 	}
 	return items
+}
+
+// plural gives the one form for 1 and the other for the rest.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

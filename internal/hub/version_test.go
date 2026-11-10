@@ -87,11 +87,11 @@ func TestSelectExact(t *testing.T) {
 func TestSelectNearIsTheClosestOfTheSameSeries(t *testing.T) {
 	pkgs := []Package{pkg("eyberg", "nginx", "1.15.6", "x86_64"), pkg("eyberg", "nginx", "1.28.3", "x86_64"), pkg("eyberg", "nginx", "1.18.0", "x86_64"), pkg("eyberg", "nginx", "2.0.0", "x86_64")}
 	p, lvl := Select(pkgs, "nginx", "1.25.3", "amd64")
-	if lvl != Near || p.Version != "1.28.3" {
+	if lvl != Near || p.Version != "1.18.0" {
 		t.Errorf("got %v %v", p.Version, lvl)
 	}
 	p, lvl = Select(pkgs, "nginx", "1.17.9", "amd64")
-	if lvl != Near || p.Version != "1.18.0" {
+	if lvl != Near || p.Version != "1.15.6" {
 		t.Errorf("got %v %v", p.Version, lvl)
 	}
 }
@@ -316,19 +316,67 @@ func TestTheShippedTablesAreRead(t *testing.T) {
 }
 
 func TestParseTables(t *testing.T) {
-	good := "namespace_preference: [a]\nsingle_process:\n  x:\n    config_paths: [/x.conf]\n    settings:\n      - {name: n, value: v}\n"
-	tb, err := ParseTables([]byte(good))
-	if err != nil || tb.SingleProcess["x"].Settings[0].Value != "v" {
+	row := func(extra string) string {
+		return "single_process:\n  x:\n    config_paths: [/x.conf]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n" + extra
+	}
+	tb, err := ParseTables([]byte("namespace_preference: [a]\n" + row("    params_flag: -g\n    base_volume_size: 200m\n")))
+	if err != nil || tb.SingleProcess["x"].Settings[0].Value != "v" || tb.SingleProcess["x"].ParamsFlag != "-g" || tb.SingleProcess["x"].BaseVolumeSize != "200m" {
 		t.Fatalf("%+v %v", tb, err)
 	}
 	for _, bad := range []string{
 		"typo: 1\n",
-		"single_process:\n  x:\n    settings:\n      - {name: n, value: v}\n",
-		"single_process:\n  x:\n    config_paths: [/x]\n",
-		"single_process:\n  x:\n    config_paths: [/x]\n    settings:\n      - {name: n}\n",
+		"single_process:\n  x:\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  X:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  x:\n    config_paths: [x.conf]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  x:\n    config_paths: [/a/../x]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a;b\"}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a b\"}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a#\"}\n",
+		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"{\"}\n",
+		row("    base_volume_size: lots\n"),
+		"version_env:\n  Postgres: [PG_VERSION]\n",
+		"version_env:\n  postgres: []\n",
 	} {
 		if _, err := ParseTables([]byte(bad)); err == nil {
 			t.Errorf("accepted: %q", bad)
 		}
+	}
+}
+
+func TestSelectTakesTheNewestReleaseNotNewerThanTheVersionAsked(t *testing.T) {
+	rows := []struct {
+		want     string
+		versions []string
+		got      string
+		level    Level
+	}{
+		{"17", []string{"16.1", "16.4"}, "16.4", Far},
+		{"1.25.3", []string{"1.24.0", "1.24.9"}, "1.24.9", Near},
+		{"1.0", []string{"1.5", "1.2"}, "1.2", Near},
+		{"16.3", []string{"15.9", "16.1", "17.0"}, "16.1", Near},
+		{"16", []string{"15.0", "17.0"}, "15.0", Far},
+	}
+	for _, r := range rows {
+		var pkgs []Package
+		for _, v := range r.versions {
+			pkgs = append(pkgs, pkg("eyberg", "x", v, "x86_64"))
+		}
+		if p, lvl := Select(pkgs, "x", r.want, "amd64"); p.Version != r.got || lvl != r.level {
+			t.Errorf("want %s of %v: got %s %v, want %s %v", r.want, r.versions, p.Version, lvl, r.got, r.level)
+		}
+	}
+}
+
+func TestAShortHubVersionIsNotExactForALongerOne(t *testing.T) {
+	pkgs := []Package{pkg("eyberg", "x", "1.25", "x86_64")}
+	if _, lvl := Select(pkgs, "x", "1.25.0", "amd64"); lvl != Near {
+		t.Errorf("%v", lvl)
+	}
+	both := []Package{pkg("eyberg", "x", "1.25", "x86_64"), pkg("zeta", "x", "1.25.0", "x86_64")}
+	if p, lvl := Select(both, "x", "1.25.0", "amd64"); p.Version != "1.25.0" || lvl != Exact {
+		t.Errorf("%v %v", p.Version, lvl)
 	}
 }

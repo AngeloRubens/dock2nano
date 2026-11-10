@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // The limits are variables so that tests can lower them.
@@ -92,6 +93,11 @@ type Recipe struct {
 type Source interface {
 	// Manifest lists the packages.
 	Manifest(ctx context.Context) ([]Package, error)
+
+	// Stale says, once Manifest has answered, whether the list is an old copy
+	// from disk: its date, and why the hub was not read. The zero time says
+	// it is not.
+	Stale() (time.Time, error)
 
 	// FetchRecipe downloads a package, checks its digest and reads its
 	// manifest, its config.json and the sysroot files named in files.
@@ -348,8 +354,12 @@ func extract(r io.Reader, dest, program string) (int, error) {
 			}
 			return writeFile(full, os.FileMode(h.Mode&0o777)|0o600, body)
 		case tar.TypeLink:
-			_, linkRel, _ := strings.Cut(path.Clean(strings.TrimPrefix(h.Linkname, "./")), "/")
-			from := place(linkRel)
+			linkTop, linkRel, _ := strings.Cut(path.Clean(strings.TrimPrefix(h.Linkname, "./")), "/")
+			entryTop, _, _ := strings.Cut(path.Clean(strings.TrimPrefix(h.Name, "./")), "/")
+			from := ""
+			if linkTop == entryTop {
+				from = place(linkRel)
+			}
 			if from == "" {
 				skipped++
 				return nil

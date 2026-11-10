@@ -37,6 +37,8 @@ func TestParseRequiredRefusesWhatIsNotAProperRow(t *testing.T) {
 		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [a/b/c]\n    reason: r\n",
 		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [x/y]\n    reason: r\n    typo: 1\n",
 		"rows: [",
+		"rows:\n  - images: [Postgres]\n    programs: [a]\n    packages: [x/y]\n    reason: r\n",
+		"rows:\n  - images: [a]\n    programs: [/usr/bin/a]\n    packages: [x/y]\n    reason: r\n",
 	}
 	for _, text := range bad {
 		if _, err := ParseRequired([]byte(text)); err == nil {
@@ -128,8 +130,8 @@ func TestRequiredCandidates(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	p, lvl := SelectFrom(got, "16.1")
-	if p.Version != "16.2" || lvl != Near {
-		// 16.0 and 16.2 are both 0.1 from 16.1; the newer wins
+	if p.Version != "16.0" || lvl != Near {
+		// the newest release that is not newer than 16.1
 		t.Errorf("16.1: %v %v", p.Version, lvl)
 	}
 	p, lvl = SelectFrom(got, "16.0")
@@ -141,7 +143,7 @@ func TestRequiredCandidates(t *testing.T) {
 		t.Errorf("11.3: %v %v", p.Ref(), lvl)
 	}
 	p, lvl = SelectFrom(got, "14.5")
-	if lvl != Far || p.Version != "16.2" {
+	if lvl != Far || p.Version != "16.0" {
 		t.Errorf("14.5: %v %v", p.Ref(), lvl)
 	}
 	p, lvl = SelectFrom(got, "17.1")
