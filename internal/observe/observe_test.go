@@ -2615,6 +2615,31 @@ func TestObservePassedOverCommandLineIsRedacted(t *testing.T) {
 	}
 }
 
+func TestObservePassedOverKeepsTheEndsOfArgumentsAndFlagsACompoundScript(t *testing.T) {
+	s := newScene(t)
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start", "--password", "two words"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node migrate.js && node app"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start --password 'two words'", "sh -c 'node migrate.js && node app'"})
+	equal(t, "compound", res.PassedOverCompound, true)
+}
+
+func TestObservePassedOverOfASimpleScriptIsNotCompound(t *testing.T) {
+	s := newScene(t)
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node app"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "compound", res.PassedOverCompound, false)
+}
+
 func TestObservePassedOverWithoutArgvIsGivenByPath(t *testing.T) {
 	s := newScene(t)
 	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */`, `"/usr/local/bin/npm", 0x7ffd, 0x7ffd /* 4 vars */`, 1)

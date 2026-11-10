@@ -740,7 +740,9 @@ type Exec struct {
 	Line int
 
 	// PassedOver are the package manager launchers (see Launcher) that FinalExec passed over to
-	// reach this program, the outermost first: what the image started, which is not what runs.
+	// reach this program, the outermost first, and the shells it passed over after the first of
+	// them (the shell that runs the script of npm start): what the launcher ran, which is not what
+	// the package runs.
 	PassedOver []Exec
 }
 
@@ -927,7 +929,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 			if len(children) != 1 {
 				break
 			}
-			if launcher {
+			// once a launcher was passed over, everything passed over after it is recorded, the
+			// shell that runs its script included: what it ran besides the program is not run
+			if launcher || len(passed) > 0 {
 				passed = append(passed, last[process])
 			}
 			process = children[0]

@@ -30,10 +30,12 @@ var yarnClassicDir = regexp.MustCompile(`/yarn-v[^/]+/bin$`)
 // corepackStore is the directory the store of corepack keeps the package managers in.
 var corepackStore = regexp.MustCompile(`/(node/corepack|corepack/v\d+)/`)
 
-// nvmBin, voltaBin and npmGlobalBin are the bin directories that node version managers and
-// "npm config set prefix" make: the links to the launchers are there.
+// nvmBin and npmGlobalBin are the bin directories that nvm and "npm config set prefix" make, and
+// ~/.volta/bin holds Volta's shims: the links to the launchers are there. The files Volta keeps in
+// ~/.volta/tools/image/<package manager>/<version> are not listed: that layout is not known well
+// enough to name it here (npm and pnpm are found through their node_modules directories anyway).
 var (
-	nvmBin       = regexp.MustCompile(`/node/v[^/]+/bin$`)
+	nvmBin       = regexp.MustCompile(`/node/v\d[^/]*/bin$`)
 	npmGlobalBin = regexp.MustCompile(`/\.npm-global/bin$`)
 )
 
@@ -50,6 +52,10 @@ func nodeExtension(b string) string {
 // launcherFile tells whether the file at p is a launcher, from its place and its name, and gives
 // the name of the launcher ("npm", "npx", "yarn", "yarnpkg", "pnpm" or "pnpx"), or "" when it is not.
 func launcherFile(p string) string {
+	if !path.IsAbs(p) {
+		// node node_modules/npm/bin/npm-cli.js: the places are tested with a directory before them
+		p = "/" + p
+	}
 	d, b := path.Dir(p), path.Base(p)
 	switch {
 	case binDirs[d] && launcherSet[b]:
@@ -110,23 +116,22 @@ func Launcher(program string, argv []string) (name string, rest []string, ok boo
 	name, rest, ok = launcherRaw(program, argv)
 	if ok && name == "corepack" {
 		// corepack <package manager> <arguments>
-		if len(rest) > 0 && launcherSet[rest[0]] {
-			return rest[0], rest[1:], true
+		if len(rest) > 0 {
+			// corepack yarn@4.1.0 start
+			if pm, _, _ := strings.Cut(rest[0], "@"); launcherSet[pm] {
+				return pm, rest[1:], true
+			}
 		}
 		return "", nil, false
 	}
 	return name, rest, ok
 }
 
-func launcherRaw(program string, argv []string) (name string, rest []string, ok bool) {
-	if n := launcherFile(program); n != "" {
-		if len(argv) > 0 {
-			rest = argv[1:]
-		}
-		return n, rest, true
-	}
-	var interp string
-	args := argv
+// interpreterOf tells which interpreter a program is (node, nodejs, or one of the shells), from its
+// path and argv[0], and gives its arguments. A busybox is the applet named by argv[0] or by its first
+// argument. interp is "" when it is none of them.
+func interpreterOf(program string, argv []string) (interp string, args []string) {
+	args = argv
 	if len(args) > 0 {
 		args = args[1:]
 	}
@@ -142,10 +147,21 @@ func launcherRaw(program string, argv []string) (name string, rest []string, ok 
 	if interp == "busybox" {
 		// busybox sh -c "..."
 		if len(args) == 0 || !interpreters[path.Base(args[0])] {
-			return "", nil, false
+			return "", nil
 		}
 		interp, args = path.Base(args[0]), args[1:]
 	}
+	return interp, args
+}
+
+func launcherRaw(program string, argv []string) (name string, rest []string, ok bool) {
+	if n := launcherFile(program); n != "" {
+		if len(argv) > 0 {
+			rest = argv[1:]
+		}
+		return n, rest, true
+	}
+	interp, args := interpreterOf(program, argv)
 	switch interp {
 	case "":
 		return "", nil, false
@@ -170,15 +186,9 @@ func launcherRaw(program string, argv []string) (name string, rest []string, ok 
 		return "", nil, false
 	}
 	// a shell: only the form "-c command"
-	for i, a := range args {
-		if !shellCommandOption(a) || i+1 >= len(args) {
-			continue
-		}
-		text := args[i+1]
-		for _, c := range compound {
-			if strings.Contains(text, c) {
-				return "", nil, false
-			}
+	if text, found := commandText(args); found {
+		if IsCompound(text) {
+			return "", nil, false
 		}
 		words := strings.Fields(text)
 	strip:
@@ -207,10 +217,54 @@ func launcherRaw(program string, argv []string) (name string, rest []string, ok 
 	return "", nil, false
 }
 
+// IsCompound tells whether the text of a shell command line is more than one command: it holds
+// &, |, ;, a newline, a backtick, $( or a quote.
+func IsCompound(text string) bool {
+	for _, c := range compound {
+		if strings.Contains(text, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandText finds the command line a shell is given with -c (or a cluster of options that holds
+// c, as -ec), among its arguments. The search stops at the first operand that is not an option: after
+// it the arguments belong to the script ("sh /entry.sh -c x" runs /entry.sh). The value of -o and +o
+// is skipped.
+func commandText(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case shellCommandOption(a):
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", false
+		case a == "-o" || a == "+o":
+			i++
+		case a == "--" || a == "-" || a == "+" || !(strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+")):
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// ShellCommand gives the command line of a program that is a shell (or busybox as one) started with
+// -c, and whether it is one.
+func ShellCommand(program string, argv []string) (string, bool) {
+	interp, args := interpreterOf(program, argv)
+	switch interp {
+	case "sh", "bash", "dash", "ash":
+		return commandText(args)
+	}
+	return "", false
+}
+
 // shellCommandOption tells whether an argument of a shell is -c, or a cluster of single letter
-// options that ends in c (-ec, -lc), which is followed by the command.
+// options that holds c (-ec, -lc, -ce), which is followed by the command.
 func shellCommandOption(a string) bool {
-	if len(a) < 2 || a[0] != '-' || a[len(a)-1] != 'c' {
+	if len(a) < 2 || a[0] != '-' || !strings.Contains(a, "c") {
 		return false
 	}
 	for _, r := range a[1:] {
@@ -259,6 +313,20 @@ var builtins = map[string]bool{
 // launcher at another directory or package (--cwd, -C, --dir, --prefix, --filter, -F, -w,
 // --workspace): the script is not in the package.json of the working directory.
 func ScriptOf(launcher string, rest []string) (script string, elsewhere bool) {
+	script, elsewhere, _ = ScriptRun(launcher, rest)
+	return script, elsewhere
+}
+
+// elsewhereFlags are the options, per launcher, with no value, that make the launcher run the script
+// in other packages (every workspace, the root of the workspace).
+var elsewhereFlags = map[string]map[string]bool{
+	"npm":  {"--workspaces": true, "--ws": true},
+	"pnpm": {"-r": true, "--recursive": true, "--workspace-root": true},
+}
+
+// ScriptRun is ScriptOf that also says whether the script was named with run (or run-script): "pnpm
+// run foo" fails when there is no script foo, where "pnpm foo" falls back to running a command.
+func ScriptRun(launcher string, rest []string) (script string, elsewhere, viaRun bool) {
 	var words []string
 loop:
 	for i := 0; i < len(rest); i++ {
@@ -268,7 +336,9 @@ loop:
 			break loop
 		case strings.HasPrefix(a, "-"):
 			name, _, hasValue := strings.Cut(a, "=")
-			if dirOptions[name] {
+			if elsewhereFlags[strings.TrimSuffix(launcher, "pkg")][name] {
+				elsewhere = true
+			} else if dirOptions[name] {
 				elsewhere = true
 				// -w of pnpm is the root of the workspace, with no value
 				if !hasValue && !(name == "-w" && launcher == "pnpm") {
@@ -282,29 +352,29 @@ loop:
 		}
 	}
 	if len(words) == 0 {
-		return "", elsewhere
+		return "", elsewhere, false
 	}
 	switch launcher {
 	case "npm":
 		switch words[0] {
 		case "run", "run-script", "rum", "urn":
 			if len(words) > 1 {
-				return words[1], elsewhere
+				return words[1], elsewhere, true
 			}
 		case "start", "stop", "restart":
-			return words[0], elsewhere
+			return words[0], elsewhere, false
 		case "test", "t", "tst":
-			return "test", elsewhere
+			return "test", elsewhere, false
 		}
 	case "yarn", "yarnpkg", "pnpm":
 		switch {
 		case words[0] == "run" || words[0] == "run-script":
 			if len(words) > 1 {
-				return words[1], elsewhere
+				return words[1], elsewhere, true
 			}
 		case !builtins[words[0]]:
-			return words[0], elsewhere
+			return words[0], elsewhere, false
 		}
 	}
-	return "", elsewhere
+	return "", elsewhere, false
 }

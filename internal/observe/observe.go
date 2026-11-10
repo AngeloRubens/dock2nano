@@ -202,6 +202,10 @@ type Result struct {
 	// outermost first. Empty when the program is what the image started (or a shell led to it).
 	PassedOver []string
 
+	// PassedOverCompound is true when one of the shells passed over ran a command line of several
+	// commands (a && b, a; b): the commands besides the program are not run by the package.
+	PassedOverCompound bool
+
 	// Children is the number of child processes (fork, vfork, clone or clone3 without
 	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
 	// one process, so the caller reports a program that has any.
@@ -332,6 +336,22 @@ func (r *run) redact(text string) string {
 		}
 	}
 	return text
+}
+
+// PasswordPair matches password=value and pwd=value (see passwordPair).
+var PasswordPair = passwordPair
+
+// quoteArg writes an argument of a command line so that its end is visible: one that is empty or
+// holds a space, a tab, a newline, a quote or a backslash is put in single quotes, or in double
+// quotes when it holds a single quote.
+func quoteArg(a string) string {
+	if a != "" && !strings.ContainsAny(a, " \t\n'\"\\") {
+		return a
+	}
+	if !strings.Contains(a, "'") {
+		return "'" + a + "'"
+	}
+	return `"` + strings.NewReplacer("\\", "\\\\", "\"", "\\\"").Replace(a) + `"`
 }
 
 // passwordPair matches password=value and pwd=value in a query string or a string separated by
@@ -704,13 +724,22 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 	pid, program, from := final.Pid, final.Path, final.Line
 	var passedOver []string
+	passedOverCompound := false
 	for _, l := range final.PassedOver {
 		if len(l.Argv) == 0 {
 			passedOver = append(passedOver, r.redact(l.Path))
 			continue
 		}
-		// the values of Options.Env that a shell expanded into the command line are hidden
-		passedOver = append(passedOver, r.redact(strings.Join(l.Argv, " ")))
+		// the values of Options.Env that a shell expanded into the command line are hidden, one
+		// argument at a time, and an argument with a space is quoted: its end stays visible
+		words := make([]string, len(l.Argv))
+		for i, a := range l.Argv {
+			words[i] = quoteArg(r.redact(a))
+		}
+		passedOver = append(passedOver, strings.Join(words, " "))
+		if text, ok := trace.ShellCommand(l.Path, l.Argv); ok && trace.IsCompound(text) {
+			passedOverCompound = true
+		}
 	}
 	r.vlogf("the program is %s, process %s\n", program, pid)
 
@@ -898,6 +927,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		CreatedAtRuntime:   created,
 		Vanished:           len(r.gone),
 		PassedOver:         passedOver,
+		PassedOverCompound: passedOverCompound,
 		Children:           len(children),
 		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),

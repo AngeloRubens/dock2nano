@@ -763,7 +763,7 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 	if name == "npx" || name == "pnpx" {
 		advice = "if the package it runs is a single node program, run its file directly (node <file>) and give it to the image as its command"
 	}
-	script, elsewhere := trace.ScriptOf(name, rest)
+	script, elsewhere, viaRun := trace.ScriptRun(name, rest)
 	switch {
 	case script == "":
 		msg += ". " + advice
@@ -783,8 +783,12 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: npm run fails for it%s", script, option)
 		case state == scriptMissing && script == "start":
 			msg += fmt.Sprintf(". It was asked to run the script \"start\", which package.json does not have: %s then may run node server.js if that file exists%s", name, option)
+		case state == scriptMissing && name == "pnpm" && viaRun:
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: pnpm run fails for it%s", script, option)
+		case state == scriptMissing && name == "pnpm":
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: pnpm then falls back to running a command of that name (pnpm exec)%s", script, option)
 		case state == scriptMissing:
-			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: %s then runs the binary of that name from node_modules/.bin if there is one (pnpm falls back to pnpm exec)%s", script, name, option)
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: %s then runs the binary of that name from node_modules/.bin if there is one%s", script, name, option)
 		default:
 			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
 		}
@@ -823,14 +827,30 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	for _, c := range obs.PassedOver {
 		started = append(started, hideSecrets(c))
 	}
-	g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the image starts %s and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command", strings.Join(started, ", then ")))
+	msg := fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command", strings.Join(started, ", then "))
+	if obs.PassedOverCompound {
+		msg += ". The script was a command line of several commands: the commands of the script besides that program are not run by the package"
+	}
+	g.add(s.Name, plan.Note, "launcher passed over", msg)
 }
 
 // secretWord is a NAME=value word or an option, whose name can be tested for a secret.
 var secretWord = regexp.MustCompile(`^-{0,2}[A-Za-z_][A-Za-z0-9_.-]*$`)
 
-// urlUserinfo is the user and password of a URL.
-var urlUserinfo = regexp.MustCompile(`(\w+://)[^/\s:@'"]+:[^/\s@'"]*@`)
+// The patterns that hide a secret wherever it is in the text of a command line.
+var (
+	// urlUserinfo is everything between scheme:// and the last @ of the word: the user, the
+	// password (which may hold a / or an @) or the token that stands for both. It hides too much of
+	// "https://host/@scope/pkg": hiding too much is the safer mistake.
+	urlUserinfo = regexp.MustCompile(`(\w+://)[^\s'"]*@`)
+	// authHeader is the value of an Authorization header, and bearerToken the word after Bearer.
+	authHeader  = regexp.MustCompile(`(?i)(authorization:\s*(?:(?:bearer|basic|token)\s+)?)[^\s"']+`)
+	bearerToken = regexp.MustCompile(`(?i)\b(bearer)\s+[^\s"']+`)
+	// jsonSecret is the string value of a key of a JSON object whose name looks like a secret.
+	jsonSecret = regexp.MustCompile(`(?i)("[^"\s\\]*(?:pass|pwd|secret|token|key|cred|auth|private|cert|sign|salt|dsn)[^"\s\\]*"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+	// shellDefault is ${NAME:-default}, ${NAME-default}, ${NAME:=default} and the like.
+	shellDefault = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=+?])([^}]*)\}`)
+)
 
 // secretLike tells whether the name of a variable or of an option looks like a secret.
 func secretLike(name string) bool {
@@ -840,13 +860,35 @@ func secretLike(name string) bool {
 	return observe.SecretName(strings.ReplaceAll(strings.TrimLeft(name, "-"), "-", "_"))
 }
 
-// hideSecrets hides, in a command line, the value of NAME=value and --name=value when the name looks
-// like the name of a secret (the value may be quoted, with spaces), the word after --name when it
-// does, and the user and password of a URL. The spacing of the text is kept.
+// hideSecrets hides what looks like a secret in a command line:
+//   - the value of NAME=value and --name=value when the name looks like the name of a secret, also
+//     when the word is quoted as a whole ("NAME=value") or the value has spaces or escapes;
+//   - the word after --name when the name does, and the word after -p or -P, and what follows -p
+//     in a word (-psecret). A word that follows --no-auth or --key-file is hidden too, and so is a
+//     port after -p: hiding too much is the safer mistake;
+//   - the user and password of a URL, the value of an Authorization header and the word after
+//     Bearer, password=value and pwd=value, the string values of the JSON keys that look secret,
+//     and the default of ${NAME:-default} when NAME does.
+//
+// The spacing of the text is kept.
 func hideSecrets(text string) string {
+	text = authHeader.ReplaceAllString(text, "${1}***")
+	text = bearerToken.ReplaceAllString(text, "${1} ***")
+	text = jsonSecret.ReplaceAllString(text, `${1}"***"`)
+	text = observe.PasswordPair.ReplaceAllString(text, "${1}=***")
+	text = urlUserinfo.ReplaceAllString(text, "${1}***@")
+	text = shellDefault.ReplaceAllStringFunc(text, func(m string) string {
+		g := shellDefault.FindStringSubmatch(m)
+		if secretLike(g[1]) {
+			return "${" + g[1] + g[2] + "***}"
+		}
+		return m
+	})
+
 	var out strings.Builder
 	var word strings.Builder
 	var quote rune
+	escaped := false
 	hideNext := false
 	flush := func() {
 		if word.Len() == 0 {
@@ -854,23 +896,37 @@ func hideSecrets(text string) string {
 		}
 		w := word.String()
 		word.Reset()
-		name, _, hasValue := strings.Cut(w, "=")
+		if hideNext && !strings.HasPrefix(w, "-") {
+			hideNext = false
+			out.WriteString("***")
+			return
+		}
+		hideNext = false
+		inner, q := w, ""
+		if len(w) >= 2 && (w[0] == '"' || w[0] == '\'') && w[len(w)-1] == w[0] {
+			inner, q = w[1:len(w)-1], w[:1]
+		}
+		name, _, hasValue := strings.Cut(inner, "=")
 		switch {
-		case hideNext && !strings.HasPrefix(w, "-"):
-			w = "***"
-			hideNext = false
 		case hasValue && secretLike(name):
-			w = name + "=***"
-			hideNext = false
+			w = q + name + "=***" + q
 		case !hasValue && strings.HasPrefix(w, "--") && secretLike(w):
 			hideNext = true
-		default:
-			hideNext = false
+		case w == "-p" || w == "-P":
+			hideNext = true
+		case len(w) > 2 && (strings.HasPrefix(w, "-p") || strings.HasPrefix(w, "-P")):
+			w = w[:2] + "***"
 		}
-		out.WriteString(urlUserinfo.ReplaceAllString(w, "${1}***@"))
+		out.WriteString(w)
 	}
 	for _, r := range text {
 		switch {
+		case escaped:
+			word.WriteRune(r)
+			escaped = false
+		case r == '\\' && quote != '\'':
+			word.WriteRune(r)
+			escaped = true
 		case quote != 0:
 			word.WriteRune(r)
 			if r == quote {

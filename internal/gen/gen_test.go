@@ -1263,7 +1263,7 @@ func TestPassedOverLauncherIsANote(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
 	in.Services["web"].Observed.PassedOver = []string{"node /usr/local/bin/npm run dev TOKEN=abcdef"}
 	p := mustGen(t, in)
-	want1(t, p, "web", plan.Note, "launcher passed over", "the image starts node /usr/local/bin/npm run dev TOKEN=***")
+	want1(t, p, "web", plan.Note, "launcher passed over", "the commands passed over were node /usr/local/bin/npm run dev TOKEN=***")
 	want1(t, p, "web", plan.Note, "launcher passed over", "the package runs the command the launcher started (in package.manifest)")
 	if got := itemsOf(p, "web", plan.Note, "launcher passed over"); strings.Contains(got[0].Message, "server.js") {
 		t.Errorf("message %q prints the command line of the program", got[0].Message)
@@ -1298,6 +1298,24 @@ func TestHideSecrets(t *testing.T) {
 		{"url without a password", "node a.js http://host:80/x", "node a.js http://host:80/x"},
 		{"spacing is kept", "a  B_SECRET=1   c\td", "a  B_SECRET=***   c\td"},
 		{"nothing", "node server.js", "node server.js"},
+		{"quoted assignment", `cross-env "API_KEY=abc" node x`, `cross-env "API_KEY=***" node x`},
+		{"export with a quoted assignment", "export 'TOKEN=abc'", "export 'TOKEN=***'"},
+		{"short option with a separate value", "mysql -p secret db", "mysql -p *** db"},
+		{"short option with the value attached", "mysql -psecret db", "mysql -p*** db"},
+		{"authorization header", `curl -H "Authorization: Bearer xyz" http://h`, `curl -H "Authorization: Bearer ***" http://h`},
+		{"authorization header not quoted", "curl -H Authorization: Bearer xyz http://h", "curl -H Authorization: Bearer *** http://h"},
+		{"bearer word", "run Bearer abc", "run Bearer ***"},
+		{"url with only a user", "git clone https://ghp_xxx@github.com/a/b", "git clone https://***@github.com/a/b"},
+		{"url with an @ in the password", "node a.js postgres://u:p@ss@h/db", "node a.js postgres://***@h/db"},
+		{"url with a slash in the password", "node a.js postgres://u:p/ss@h/db", "node a.js postgres://***@h/db"},
+		{"password in a query", "node a.js http://h/x?password=abc&x=1", "node a.js http://h/x?password=***&x=1"},
+		{"password in a connection string", `node a.js "Server=s;Password=xyz"`, `node a.js "Server=s;Password=***"`},
+		{"escaped space", `TOKEN=a\ b node x`, "TOKEN=*** node x"},
+		{"escaped quote", `TOKEN="a\" b" node x`, "TOKEN=*** node x"},
+		{"json key", `node a.js '{"apiKey":"x"}'`, `node a.js '{"apiKey":"***"}'`},
+		{"default of a secret", "node a.js ${TOKEN:-abc}", "node a.js ${TOKEN:-***}"},
+		{"default that is not a secret", "node a.js ${PORT:-80}", "node a.js ${PORT:-80}"},
+		{"option value with a space", "npm start --password 'two words'", "npm start --password ***"},
 	}
 	for _, tt := range tests {
 		if got := hideSecrets(tt.in); got != tt.want {
@@ -1359,7 +1377,9 @@ func TestLauncherMissingScriptTexts(t *testing.T) {
 		{"npm start", []string{"node", "/usr/local/bin/npm", "start"}, `{"scripts":{}}`, "if that file exists", ""},
 		{"npm restart", []string{"node", "/usr/local/bin/npm", "restart"}, `{"scripts":{}}`, "stop and start scripts", "which package.json does not have"},
 		{"yarn script", []string{"node", "/opt/yarn-v1.22.19/bin/yarn.js", "foo"}, `{"scripts":{}}`, "binary of that name from node_modules/.bin", ""},
-		{"pnpm script", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "foo"}, `{"scripts":{}}`, "pnpm falls back to pnpm exec", ""},
+		{"yarn start", []string{"node", "/opt/yarn-v1.22.19/bin/yarn.js", "start"}, `{"scripts":{}}`, "may run node server.js if that file exists", "binary of that name"},
+		{"pnpm script", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "foo"}, `{"scripts":{}}`, "falls back to running a command of that name (pnpm exec)", ""},
+		{"pnpm run script", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "run", "foo"}, `{"scripts":{}}`, "pnpm run fails for it", "pnpm exec"},
 		{"pnpm start", []string{"node", "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs", "start"}, `{"scripts":{}}`, "may run node server.js if that file exists", "binary of that name"},
 		{"option value hint", []string{"node", "/usr/local/bin/npm", "run", "dev"}, `{"scripts":{}}`, "value of an option", ""},
 	}
@@ -1375,6 +1395,10 @@ func TestLauncherMissingScriptTexts(t *testing.T) {
 		}
 		if tt.notWant != "" && strings.Contains(got[0].Message, tt.notWant) {
 			t.Errorf("%s: message %q holds %q", tt.name, got[0].Message, tt.notWant)
+		}
+		// every missing script but the restart of npm says that the word may be the value of an option
+		if tt.name != "npm restart" && tt.name != "npm start" && !strings.Contains(got[0].Message, "value of an option") {
+			t.Errorf("%s: message %q has no hint about the value of an option", tt.name, got[0].Message)
 		}
 	}
 }
@@ -1392,6 +1416,27 @@ func TestPassedOverNoteSaysPreAndPostIfTheLauncherRunsThem(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
 	in.Services["web"].Observed.PassedOver = []string{"npm start"}
 	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "the pre and post scripts, if the launcher runs them")
+}
+
+func TestPassedOverNoteSaysTheOtherCommandsOfTheScriptAreNotRun(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"npm start", "sh -c 'node migrate.js && node server.js'"}
+	o.PassedOverCompound = true
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "launcher passed over", "sh -c 'node migrate.js && node server.js'")
+	want1(t, p, "web", plan.Note, "launcher passed over", "besides that program are not run")
+	o.PassedOverCompound = false
+	wantNoText(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "are not run")
+}
+
+func wantNoText(t *testing.T, p *plan.Plan, service string, kind plan.Kind, key, text string) {
+	t.Helper()
+	for _, it := range itemsOf(p, service, kind, key) {
+		if strings.Contains(it.Message, text) {
+			t.Errorf("item %s/%s/%q: message %q holds %q", service, kind, key, it.Message, text)
+		}
+	}
 }
 
 func TestEffectiveCommand(t *testing.T) {
