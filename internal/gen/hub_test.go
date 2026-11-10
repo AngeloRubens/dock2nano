@@ -249,7 +249,7 @@ func TestApplyHubRecipeConfigAlreadyRightChangesNothingAndSaysTheProgramIsNotCha
 	if c := hubFind(items, "hub config"); len(c) == 0 || c[0].Kind != plan.Note || !strings.Contains(c[0].Message, "already has") {
 		t.Errorf("config: %+v", c)
 	}
-	if v := hubFind(items, "hub result"); len(v) != 1 || v[0].Kind != plan.Unsupported {
+	if v := hubFind(items, "hub result"); len(v) != 1 || v[0].Kind != plan.Note {
 		t.Errorf("verdict: %+v", v)
 	}
 }
