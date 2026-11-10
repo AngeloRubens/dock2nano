@@ -9,6 +9,7 @@
 package gen
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,6 +27,7 @@ import (
 	"github.com/AngeloRubens/dock2nano/internal/dockerfile"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/plan"
+	"github.com/AngeloRubens/dock2nano/internal/trace"
 )
 
 // maxListed is how many names a report line lists before "and N more".
@@ -726,9 +728,53 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.Vanished > 0 {
 		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
 	}
+	g.launcherNote(s, obs)
 	if obs.Children > 0 {
 		g.add(s.Name, plan.Unsupported, "processes", fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children))
 	}
+}
+
+// launcherNote says, for a program that is a package manager launcher (npm, npx, yarn, pnpm),
+// that it cannot run on nanos as it is: it starts the script as a child process, and nanos has no
+// fork. When the script is named and package.json was carried with the package, the command of the
+// script is quoted as the underlying command. Nothing is changed.
+func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) {
+	name, rest, ok := trace.Launcher(obs.Program, obs.Argv)
+	if !ok {
+		return
+	}
+	msg := fmt.Sprintf("the observed program is %s, a launcher that starts your command as a child process; nanos has no fork, so it cannot run on nanos as it is", name)
+	if script := trace.ScriptOf(name, rest); script != "" {
+		msg += fmt.Sprintf(". It was asked to run the package.json script %q", script)
+		if cmd, ok := packageScript(obs.Sysroot, obs.WorkingDir, script); ok {
+			msg += fmt.Sprintf(", whose command is %q: run the node command it leads to directly (the file of the package under node_modules that its name points to, as node <file>), and give that to the image as its command", cmd)
+		} else {
+			msg += ", which could not be read from the files of the package: read it in package.json and run its node command directly"
+		}
+	} else {
+		msg += ". Run the node command it starts directly (node <file>), and give that to the image as its command"
+	}
+	g.add(s.Name, plan.Unsupported, "launcher", msg)
+}
+
+// packageScript reads the command of a script from the package.json in the working directory of
+// the observed program, inside the sysroot.
+func packageScript(sysroot, dir, script string) (string, bool) {
+	if sysroot == "" {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(sysroot, filepath.FromSlash(path.Clean("/"+dir)), "package.json"))
+	if err != nil {
+		return "", false
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(data, &pkg) != nil {
+		return "", false
+	}
+	cmd, ok := pkg.Scripts[script]
+	return cmd, ok && cmd != ""
 }
 
 // firstLines returns the first n non-empty lines of s, trimmed, joined by " | ".

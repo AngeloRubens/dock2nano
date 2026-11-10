@@ -1085,6 +1085,59 @@ func TestChildProcessesAreUnsupported(t *testing.T) {
 	wantNone(t, p, "web", plan.Unsupported, "processes")
 }
 
+func TestLauncherProgramIsUnsupportedWithTheScript(t *testing.T) {
+	sysroot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sysroot, "usr/src/app"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	pkg := `{"name":"x","scripts":{"start":"react-scripts start","dev":"nodemon index.js"}}`
+	if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/package.json"), []byte(pkg), 0644); err != nil {
+		t.Fatal(err)
+	}
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	o := in.Services["web"].Observed
+	o.Sysroot, o.WorkingDir = sysroot, "/usr/src/app"
+	o.Program = "/usr/local/bin/node"
+	o.Argv = []string{"node", "/usr/local/bin/npm", "run", "dev"}
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "launcher")
+	if len(got) != 1 {
+		t.Fatalf("got %d items, want 1; report: %+v", len(got), p.Report)
+	}
+	for _, want := range []string{"the observed program is npm", "cannot run on nanos as it is", `script "dev"`, `"nodemon index.js"`} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Errorf("message %q does not hold %q", got[0].Message, want)
+		}
+	}
+	// the files of the user are not touched
+	data, err := os.ReadFile(filepath.Join(sysroot, "usr/src/app/package.json"))
+	if err != nil || string(data) != pkg {
+		t.Errorf("package.json changed: %q, %v", data, err)
+	}
+}
+
+func TestLauncherProgramWithoutReadableScript(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	o := in.Services["web"].Observed
+	o.Program = "/bin/sh"
+	o.Argv = []string{"sh", "-c", "yarn start"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", "the observed program is yarn")
+	want1(t, p, "web", plan.Unsupported, "launcher", "could not be read")
+}
+
+func TestNotALauncherHasNoLauncherItem(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	o := in.Services["web"].Observed
+	o.Program = "/usr/local/bin/node"
+	o.Argv = []string{"node", "server.js"}
+	p := mustGen(t, in)
+	wantNone(t, p, "web", plan.Unsupported, "launcher")
+}
+
 func TestEffectiveCommand(t *testing.T) {
 	exec := func(w ...string) compose.Command { return compose.Command{Exec: w, Set: true} }
 	shell := func(s string) compose.Command { return compose.Command{Shell: s, Set: true} }

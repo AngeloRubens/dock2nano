@@ -792,7 +792,9 @@ func parseArgv(after string) []string {
 // loop), and the most recent one is not the program. So the process that no other running traced
 // program started wins: the parentage comes from the clone, clone3, fork and vfork lines. Of
 // several such processes the one started last wins. A shell that has one running child that
-// started a program is passed over for that child (the shell form of CMD). If every running process is a child of another
+// started a program is passed over for that child (the shell form of CMD); so is a package manager
+// launcher (npm, npx, yarn, pnpm: see Launcher) that has exactly one running child, the script it
+// runs. If every running process is a child of another
 // running one (pid reuse can make that circular), the oldest is taken. When none is running, the
 // one started last is taken. When nothing was started, found is false.
 //
@@ -906,7 +908,10 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// the program: when it has exactly one running child that started a program, that child is.
 	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
 	descend := func(process string) string {
-		for step := 0; step < 8 && shells[path.Base(last[process].Path)]; step++ {
+		for step := 0; step < 8; step++ {
+			if _, _, launcher := Launcher(last[process].Path, last[process].Argv); !launcher && !shells[path.Base(last[process].Path)] {
+				break
+			}
 			var children []string
 			for _, other := range running {
 				if other != process && parent[other] == process {
