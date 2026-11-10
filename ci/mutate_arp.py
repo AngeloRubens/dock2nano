@@ -7,8 +7,8 @@ M = {
     "zeros-dropped": (OLD_PAD, '\t\toctets[i] = strings.TrimLeft(octets[i], "0")'),
     # the case of the letters is kept
     "case-kept": ('strings.Split(strings.ToLower(mac), ":")', 'strings.Split(mac, ":")'),
-    # the old behaviour: the mac is looked for inside the line
-    "substring-match": ("got == want", "strings.Contains(m[2], want) || strings.Contains(want, got)"),
+    # a part of the mac is taken for the mac (the old behaviour looked for it inside the line)
+    "substring-match": ("got == want", "strings.HasSuffix(got, want[1:])"),
 }
 
 name = sys.argv[1]
