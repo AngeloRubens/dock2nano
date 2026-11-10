@@ -956,14 +956,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		LauncherName:         launcherName,
 		LauncherScript:       launcherScript,
 		LauncherElsewhere:    launcherElsewhere,
-		Children:           len(children),
-		ChildCalls:         childCalls,
-		ConfigurationFiles: trace.ConfigurationFiles(sysroot),
-		Image:              cfg,
-		StoppedEarly:       r.stopped,
-		ExitCode:           r.exitCode,
-		StoppedLog:         r.stoppedLog,
-		Warnings:           r.warn,
+		Children:             len(children),
+		ChildCalls:           childCalls,
+		ConfigurationFiles:   trace.ConfigurationFiles(sysroot),
+		Image:                cfg,
+		StoppedEarly:         r.stopped,
+		ExitCode:             r.exitCode,
+		StoppedLog:           r.stoppedLog,
+		Warnings:             r.warn,
 	}, nil
 }
 
