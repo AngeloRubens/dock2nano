@@ -2945,3 +2945,52 @@ func TestObserveWithoutExerciseAsksOnlyTheFrontPage(t *testing.T) {
 	}
 	equal(t, "urls", s.probe.urls, []string{"http://172.17.0.2:80/"})
 }
+
+func TestObserveCarriesWhatTheEntrypointMadeBeforeTheProgram(t *testing.T) {
+	s := newScene(t)
+	// the entrypoint makes a file and a temporary one, then the program starts
+	s.d.traceTxt = `9 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+9 openat(AT_FDCWD, "/var/lib/db/example/db.opt", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3
+9 openat(AT_FDCWD, "/tmp/scratch", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 4
+9 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 5 vars */) = 0
+9 openat(AT_FDCWD, "/etc/app.conf", O_RDONLY) = 5
+`
+	s.d.files["/var/lib/db/example/db.opt"] = entry{data: "default-character-set=utf8\n"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(res.Sysroot, "var/lib/db/example/db.opt"))
+	if err != nil || string(b) != "default-character-set=utf8\n" {
+		t.Fatalf("db.opt = %q, %v", b, err)
+	}
+	// the temporary one is gone at the end: not carried and not warned about
+	if _, err := os.Lstat(filepath.Join(res.Sysroot, "tmp/scratch")); err == nil {
+		t.Errorf("a file that was gone was carried")
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the entrypoint made 1 files before the program started") && strings.Contains(w, "/var/lib/db/example/db.opt") {
+			found = true
+		}
+		if strings.Contains(w, "/tmp/scratch") {
+			t.Errorf("warning about the temporary file: %q", w)
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
+func TestObserveWithoutAnEntrypointMakesNoEarlyFiles(t *testing.T) {
+	s := newScene(t)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the entrypoint made") {
+			t.Errorf("warning %q", w)
+		}
+	}
+}

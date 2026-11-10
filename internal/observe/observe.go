@@ -766,6 +766,18 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	for _, c := range created {
 		r.created[c] = true
 	}
+	// What the entrypoint made before it handed over to the program is the state the package starts
+	// from: a package has no entrypoint to make it again (the database the first start of a server
+	// image creates, the keys it generates). It is carried like the rest, as it was at the end.
+	var early []string
+	for _, e := range trace.CreatedPaths(raw, startDir, 0) {
+		if r.created[e] || slices.Contains(touched, e) {
+			continue
+		}
+		r.created[e] = true
+		touched = append(touched, e)
+		early = append(early, e)
+	}
 
 	children := trace.ChildProcesses(raw, from)
 	var childCalls []string
@@ -795,6 +807,23 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		if err := os.MkdirAll(filepath.Join(sysroot, filepath.FromSlash(wd)), 0755); err != nil {
 			return nil, fmt.Errorf("observe: making the working directory %s: %w", wd, err)
 		}
+	}
+
+	// what was made before the program started and is still there
+	var earlyHere []string
+	for _, e := range early {
+		if _, err := os.Lstat(filepath.Join(sysroot, filepath.FromSlash(e))); err == nil && !r.gone[e] {
+			earlyHere = append(earlyHere, e)
+		}
+	}
+	if len(earlyHere) > 0 {
+		list := earlyHere
+		more := ""
+		if len(list) > maxWarnedPaths {
+			more = fmt.Sprintf(" and %d more", len(list)-maxWarnedPaths)
+			list = list[:maxWarnedPaths]
+		}
+		r.warnOnce(fmt.Sprintf("the entrypoint made %d files before the program started (the state the image starts from, such as the data of a database); they are carried as they were at the end of the observation: %s%s", len(earlyHere), strings.Join(list, ", "), more))
 	}
 
 	// the created files that were gone at the end are counted, not listed
