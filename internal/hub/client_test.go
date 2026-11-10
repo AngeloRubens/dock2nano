@@ -181,7 +181,7 @@ func TestManifestCopyOnDiskThatIsTooLargeIsNotRead(t *testing.T) {
 	if err := os.WriteFile(c.cachePath(), make([]byte, maxManifest+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.readCache(true); ok {
+	if _, _, ok := c.readCache(true); ok {
 		t.Error("a copy larger than the list may be was read")
 	}
 }
