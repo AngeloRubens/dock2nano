@@ -1569,3 +1569,32 @@ func TestHiddenVolumesAreTheOnesDockerFillsFromTheImage(t *testing.T) {
 		t.Errorf("hiddenVolumes = %v, want %v", got, want)
 	}
 }
+
+func TestExerciseForPicksTheValuesOfTheService(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{{Name: "web"}, {Name: "db"}}}
+	values := []string{"/all", "web=/only-web", "db=/only-db", "http://container:9000/x", "FOO=1 run", "/p?a=b"}
+	got := exerciseFor("web", values, p)
+	want := []string{"/all", "/only-web", "http://container:9000/x", "FOO=1 run", "/p?a=b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("web: %v, want %v", got, want)
+	}
+	got = exerciseFor("db", values, p)
+	want = []string{"/all", "/only-db", "http://container:9000/x", "FOO=1 run", "/p?a=b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("db: %v, want %v", got, want)
+	}
+}
+
+func TestExerciseFlagsReachTheObservation(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert", "--exercise", "/health", "--exercise", "web=/x", "--exercise-cmd", "web=curl $DOCK2NANO_HOST")
+	if len(h.observed) != 1 {
+		t.Fatalf("observed %d", len(h.observed))
+	}
+	o := h.observed[0]
+	if !reflect.DeepEqual(o.Exercise, []string{"/health", "/x"}) || o.ExerciseCmd != "curl $DOCK2NANO_HOST" {
+		t.Errorf("exercise %v, cmd %q", o.Exercise, o.ExerciseCmd)
+	}
+}

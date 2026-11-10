@@ -445,6 +445,10 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Binds, bindNotes = rs.mountBinds(a, s.Name, a.binds(s, dir))
 	oo.Binds = append(oo.Binds, hiddenVolumes(s)...)
 	oo.Seconds = o.seconds
+	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
+	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
+		oo.ExerciseCmd = strings.Join(cmds, " && ")
+	}
 	oo.Log = func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		fmt.Fprintf(a.Stderr, "%s: %s\n", s.Name, strings.TrimRight(msg, "\n"))
@@ -804,6 +808,23 @@ func hiddenVolumes(s *compose.Service) []string {
 		if v.Source == "" || under {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// exerciseFor gives the values of --exercise (or --exercise-cmd) that are meant for the service:
+// the ones that start with its name and "=", and the ones that name no service of the project.
+func exerciseFor(service string, values []string, project *compose.Project) []string {
+	var out []string
+	for _, v := range values {
+		name, rest, ok := strings.Cut(v, "=")
+		if ok && !strings.ContainsAny(name, "/: $") && project.Service(name) != nil {
+			if name == service {
+				out = append(out, rest)
+			}
+			continue
+		}
+		out = append(out, v)
 	}
 	return out
 }

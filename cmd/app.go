@@ -61,6 +61,12 @@ Flags of convert:
   --short-names      let the services reach each other by the name of the compose file (db) and
                      not only as db.service: writes dns_search: [service] in compose.yaml, which
                      needs an ops that reads it
+  --exercise [SVC=]REQ  ask the program for something once it is up, so that the files it opens
+                     only to answer are carried: /health is asked of the first port the image
+                     exposes, http://container:9000/ping names the port (can be repeated); with
+                     SVC= only that service is asked
+  --exercise-cmd [SVC=]CMD  run a command here once the program is up, for one that does not speak
+                     HTTP; it sees DOCK2NANO_HOST and DOCK2NANO_PORT
   --service NAME     convert only this service (can be repeated)
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
@@ -173,18 +179,20 @@ func newApp() *App {
 
 // options are the flags of convert.
 type options struct {
-	file       string
-	dockerfile string
-	context    string
-	name       string
-	out        string
-	opsHome    string
-	seconds    int
-	pull       bool
-	force      bool
-	strict     bool
-	shortNames bool
-	services   []string
+	file        string
+	dockerfile  string
+	context     string
+	name        string
+	out         string
+	opsHome     string
+	seconds     int
+	pull        bool
+	force       bool
+	strict      bool
+	shortNames  bool
+	exercise    []string
+	exerciseCmd []string
+	services    []string
 }
 
 // Run runs the command line and returns the exit status.
@@ -241,6 +249,20 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	set.BoolVar(&o.force, "force", false, "")
 	set.BoolVar(&o.strict, "strict", false, "")
 	set.BoolVar(&o.shortNames, "short-names", false, "")
+	set.Func("exercise", "", func(v string) error {
+		if v == "" {
+			return errors.New("the request of --exercise is empty")
+		}
+		o.exercise = append(o.exercise, v)
+		return nil
+	})
+	set.Func("exercise-cmd", "", func(v string) error {
+		if v == "" {
+			return errors.New("the command of --exercise-cmd is empty")
+		}
+		o.exerciseCmd = append(o.exerciseCmd, v)
+		return nil
+	})
 	set.Func("service", "", func(v string) error {
 		if v == "" {
 			return errors.New("the service name is empty")

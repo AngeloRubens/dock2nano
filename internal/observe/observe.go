@@ -35,7 +35,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -131,6 +133,17 @@ type Options struct {
 	Log func(format string, args ...any)
 	// Probe asks the ports for their front page. The default is an HTTP GET.
 	Probe Prober
+	// Exercise are requests made to the program once it is up, so that what it opens only to
+	// answer them is in the trace (the certificate on the first connection, the template of a
+	// page, a plugin). A path is asked of the first port the image exposes (the first one that
+	// answered when it exposes none); an address with the host "container" is asked of the
+	// container, at the port it names. A request that fails is a warning.
+	Exercise []string
+	// ExerciseCmd is a command run on this side once the program is up, for one that does not
+	// speak HTTP. It sees DOCK2NANO_HOST and DOCK2NANO_PORT, the address of the container.
+	ExerciseCmd string
+	// RunCommand runs ExerciseCmd. The default is sh -c, stopped after a minute.
+	RunCommand func(ctx context.Context, command string, env []string) ([]byte, error)
 	// KeepTrace, when not empty, is a file path where the raw strace output is written, to be
 	// kept as a test fixture. A failure to write it is a warning.
 	KeepTrace string
@@ -1174,6 +1187,7 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 	grew := r.o.now()
 	host := ""
 	hostTried := false
+	exercised := false
 	// ports that were not asked, and why
 	failed := map[int]string{}
 	defer func() {
@@ -1234,6 +1248,12 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 		}
 		if fresh {
 			settled = r.o.now().Add(settleFor)
+		}
+		if len(asked) > 0 && !exercised && (len(r.o.Exercise) > 0 || r.o.ExerciseCmd != "") {
+			exercised = true
+			r.exercise(ctx, host, firstPort(exposed, asked), deadline)
+			settled = r.o.now().Add(settleFor)
+			grew = r.o.now()
 		}
 		if st, err := os.Lstat(filepath.Join(tracerDir, "files")); err == nil && st.Size() != size {
 			size = st.Size()
@@ -1545,6 +1565,89 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// firstPort is the first port the image exposes, or the lowest of those that answered.
+func firstPort(exposed []int, asked map[int]bool) int {
+	if len(exposed) > 0 {
+		return exposed[0]
+	}
+	first := 0
+	for p := range asked {
+		if first == 0 || p < first {
+			first = p
+		}
+	}
+	return first
+}
+
+// exerciseURL is the address a request is made to: raw taken against the container at host, and at
+// port when it names none.
+func exerciseURL(raw, host string, port int) (string, error) {
+	if strings.HasPrefix(raw, "/") {
+		return "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + raw, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("%q is neither a path nor an address", raw)
+	}
+	if u.Hostname() != "container" {
+		return "", fmt.Errorf("%q does not name the container: use the host \"container\" or a path", raw)
+	}
+	p := u.Port()
+	if p == "" {
+		p = strconv.Itoa(port)
+	}
+	u.Host = net.JoinHostPort(host, p)
+	return u.String(), nil
+}
+
+// exercise makes the requests and runs the command once the program is up. What fails is a
+// warning: the package is made from whatever was seen. Nothing goes past the end of the time.
+func (r *run) exercise(ctx context.Context, host string, port int, deadline time.Time) {
+	for _, raw := range r.o.Exercise {
+		address, err := exerciseURL(raw, host, port)
+		if err != nil {
+			r.warnOnce("exercise: " + err.Error())
+			continue
+		}
+		left := deadline.Sub(r.o.now())
+		if left <= 0 {
+			r.warnOnce("exercise: the time was up before " + raw + " was asked")
+			continue
+		}
+		pctx, stop := context.WithTimeout(ctx, left)
+		err = r.o.Probe.Get(pctx, address)
+		stop()
+		if err != nil {
+			r.warnOnce(r.redact("exercise: calling " + raw + ": " + err.Error()))
+			continue
+		}
+		r.vlogf("exercised %s\n", address)
+	}
+	if r.o.ExerciseCmd == "" {
+		return
+	}
+	env := append(os.Environ(), "DOCK2NANO_HOST="+host, "DOCK2NANO_PORT="+strconv.Itoa(port))
+	run := r.o.RunCommand
+	if run == nil {
+		run = runShell
+	}
+	out, err := run(ctx, r.o.ExerciseCmd, env)
+	if err != nil {
+		r.warnOnce(r.redact("exercise: running the command: " + err.Error()))
+		return
+	}
+	r.vlogf("exercise command: %s\n", strings.TrimSpace(string(out)))
+}
+
+// runShell runs command with sh -c and gives up after a minute.
+func runShell(ctx context.Context, command string, env []string) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	c := exec.CommandContext(cctx, "sh", "-c", command)
+	c.Env = env
+	return c.CombinedOutput()
 }
 
 // httpProber is the default Prober: it connects to the address and asks for the page.

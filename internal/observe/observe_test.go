@@ -2852,3 +2852,96 @@ func TestCheckBindsAcceptsAnAnonymousVolumeButNotUnderTheTracer(t *testing.T) {
 		t.Errorf("a relative path was accepted")
 	}
 }
+
+func TestObserveExerciseAsksOnceTheProgramIsUp(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"8080/tcp"}
+	s.d.exec["cat /proc/net/tcp"] = tcpHeader + "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000\n"
+	s.o.Exercise = []string{"/health", "http://container:9000/ping", "/status"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "urls", s.probe.urls, []string{
+		"http://172.17.0.2:8080/",
+		"http://172.17.0.2:8080/health", "http://172.17.0.2:9000/ping", "http://172.17.0.2:8080/status",
+	})
+}
+
+func TestObserveExerciseWaitsForTheProgramAndMovesTheEnd(t *testing.T) {
+	// nothing is asked of a program that no port answered, and asking resets the quiet time
+	s := newScene(t)
+	s.o.Exercise = []string{"/health"}
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// asked at 0s, exercised at 0s: the watch ends at the first poll after 10s, as without it
+	equal(t, "clock", s.clock.t, s.start.Add(12*time.Second))
+	equal(t, "urls", s.probe.urls, []string{"http://172.17.0.2:80/", "http://172.17.0.2:80/health"})
+}
+
+func TestObserveExerciseFailuresAreWarnings(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
+	s.o.Exercise = []string{"ftp://container/x", "http://elsewhere/x", "nonsense"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 3 {
+		t.Fatalf("warnings = %q", res.Warnings)
+	}
+	for _, w := range res.Warnings {
+		if !strings.HasPrefix(w, "exercise: ") {
+			t.Errorf("warning %q", w)
+		}
+	}
+}
+
+func TestObserveExerciseCommandSeesTheAddress(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"6379/tcp"}
+	var gotCmd string
+	var gotEnv []string
+	s.o.ExerciseCmd = "redis-cli -h $DOCK2NANO_HOST -p $DOCK2NANO_PORT ping"
+	s.o.RunCommand = func(ctx context.Context, command string, env []string) ([]byte, error) {
+		gotCmd, gotEnv = command, env
+		return []byte("PONG\n"), nil
+	}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "command", gotCmd, s.o.ExerciseCmd)
+	has := func(want string) bool {
+		for _, e := range gotEnv {
+			if e == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("DOCK2NANO_HOST=172.17.0.2") || !has("DOCK2NANO_PORT=6379") {
+		t.Errorf("env has no address: %v", gotEnv)
+	}
+}
+
+func TestObserveExerciseCommandFailureIsAWarning(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
+	s.o.ExerciseCmd = "false"
+	s.o.RunCommand = func(context.Context, string, []string) ([]byte, error) { return nil, errors.New("exit status 1") }
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings", res.Warnings, []string{"exercise: running the command: exit status 1"})
+}
+
+func TestObserveWithoutExerciseAsksOnlyTheFrontPage(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"80/tcp"}
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "urls", s.probe.urls, []string{"http://172.17.0.2:80/"})
+}
