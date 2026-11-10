@@ -29,15 +29,43 @@ var machineFiles = map[string]string{
 	"sys/devices/system/cpu/possible": "0-63\n",
 }
 
+// sharedMemory is the directory programs put shared memory in (python's multiprocessing makes its
+// arenas there, and asks the file system about it first). nanos has none; an empty directory in the
+// package is enough, which the package of a program that uses it was tested with.
+const sharedMemory = "/dev/shm"
+
+// usesSharedMemory says whether the program named /dev/shm or something under it.
+func usesSharedMemory(opened []string) bool {
+	for _, p := range opened {
+		if p == sharedMemory || strings.HasPrefix(p, sharedMemory+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // writeMachineFiles puts into sysroot the machine files that the program opened, on x86_64 only
 // (on aarch64 the kernel answers for cpuinfo itself, and a file of ours in its place would stop it
 // from making its own). A file the sysroot already has is left alone. It returns the paths it
-// wrote, sorted by name.
+// wrote.
 func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) {
-	if arch != "amd64" && arch != "x86_64" {
-		return nil, nil
-	}
 	var wrote []string
+	// the directory of shared memory is wanted on any architecture
+	if usesSharedMemory(opened) {
+		dir := filepath.Join(sysroot, "dev", "shm")
+		if _, err := os.Lstat(dir); err != nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return wrote, err
+			}
+			if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
+				return wrote, err
+			}
+			wrote = append(wrote, sharedMemory)
+		}
+	}
+	if arch != "amd64" && arch != "x86_64" {
+		return wrote, nil
+	}
 	for _, name := range []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"} {
 		if strings.HasPrefix(name, "proc/") && strings.HasSuffix(name, "/stat") {
 			if !openedProcessStat(opened) {

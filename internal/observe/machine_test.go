@@ -87,3 +87,40 @@ func TestProcessStatIsNotWrittenForOtherProcFiles(t *testing.T) {
 		t.Fatalf("wrote %v", wrote)
 	}
 }
+
+func TestSharedMemoryDirectoryIsMadeWhenTheProgramNamedIt(t *testing.T) {
+	for _, opened := range [][]string{{"/dev/shm"}, {"/dev/shm/psm_1"}} {
+		dir := t.TempDir()
+		wrote, err := writeMachineFiles(dir, "arm64", opened)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(wrote, []string{"/dev/shm"}) {
+			t.Fatalf("%v: wrote %v", opened, wrote)
+		}
+		st, err := os.Stat(filepath.Join(dir, "dev", "shm"))
+		if err != nil || !st.IsDir() || st.Mode()&os.ModeSticky == 0 || st.Mode().Perm() != 0o777 {
+			t.Fatalf("dev/shm = %v %v", st, err)
+		}
+	}
+}
+
+func TestSharedMemoryDirectoryIsNotMadeOtherwise(t *testing.T) {
+	dir := t.TempDir()
+	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/dev/shmx", "/dev/null", "/dev"})
+	if len(wrote) != 0 {
+		t.Fatalf("wrote %v", wrote)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dev")); err == nil {
+		t.Fatal("dev exists")
+	}
+}
+
+func TestSharedMemoryDirectoryIsKept(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "dev", "shm"), 0o700)
+	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/dev/shm"})
+	if len(wrote) != 0 {
+		t.Fatalf("wrote %v", wrote)
+	}
+}

@@ -697,7 +697,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
 	if len(obs.MachineFiles) > 0 {
-		g.add(s.Name, plan.Note, "machine", "the program reads "+strings.Join(obs.MachineFiles, ", ")+" to learn what machine it runs on, and nanos does not answer them; the package carries a file of ours for each: one processor in cpuinfo, 0-63 as the processors a machine could have")
+		g.add(s.Name, plan.Note, "machine", "the program uses "+strings.Join(obs.MachineFiles, ", ")+" of /proc, /sys or /dev, which nanos does not provide; the package carries one of ours for each: one processor in cpuinfo, 0-63 as the processors a machine could have, an empty directory for /dev/shm")
 	}
 	if obs.StoppedEarly {
 		msg := fmt.Sprintf("the container stopped with status %d before the end of the observation, so what was observed is not a running server; the program chosen is the last one it started", obs.ExitCode)
