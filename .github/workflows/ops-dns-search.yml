@@ -1,0 +1,48 @@
+name: ops-dns-search
+# Checks the fix of the empty dns record of ops compose, kept on AngeloRubens/ops (branch
+# fix/compose-empty-dns-record): gofmt, vet, the tests, and one mutation per job: each rule of the
+# fix is taken out and the tests have to fail.
+on:
+  push:
+    branches: ['check/ops-dns']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: feat/compose-dns-search
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          unformatted=$(gofmt -l cmd/)
+          if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d cmd/; exit 1; fi
+      - run: go vet ./cmd/...
+      - run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf|RegisterService|AddDNS'
+      - run: go build -o ops -v
+  mutation:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [no-search-line, first-domain-only, key-not-read, not-given-to-the-unikernel, no-check]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: feat/compose-dns-search
+      - uses: actions/checkout@v4
+        with:
+          path: self
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: python3 self/ci/mutate_ops_dns_search.py ${{ matrix.name }}
