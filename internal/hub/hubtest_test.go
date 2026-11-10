@@ -23,7 +23,9 @@ type entry struct {
 	link string
 }
 
-func file(name, body string) entry { return entry{name: name, body: body, mode: 0o644, typ: tar.TypeReg} }
+func file(name, body string) entry {
+	return entry{name: name, body: body, mode: 0o644, typ: tar.TypeReg}
+}
 
 func dir(name string) entry { return entry{name: name, mode: 0o755, typ: tar.TypeDir} }
 
