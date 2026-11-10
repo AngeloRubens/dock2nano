@@ -1305,6 +1305,8 @@ func TestHideSecrets(t *testing.T) {
 		{"authorization header", `curl -H "Authorization: Bearer xyz" http://h`, `curl -H "Authorization: Bearer ***" http://h`},
 		{"authorization header not quoted", "curl -H Authorization: Bearer xyz http://h", "curl -H Authorization: Bearer *** http://h"},
 		{"bearer word", "run Bearer abc", "run Bearer ***"},
+		{"authorization header with basic", `curl -H "Authorization: Basic dXNlcjpw" http://h`, `curl -H "Authorization: Basic ***" http://h`},
+		{"authorization header with a bare value", `curl -H "Authorization: abc123" http://h`, `curl -H "Authorization: ***" http://h`},
 		{"url with only a user", "git clone https://ghp_xxx@github.com/a/b", "git clone https://***@github.com/a/b"},
 		{"url with an @ in the password", "node a.js postgres://u:p@ss@h/db", "node a.js postgres://***@h/db"},
 		{"url with a slash in the password", "node a.js postgres://u:p/ss@h/db", "node a.js postgres://***@h/db"},
