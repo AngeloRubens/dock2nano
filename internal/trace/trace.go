@@ -738,6 +738,10 @@ type Exec struct {
 	Path string
 	Argv []string
 	Line int
+
+	// PassedOver are the package manager launchers (see Launcher) that FinalExec passed over to
+	// reach this program, the outermost first: what the image started, which is not what runs.
+	PassedOver []Exec
 }
 
 // FinalProgram is FinalExec without the arguments: the process, the path the program was started
@@ -794,9 +798,9 @@ func parseArgv(after string) []string {
 // several such processes the one started last wins. A shell that has one running child that
 // started a program is passed over for that child (the shell form of CMD); so is a package manager
 // launcher (npm, npx, yarn, pnpm: see Launcher) that has exactly one running child, the script it
-// runs. If every running process is a child of another
-// running one (pid reuse can make that circular), the oldest is taken. When none is running, the
-// one started last is taken. When nothing was started, found is false.
+// runs, and the launchers passed over are in Exec.PassedOver. If every running process is a child
+// of another running one (pid reuse can make that circular), the oldest is taken. When none is
+// running, the one started last is taken. When nothing was started, found is false.
 //
 // The command line and the environment of the running program are better read from
 // /proc/<pid>/cmdline and /proc/<pid>/environ by the caller, except that a program may rewrite its
@@ -907,9 +911,11 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// A shell that runs the program as a child (the shell form of CMD, "sh -c java -jar x") is not
 	// the program: when it has exactly one running child that started a program, that child is.
 	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
+	var passed []Exec
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
-			if _, _, launcher := Launcher(last[process].Path, last[process].Argv); !launcher && !shells[path.Base(last[process].Path)] {
+			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
+			if !launcher && !shells[path.Base(last[process].Path)] {
 				break
 			}
 			var children []string
@@ -920,6 +926,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 			}
 			if len(children) != 1 {
 				break
+			}
+			if launcher {
+				passed = append(passed, last[process])
 			}
 			process = children[0]
 		}
@@ -934,7 +943,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 		}
 		return last[oldest], true
 	}
-	return last[descend(newest(roots))], true
+	final := last[descend(newest(roots))]
+	final.PassedOver = passed
+	return final, true
 }
 
 // SplitNul reads what /proc keeps as strings ended by a zero byte. Only the last zero byte is a

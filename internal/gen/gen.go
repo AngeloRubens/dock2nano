@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -728,53 +729,120 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.Vanished > 0 {
 		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
 	}
-	g.launcherNote(s, obs)
+	launcher := g.launcherNote(s, obs)
+	g.passedOverNote(s, obs)
 	if obs.Children > 0 {
-		g.add(s.Name, plan.Unsupported, "processes", fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children))
+		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
+		if launcher {
+			msg += ". The program is a launcher: see the launcher item"
+		}
+		g.add(s.Name, plan.Unsupported, "processes", msg)
 	}
 }
 
-// launcherNote says, for a program that is a package manager launcher (npm, npx, yarn, pnpm),
-// that it cannot run on nanos as it is: it starts the script as a child process, and nanos has no
-// fork. When the script is named and package.json was carried with the package, the command of the
-// script is quoted as the underlying command. Nothing is changed.
-func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) {
+// maxPackageJSON is the largest package.json that is read.
+const maxPackageJSON = 1 << 20
+
+// launcherNote says, for a program that is a package manager launcher (npm, npx, yarn, pnpm), that
+// it cannot run on nanos as it is: it starts the script as a child process, and nanos has no fork.
+// When the script is named and package.json was carried with the package, the command of the script
+// is quoted. Nothing is changed. It tells whether it added the item.
+func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 	name, rest, ok := trace.Launcher(obs.Program, obs.Argv)
 	if !ok {
-		return
+		return false
 	}
 	msg := fmt.Sprintf("the observed program is %s, a launcher that starts your command as a child process; nanos has no fork, so it cannot run on nanos as it is", name)
-	if script := trace.ScriptOf(name, rest); script != "" {
-		msg += fmt.Sprintf(". It was asked to run the package.json script %q", script)
-		if cmd, ok := packageScript(obs.Sysroot, obs.WorkingDir, script); ok {
-			msg += fmt.Sprintf(", whose command is %q: run the node command it leads to directly (the file of the package under node_modules that its name points to, as node <file>), and give that to the image as its command", cmd)
-		} else {
-			msg += ", which could not be read from the files of the package: read it in package.json and run its node command directly"
+	const advice = "if the script runs a single node program, run that program directly (node <file>) and give it to the image as its command; a script that starts other launchers or several commands needs the same at each step"
+	script, elsewhere := trace.ScriptOf(name, rest)
+	switch {
+	case script == "":
+		msg += ". " + advice
+	case elsewhere:
+		msg += fmt.Sprintf(". It was asked to run the script %q of another package or directory (an option of the command line points there), which was not read. %s", script, advice)
+	default:
+		cmd, state := packageScript(obs.Sysroot, obs.WorkingDir, script)
+		switch {
+		case state == scriptFound:
+			msg += fmt.Sprintf(". It was asked to run the package.json script %q, whose command is %q. %s", script, hideSecrets(cmd), advice)
+		case state == scriptMissing && name == "npm" && script == "start":
+			msg += ". npm start was asked and package.json has no start script, in which case npm runs node server.js: run that directly"
+		case state == scriptMissing:
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have", script)
+		default:
+			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
 		}
-	} else {
-		msg += ". Run the node command it starts directly (node <file>), and give that to the image as its command"
 	}
 	g.add(s.Name, plan.Unsupported, "launcher", msg)
+	return true
 }
 
-// packageScript reads the command of a script from the package.json in the working directory of
-// the observed program, inside the sysroot.
-func packageScript(sysroot, dir, script string) (string, bool) {
-	if sysroot == "" {
-		return "", false
+// passedOverNote says what the observation passed over: the image starts a launcher and the
+// package runs the program the launcher started, which is a different thing.
+func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
+	if len(obs.PassedOver) == 0 {
+		return
 	}
-	data, err := os.ReadFile(filepath.Join(sysroot, filepath.FromSlash(path.Clean("/"+dir)), "package.json"))
+	var started []string
+	for _, c := range obs.PassedOver {
+		started = append(started, hideSecrets(c))
+	}
+	g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the image starts %s and the package runs %s, the command the launcher started. The npm_* variables are kept as observed, and what the launcher did around the command is lost: the lifecycle scripts (pre and post), and the signals it passes to the command", strings.Join(started, ", then "), hideSecrets(strings.Join(obs.Argv, " "))))
+}
+
+// hideSecrets hides the value of the NAME=value words of a command line when NAME looks like the
+// name of a secret.
+func hideSecrets(cmd string) string {
+	words := strings.Fields(cmd)
+	for i, w := range words {
+		if name, _, ok := strings.Cut(w, "="); ok && name != "" && !strings.HasPrefix(name, "-") && observe.SecretName(name) {
+			words[i] = name + "=***"
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+const (
+	scriptUnreadable = iota
+	scriptMissing
+	scriptFound
+)
+
+// packageScript reads the command of a script from the package.json in the working directory of the
+// observed program, inside the sysroot: the path is resolved in the sysroot, where a link of the
+// image stays, and only a regular file of at most maxPackageJSON bytes is read. A file that cannot
+// be read or is not JSON is scriptUnreadable; a readable one without the script (or with an empty
+// one) is scriptMissing.
+func packageScript(sysroot, dir, script string) (string, int) {
+	if sysroot == "" {
+		return "", scriptUnreadable
+	}
+	inside := trace.InSysroot(sysroot, path.Join("/", dir, "package.json"))
+	host := filepath.Join(sysroot, filepath.FromSlash(inside))
+	info, err := os.Lstat(host)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", scriptUnreadable
+	}
+	f, err := os.Open(host)
 	if err != nil {
-		return "", false
+		return "", scriptUnreadable
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxPackageJSON+1))
+	if err != nil || len(data) > maxPackageJSON {
+		return "", scriptUnreadable
 	}
 	var pkg struct {
 		Scripts map[string]string `json:"scripts"`
 	}
 	if json.Unmarshal(data, &pkg) != nil {
-		return "", false
+		return "", scriptUnreadable
 	}
 	cmd, ok := pkg.Scripts[script]
-	return cmd, ok && cmd != ""
+	if !ok || cmd == "" {
+		return "", scriptMissing
+	}
+	return cmd, scriptFound
 }
 
 // firstLines returns the first n non-empty lines of s, trimmed, joined by " | ".

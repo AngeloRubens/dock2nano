@@ -1138,6 +1138,151 @@ func TestNotALauncherHasNoLauncherItem(t *testing.T) {
 	wantNone(t, p, "web", plan.Unsupported, "launcher")
 }
 
+// launcherInput makes a service whose observed program is argv, with package.json holding pkg (not
+// written when pkg is empty) in /usr/src/app of a sysroot. It returns the input and the sysroot.
+func launcherInput(t *testing.T, program string, argv []string, pkg string) (Input, string) {
+	t.Helper()
+	sysroot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sysroot, "usr/src/app"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if pkg != "" {
+		if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/package.json"), []byte(pkg), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := newInput(&fake{}, svc("web"))
+	o := in.Services["web"].Observed
+	o.Sysroot, o.WorkingDir, o.Program, o.Argv = sysroot, "/usr/src/app", program, argv
+	return in, sysroot
+}
+
+var npmRunDev = []string{"node", "/usr/local/bin/npm", "run", "dev"}
+
+func TestLauncherPackageJSONThroughASymlinkOutOfTheSysrootIsNotRead(t *testing.T) {
+	in, sysroot := launcherInput(t, "/usr/local/bin/node", npmRunDev, "")
+	host := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(host, []byte(`{"scripts":{"dev":"HOST-SECRET"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(host, filepath.Join(sysroot, "usr/src/app/package.json")); err != nil {
+		t.Fatal(err)
+	}
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Unsupported, "launcher")
+	if len(got) != 1 || strings.Contains(got[0].Message, "HOST-SECRET") || !strings.Contains(got[0].Message, "could not be read") {
+		t.Errorf("items %+v: the file of the host was read or the message is wrong", got)
+	}
+}
+
+func TestLauncherPackageJSONThroughALinkInsideTheSysrootIsRead(t *testing.T) {
+	in, sysroot := launcherInput(t, "/usr/local/bin/node", npmRunDev, "")
+	if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/real.json"), []byte(`{"scripts":{"dev":"node a.js"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/src/app/real.json", filepath.Join(sysroot, "usr/src/app/package.json")); err != nil {
+		t.Fatal(err)
+	}
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", `"node a.js"`)
+}
+
+func TestLauncherReadablePackageJSONWithoutTheScript(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"start":"node a.js"}}`)
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", `which package.json does not have`)
+	got := itemsOf(p, "web", plan.Unsupported, "launcher")
+	if strings.Contains(got[0].Message, "could not be read") {
+		t.Errorf("message %q says the file could not be read", got[0].Message)
+	}
+}
+
+func TestLauncherEmptyScriptIsNotQuoted(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"dev":""}}`)
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", `which package.json does not have`)
+	if got := itemsOf(p, "web", plan.Unsupported, "launcher"); strings.Contains(got[0].Message, "whose command is") {
+		t.Errorf("message %q quotes an empty script", got[0].Message)
+	}
+}
+
+func TestLauncherInvalidPackageJSON(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts": `)
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "could not be read")
+}
+
+func TestLauncherPackageJSONOverTheLimitIsUnreadable(t *testing.T) {
+	big := `{"scripts":{"dev":"node a.js"},"x":"` + strings.Repeat("a", maxPackageJSON) + `"}`
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, big)
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "could not be read")
+}
+
+func TestLauncherNpmStartWithoutStartScriptRunsServerJS(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/local/bin/npm", "start"}, `{"scripts":{"dev":"x"}}`)
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "runs node server.js")
+}
+
+func TestLauncherScriptInAnotherPackageIsNotRead(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/local/bin/npm", "--prefix", "/other", "run", "dev"}, `{"scripts":{"dev":"WRONG-PACKAGE"}}`)
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", "of another package or directory")
+	if got := itemsOf(p, "web", plan.Unsupported, "launcher"); strings.Contains(got[0].Message, "WRONG-PACKAGE") {
+		t.Errorf("message %q quotes the package.json of the working directory", got[0].Message)
+	}
+}
+
+func TestLauncherQuotedScriptHidesSecrets(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"dev":"API_TOKEN=abc123 PORT=80 node a.js"}}`)
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "launcher", "API_TOKEN=*** PORT=80 node a.js")
+	if got := itemsOf(p, "web", plan.Unsupported, "launcher"); strings.Contains(got[0].Message, "abc123") {
+		t.Errorf("message %q holds the secret", got[0].Message)
+	}
+}
+
+func TestLauncherAdviceSaysWhatToDoWithSeveralCommands(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"dev":"node a.js"}}`)
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "needs the same at each step")
+}
+
+func TestLauncherWithBusyboxProgram(t *testing.T) {
+	in, _ := launcherInput(t, "/bin/busybox", []string{"sh", "-c", "npm start"}, `{"scripts":{"start":"node a.js"}}`)
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "the observed program is npm")
+}
+
+func TestLauncherNoteOnACompoundShellCommandIsNotAdded(t *testing.T) {
+	in, _ := launcherInput(t, "/bin/sh", []string{"sh", "-c", "npm run build && node server.js"}, "")
+	wantNone(t, mustGen(t, in), "web", plan.Unsupported, "launcher")
+}
+
+func TestLauncherProgramOfTheUserNamedNpmJSIsNotALauncher(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/app/npm.js"}, "")
+	wantNone(t, mustGen(t, in), "web", plan.Unsupported, "launcher")
+}
+
+func TestPassedOverLauncherIsANote(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in.Services["web"].Observed.PassedOver = []string{"node /usr/local/bin/npm run dev TOKEN=abcdef"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "launcher passed over", "the image starts node /usr/local/bin/npm run dev TOKEN=***")
+	want1(t, p, "web", plan.Note, "launcher passed over", "the package runs node server.js")
+	want1(t, p, "web", plan.Note, "launcher passed over", "npm_* variables")
+	wantNone(t, p, "web", plan.Unsupported, "launcher")
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Note, "launcher passed over")
+}
+
+func TestProcessesItemPointsToTheLauncher(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, "")
+	in.Services["web"].Observed.Children = 2
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "processes", "see the launcher item")
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in2.Services["web"].Observed.Children = 2
+	p := mustGen(t, in2)
+	if got := itemsOf(p, "web", plan.Unsupported, "processes"); len(got) != 1 || strings.Contains(got[0].Message, "launcher") {
+		t.Errorf("items %+v: a program that is not a launcher points to one", got)
+	}
+}
+
 func TestEffectiveCommand(t *testing.T) {
 	exec := func(w ...string) compose.Command { return compose.Command{Exec: w, Set: true} }
 	shell := func(s string) compose.Command { return compose.Command{Shell: s, Set: true} }

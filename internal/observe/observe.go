@@ -197,6 +197,11 @@ type Result struct {
 	// about one by one.
 	Vanished int
 
+	// PassedOver are the command lines of the package manager launchers (npm, yarn, pnpm) that the
+	// image started and that the observation passed over for the program they started, the
+	// outermost first. Empty when the program is what the image started (or a shell led to it).
+	PassedOver []string
+
 	// Children is the number of child processes (fork, vfork, clone or clone3 without
 	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
 	// one process, so the caller reports a program that has any.
@@ -364,6 +369,9 @@ func urlUserinfo(value string) string {
 // secretNames are the parts of the name of a variable (compared in upper case) that make redact
 // hide its value.
 var secretNames = []string{"PASS", "SECRET", "TOKEN", "KEY", "CRED", "AUTH", "PRIVATE", "CERT", "SIGN", "SALT", "DSN"}
+
+// SecretName tells whether the name of a variable looks like the name of a secret.
+func SecretName(name string) bool { return secretName(name) }
 
 // secretName tells whether the name of a variable looks like the name of a secret. PWD and OLDPWD
 // are the directory the shell is in, not a password, though MYSQL_PWD is one.
@@ -695,6 +703,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: %s started no program in %d seconds%s", image, r.o.Seconds, r.logTail(id))
 	}
 	pid, program, from := final.Pid, final.Path, final.Line
+	var passedOver []string
+	for _, l := range final.PassedOver {
+		if len(l.Argv) == 0 {
+			passedOver = append(passedOver, l.Path)
+			continue
+		}
+		passedOver = append(passedOver, strings.Join(l.Argv, " "))
+	}
 	r.vlogf("the program is %s, process %s\n", program, pid)
 
 	// What the process says about itself, while it is there to ask. The command line comes from
@@ -880,6 +896,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
 		Vanished:           len(r.gone),
+		PassedOver:         passedOver,
 		Children:           len(children),
 		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),

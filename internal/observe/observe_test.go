@@ -2583,6 +2583,18 @@ func TestObserveForksBeforeTheProgramStartedAreNotChildren(t *testing.T) {
 	equal(t, "child calls", res.ChildCalls, []string(nil))
 }
 
+func TestObservePassesOverALauncherToTheProgramItStarted(t *testing.T) {
+	s := newScene(t)
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/app")
+	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start"})
+}
+
 func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
 	s := newScene(t)
 	// the paths are asked for in order: the file first, then the link that leads to it
