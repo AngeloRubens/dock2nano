@@ -900,6 +900,26 @@ func secretLike(name string) bool {
 	return observe.SecretName(strings.ReplaceAll(strings.TrimLeft(name, "-"), "-", "_"))
 }
 
+// hideHeaders hides the value of the headers whose name looks like a secret (X-API-Key,
+// PRIVATE-TOKEN). Authorization is left to authHeader, and the NAME of ${NAME:-default} is not a
+// header.
+func hideHeaders(text string) string {
+	var out strings.Builder
+	last := 0
+	for _, m := range secretHeader.FindAllStringSubmatchIndex(text, -1) {
+		start, nameEnd := m[0], m[3]
+		name := strings.ToLower(text[m[2]:nameEnd])
+		if strings.Contains(name, "authorization") || (start > 0 && text[start-1] == '{') {
+			continue
+		}
+		out.WriteString(text[last:nameEnd])
+		out.WriteString("***")
+		last = m[1]
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
+
 // hideSecrets hides what looks like a secret in a command line:
 //   - the value of NAME=value and --name=value when the name looks like the name of a secret, also
 //     when the word is quoted as a whole ("NAME=value") or in part ("NAME=value"x), or the value
@@ -919,13 +939,7 @@ func hideSecrets(text string) string {
 	text = digestHeader.ReplaceAllString(text, "${1}***")
 	text = authHeader.ReplaceAllString(text, "${1}***")
 	text = bearerToken.ReplaceAllString(text, "${1} ***")
-	text = secretHeader.ReplaceAllStringFunc(text, func(m string) string {
-		g := secretHeader.FindStringSubmatch(m)
-		if strings.Contains(strings.ToLower(g[1]), "authorization") {
-			return m
-		}
-		return g[1] + "***"
-	})
+	text = hideHeaders(text)
 	text = jsonSecret.ReplaceAllString(text, `${1}"***"`)
 	text = jsonSecretEscaped.ReplaceAllString(text, `${1}***\"`)
 	text = observe.PasswordPair.ReplaceAllString(text, "${1}=***")
