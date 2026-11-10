@@ -22,6 +22,7 @@ jobs:
           - {name: flask-redis-noshm, dir: flask-redis, probe: "web:8000:http"}
           - {name: flask-redis-klib, dir: flask-redis, probe: "web:8000:http"}
           - {name: flask-redis-shmuse, dir: flask-redis, probe: "web:8000:http"}
+          - {name: flask-redis-shmauto, dir: flask-redis, probe: "web:8000:http"}
           - {name: flask-redis-shmdir, dir: flask-redis, probe: "web:8000:http"}
           - {name: flask-redis-shmklib, dir: flask-redis, probe: "web:8000:http"}
           - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
