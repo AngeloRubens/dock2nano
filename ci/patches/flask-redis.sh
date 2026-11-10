@@ -2,7 +2,6 @@
 PROJECT=flask-redis
 . "$(dirname "$0")/lib.sh"
 r="$(root web)"
-mkdir -p "$r/dev/shm"
 f="$r/code/app.py"
 sed -i "s#host='redis'#host='redis.service'#; s#debug=True#debug=False#" "$f"
 grep -n "Redis(\|debug" "$f"

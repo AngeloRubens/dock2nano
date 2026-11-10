@@ -7,7 +7,6 @@ m = json.load(open(p))
 print("web args:", m["Args"])
 PY
 r="$(root backend)"
-mkdir -p "$r/dev/shm"
 sed -i 's#MongoClient("mongo:27017")#MongoClient("mongo.service:27017")#; s#debug=True#debug=False#' "$r/src/server.py"
 grep -n "MongoClient\|debug" "$r/src/server.py"
 c="$(root web)/etc/nginx/conf.d/default.conf"
