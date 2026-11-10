@@ -192,10 +192,10 @@ func TestReplaceInRootIsAllOrNothing(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(conf, []byte("original\n"), 0o640); err != nil {
+	if err := os.WriteFile(conf, []byte("original\n"), 0o664); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(conf, 0o640); err != nil {
+	if err := os.Chmod(conf, 0o664); err != nil {
 		t.Fatal(err)
 	}
 	root, err := os.OpenRoot(sys)
@@ -209,7 +209,7 @@ func TestReplaceInRootIsAllOrNothing(t *testing.T) {
 		f.Write(data[:3])
 		return errors.New("disk full")
 	}
-	if err := replaceInRoot(root, "etc/n.conf", []byte("new content\n"), 0o640); err == nil {
+	if err := replaceInRoot(root, "etc/n.conf", []byte("new content\n"), 0o664); err == nil {
 		t.Fatal("no error")
 	}
 	if b := hubConfOf(t, sys, "etc/n.conf"); b != "original\n" {
@@ -219,11 +219,11 @@ func TestReplaceInRootIsAllOrNothing(t *testing.T) {
 		t.Errorf("a temporary file is left: %v", left)
 	}
 	writeTemp = old
-	if err := replaceInRoot(root, "etc/n.conf", []byte("new content\n"), 0o640); err != nil {
+	if err := replaceInRoot(root, "etc/n.conf", []byte("new content\n"), 0o664); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(conf)
-	if err != nil || fi.Mode().Perm() != 0o640 || hubConfOf(t, sys, "etc/n.conf") != "new content\n" {
+	if err != nil || fi.Mode().Perm() != 0o664 || hubConfOf(t, sys, "etc/n.conf") != "new content\n" {
 		t.Errorf("%v %v", fi, err)
 	}
 	if left, _ := os.ReadDir(filepath.Dir(conf)); len(left) != 1 {
