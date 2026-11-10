@@ -19,6 +19,9 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp
+          - {name: flask-redis-noshm, dir: flask-redis, probe: "web:8000:http"}
+          - {name: flask-redis-klib, dir: flask-redis, probe: "web:8000:http"}
+          - {name: flask-redis-shmuse, dir: flask-redis, probe: "web:8000:http"}
           - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
           - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
