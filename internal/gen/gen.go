@@ -788,17 +788,40 @@ func (g *generator) startOrderNote() {
 	}
 }
 
-// nameAtStartNote says, for a service whose configuration files contain the name of another
-// converted service, that the name may not resolve or may not be resolved at start. What was
-// seen: with the plain compose file nginx exited with "host not found in upstream" for the host of
-// an upstream, even when the other service was started first, so the order of compose.yaml does
-// not help for names looked up at start. In ops compose only <pkg>.service is in the dns (and the
-// bare package name with --short-names), so a bare compose name does not resolve in the other
-// mode. A resolver of the program needs the address of the dns and the .service form: nginx does
-// not read the search line of resolv.conf for its resolver directive. Only the files in
-// ConfigurationFiles are read (not haproxy.cfg or a file without those extensions, not names on
-// the command line); lines that start with # are skipped, files over 1 MiB or with a NUL byte in
-// the first 4 KB are skipped. Only file names and the matched word are given.
+// hostWords returns the words of a line that can be a host name: the words of nameTokens, without
+// a trailing dot, and without those that follow a slash (a path segment such as /srv/backend),
+// except right after "://", where the host of a URL starts.
+func hostWords(line string) []string {
+	var out []string
+	pos := 0
+	for _, t := range nameTokens(line) {
+		i := pos + strings.Index(line[pos:], t)
+		pos = i + len(t)
+		if i > 0 && line[i-1] == '/' && !(i >= 3 && line[i-3:i] == "://") {
+			continue
+		}
+		if t = strings.TrimRight(t, "."); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// nameAtStartNote says, for a service whose configuration files contain a word that may be the
+// name of another converted service, that the name may not resolve or may not be resolved at
+// start. What was seen: with the plain compose file nginx exited with "host not found in
+// upstream" for the host of an upstream, even when the other service was started first, so the
+// order of compose.yaml does not help for names looked up at start. In ops compose the dns
+// answers <pkg>.service; with --short-names <pkg> also resolves through the search line of
+// resolv.conf; a bare compose name does not resolve. A resolver of the program needs the address
+// of the dns and the .service form: nginx does not read the search line of resolv.conf for its
+// resolver directive. Only the files in ConfigurationFiles are read: the files under /etc and
+// those outside /etc with one of the extensions .conf .cnf .ini .yaml .yml .toml .properties
+// (haproxy.cfg under /etc is read, one outside /etc is not); names on the command line or in
+// environment variables are not checked here. Lines that start with # are skipped, words that
+// follow a slash are path segments and are skipped (except after ://), files over 1 MiB or with a
+// NUL byte in the first 4 KB are skipped. Every distinct word found in a file is reported, with
+// the name of the file and the word, never the content.
 func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 	type cand struct {
 		service string
@@ -812,9 +835,8 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 		cands := map[string]cand{}
 		add := func(word, service string, ok bool) {
 			word = strings.ToLower(word)
-			if word == "" || word == ".service" {
-				return
-			}
+			// two services can give the same word; the form that resolves wins, so the note
+			// does not tell to rewrite a name that is right
 			if old, dup := cands[word]; dup && (old.ok || !ok) {
 				return
 			}
@@ -827,46 +849,51 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			pkg := pkgOf[other.Name]
 			add(other.Name, other.Name, false)
 			add(other.Name+".service", other.Name, false)
-			if pkg != "" {
-				add(pkg, other.Name, g.in.ShortNames)
-				add(pkg+".service", other.Name, true)
-			}
+			add(pkg, other.Name, g.in.ShortNames)
+			add(pkg+".service", other.Name, true)
 		}
 		var parts []string
 		for _, f := range si.Observed.ConfigurationFiles {
-			switch f {
-			case "/etc/hosts", "/etc/resolv.conf", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf":
+			switch {
+			case f == "/etc/hosts", f == "/etc/resolv.conf", f == "/etc/passwd", f == "/etc/group", f == "/etc/nsswitch.conf", f == "/etc/host.conf":
 				continue // defensive: these name hosts or users, not services
+			case f == "/etc/services", f == "/etc/protocols", f == "/etc/os-release", strings.HasSuffix(f, "mime.types"):
+				continue // tables of names that are not hosts
 			}
 			data, err := g.in.ReadFile(filepath.Join(si.Observed.Sysroot, f))
 			if err != nil || len(data) > 1<<20 || slices.Contains(data[:min(len(data), 4096)], 0) {
 				continue
 			}
-			var hit string
-			var c cand
-		lines:
+			hits := map[string]cand{}
 			for _, line := range strings.Split(string(data), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "#") {
 					continue
 				}
-				for _, t := range nameTokens(line) {
+				for _, t := range hostWords(line) {
 					if x, ok := cands[strings.ToLower(t)]; ok {
-						hit, c = t, x
-						break lines
+						if _, seen := hits[t]; !seen {
+							hits[t] = x
+						}
 					}
 				}
 			}
-			if hit == "" {
-				continue
+			words := make([]string, 0, len(hits))
+			for w := range hits {
+				words = append(words, w)
 			}
-			if c.ok {
-				parts = append(parts, fmt.Sprintf("%s contains the word %s, which is the name of service %s (names %s as %s): a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", f, hit, c.service, c.service, hit, c.service, pkgOf[c.service]))
-			} else {
-				parts = append(parts, fmt.Sprintf("%s contains the word %s, which is the name of service %s (names %s as %s): that name does not resolve under ops compose, where the dns answers %s.service%s; write it in that form", f, hit, c.service, c.service, hit, pkgOf[c.service], map[bool]string{true: " and the bare package name", false: ""}[g.in.ShortNames]))
+			sort.Strings(words)
+			for _, w := range words {
+				c := hits[w]
+				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
+				if c.ok {
+					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", head, c.service, pkgOf[c.service]))
+				} else {
+					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (with --short-names, %s also resolves through the search line of resolv.conf); write it in that form. Even then, a name looked up when the program starts can fail: see the start order note", head, pkgOf[c.service], pkgOf[c.service]))
+				}
 			}
 		}
 		if len(parts) > 0 {
-			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, "; "))
+			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, ". "))
 		}
 	}
 }

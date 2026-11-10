@@ -1743,3 +1743,52 @@ func TestNameAtStartNoSysrootIsNotRead(t *testing.T) {
 	in.ReadFile = func(p string) ([]byte, error) { return []byte("backend.service"), nil }
 	wantNone(t, mustGen(t, in), "proxy", plan.Note, "name at start")
 }
+
+func TestNameAtStartPathSegmentIsNotAName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "proxy_cache_path /var/cache/nginx;"}, false, "proxy", "cache"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartPathDoesNotHideTheRealName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "root /srv/backend;\nproxy_pass http://backend.service:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service")
+}
+
+func TestNameAtStartComposeNameWithShortNames(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my_app:80;"}, true, "proxy", "My_App"))
+	want1(t, p, "proxy", plan.Note, "name at start", "search line of resolv.conf")
+	want1(t, p, "proxy", plan.Note, "name at start", "my-app.service")
+}
+
+func TestNameAtStartTableOfNamesIsNotRead(t *testing.T) {
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/services": "mysql 3306/tcp"}, false, "proxy", "mysql")), "proxy", plan.Note, "name at start")
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/nginx/mime.types": "mysql"}, false, "proxy", "mysql")), "proxy", plan.Note, "name at start")
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/passwd": "backend"}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartTrailingDotIsTrimmed(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend.service.:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service")
+}
+
+const nameHead = "server backend.service:80;\n"
+
+func TestNameAtStartLargeFileIsSkipped(t *testing.T) {
+	c := nameHead + strings.Repeat("a", 1<<20)
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartFileOfExactly1MiBIsRead(t *testing.T) {
+	c := nameHead + strings.Repeat("a", 1<<20-len(nameHead))
+	want1(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start", "backend.service")
+}
+
+func TestNameAtStartNULAfterFirst4KBIsRead(t *testing.T) {
+	c := strings.Repeat("a", 4096) + "\x00\nserver backend.service:80;"
+	want1(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start", "backend.service")
+}
+
+func TestNameAtStartNULAtByte4095IsSkipped(t *testing.T) {
+	c := strings.Repeat("a", 4095) + "\x00\nserver backend.service:80;"
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
