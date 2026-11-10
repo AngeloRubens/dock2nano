@@ -1654,3 +1654,21 @@ func TestWithoutShortNamesThereIsNoDNSSearch(t *testing.T) {
 		t.Errorf("note = %q", msg)
 	}
 }
+
+func TestStartOrderNoteForAServiceThatNamesALaterOne(t *testing.T) {
+	web, db := svc("web"), svc("db")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}, {Name: "URL", Value: "mysql://db:3306/x", Set: true}, {Name: "OTHER", Value: "dbx", Set: true}}
+	p := mustGen(t, newInput(&fake{}, web, db))
+	want1(t, p, "web", plan.Note, "start order", "web names db in DB_HOST, URL, but compose.yaml starts web before db")
+	wantNone(t, p, "db", plan.Note, "start order")
+}
+
+func TestStartOrderNoteIsNotMadeWhenTheOrderIsRight(t *testing.T) {
+	web, db := svc("web"), svc("db")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
+	// db first: no note
+	wantNone(t, mustGen(t, newInput(&fake{}, db, web)), "web", plan.Note, "start order")
+	// declared: the order is already the right one, whatever the list
+	web.DependsOn = []compose.Dependency{{Service: "db"}}
+	wantNone(t, mustGen(t, newInput(&fake{}, web, db)), "web", plan.Note, "start order")
+}

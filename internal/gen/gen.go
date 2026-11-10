@@ -176,6 +176,7 @@ func Generate(in Input) (*plan.Plan, error) {
 		g.plan.Compose.Packages = append(g.plan.Compose.Packages, plan.ComposePackage{Pkg: pkgOf[s.Name], Name: svc.PackageName, Local: true, Arch: in.Arch, BaseVolumeSz: svc.Manifest.BaseVolumeSz})
 	}
 	g.networkNote(pkgOf)
+	g.startOrderNote()
 	g.envNote()
 	if len(g.plan.Services) == 0 {
 		return g.plan, errors.New("no service could be converted: see the report")
@@ -743,6 +744,46 @@ func firstLines(s string, n int) string {
 		}
 	}
 	return strings.Join(out, " | ")
+}
+
+// nameTokens splits a value into the words a service name can be found among.
+func nameTokens(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-')
+	})
+}
+
+// startOrderNote says, for a service that names another one in an environment variable and starts
+// before it, that ops compose starts the packages in the order of compose.yaml and waits only for
+// an address: nothing says the other one is there when this one starts. A compose file that
+// declares depends_on has the order already, so it is not said for it. Only the names of the
+// variables are given, never the values.
+func (g *generator) startOrderNote() {
+	for i, svc := range g.plan.Services {
+		declared := map[string]bool{}
+		if cs := g.in.Project.Service(svc.Name); cs != nil {
+			for _, d := range cs.DependsOn {
+				declared[d.Service] = true
+			}
+		}
+		for _, other := range g.plan.Services[i+1:] {
+			if declared[other.Name] {
+				continue
+			}
+			var vars []string
+			for _, n := range sortedEnvNames(svc.Manifest.Env) {
+				for _, t := range nameTokens(svc.Manifest.Env[n]) {
+					if t == other.Name {
+						vars = append(vars, n)
+						break
+					}
+				}
+			}
+			if len(vars) > 0 {
+				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml starts %s before %s and the compose file does not say that %s depends on %s: ops compose starts the packages in that order and waits only for an address, so %s may start before %s is there; list %s first in compose.yaml if it does not connect", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, other.Name))
+			}
+		}
+	}
 }
 
 func refersToOther(tokens []string, self string, services []plan.Service) bool {
