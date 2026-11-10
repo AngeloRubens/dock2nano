@@ -43,6 +43,13 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	extra, err := applyWith(project, o.with, only)
+	if err != nil {
+		return 0, err
+	}
+	for _, m := range extra {
+		fmt.Fprintln(a.Stderr, m)
+	}
 	ordered, err := dependencyOrder(project)
 	if err != nil {
 		return 0, err
@@ -355,6 +362,53 @@ func selection(p *compose.Project, names []string) (map[string]bool, error) {
 		only[n] = true
 	}
 	return only, nil
+}
+
+// applyWith adds a depends_on on each service of --with to every other service that the service
+// does not itself need (that would be a cycle), so that it is prepared, started for their
+// observation and listed before them. It returns a line to say for each service that got one.
+func applyWith(p *compose.Project, with []string, only map[string]bool) ([]string, error) {
+	var out []string
+	for _, w := range with {
+		x := p.Service(w)
+		if x == nil {
+			return nil, fmt.Errorf("--with %s: the file has no such service", w)
+		}
+		if only != nil && !only[w] {
+			return nil, fmt.Errorf("--with %s: the service is not one of those chosen with --service", w)
+		}
+		// what x needs, directly or not, cannot need x
+		needs := map[string]bool{}
+		var visit func(name string)
+		visit = func(name string) {
+			if s := p.Service(name); s != nil {
+				for _, d := range s.DependsOn {
+					if !needs[d.Service] {
+						needs[d.Service] = true
+						visit(d.Service)
+					}
+				}
+			}
+		}
+		visit(w)
+		for _, s := range p.Services {
+			if s.Name == w || needs[s.Name] {
+				continue
+			}
+			already := false
+			for _, d := range s.DependsOn {
+				if d.Service == w {
+					already = true
+				}
+			}
+			if already {
+				continue
+			}
+			s.DependsOn = append(s.DependsOn, compose.Dependency{Service: w, Condition: "service_started"})
+			out = append(out, fmt.Sprintf("%s: %s is started with it for the observation (--with %s)", s.Name, w, w))
+		}
+	}
+	return out, nil
 }
 
 // dependencyOrder sorts the services by depends_on, keeping the file order

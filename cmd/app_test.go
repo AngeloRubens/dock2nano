@@ -1598,3 +1598,62 @@ func TestExerciseFlagsReachTheObservation(t *testing.T) {
 		t.Errorf("exercise %v, cmd %q", o.Exercise, o.ExerciseCmd)
 	}
 }
+
+func TestApplyWithAddsTheDependencyExceptWhereItIsACycle(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{
+		{Name: "backend"},
+		{Name: "db", DependsOn: []compose.Dependency{{Service: "volume-init"}}},
+		{Name: "volume-init"},
+		{Name: "worker", DependsOn: []compose.Dependency{{Service: "db"}}},
+	}}
+	out, err := applyWith(p, []string{"db"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := func(name string) []string {
+		var r []string
+		for _, d := range p.Service(name).DependsOn {
+			r = append(r, d.Service)
+		}
+		return r
+	}
+	if got := deps("backend"); !reflect.DeepEqual(got, []string{"db"}) {
+		t.Errorf("backend deps = %v", got)
+	}
+	if got := deps("db"); !reflect.DeepEqual(got, []string{"volume-init"}) {
+		t.Errorf("db deps = %v (the service itself)", got)
+	}
+	if got := deps("volume-init"); len(got) != 0 {
+		t.Errorf("volume-init deps = %v (db needs it: that would be a cycle)", got)
+	}
+	if got := deps("worker"); !reflect.DeepEqual(got, []string{"db"}) {
+		t.Errorf("worker deps = %v (already there)", got)
+	}
+	if !reflect.DeepEqual(out, []string{"backend: db is started with it for the observation (--with db)"}) {
+		t.Errorf("lines = %q", out)
+	}
+	if _, err := dependencyOrder(p); err != nil {
+		t.Errorf("order: %v", err)
+	}
+}
+
+func TestApplyWithRefusesWhatIsNotThere(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{{Name: "a"}, {Name: "b"}}}
+	if _, err := applyWith(p, []string{"nope"}, nil); err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Errorf("unknown: %v", err)
+	}
+	if _, err := applyWith(p, []string{"b"}, map[string]bool{"a": true}); err == nil || !strings.Contains(err.Error(), "--service") {
+		t.Errorf("not chosen: %v", err)
+	}
+}
+
+func TestWithStartsTheServiceForTheObservationOfTheOthers(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n  db:\n    image: d\n")
+	h.dock.have["b"] = true
+	h.dock.have["d"] = true
+	h.mustRun(0, "convert", "--with", "db")
+	if len(h.dock.started) != 1 || h.dock.started[0].Image != "d" {
+		t.Fatalf("started %v, want the image d", h.dock.started)
+	}
+}

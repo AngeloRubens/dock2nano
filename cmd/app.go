@@ -67,6 +67,10 @@ Flags of convert:
                      SVC= only that service is asked
   --exercise-cmd [SVC=]CMD  run a command here once the program is up, for one that does not speak
                      HTTP; it sees DOCK2NANO_HOST and DOCK2NANO_PORT
+  --with SERVICE     start this service for the observation of the others, as if each of them
+                     had it in depends_on (can be repeated): for a program that needs a database
+                     the compose file does not say it needs; the service is also listed before
+                     them in compose.yaml
   --service NAME     convert only this service (can be repeated)
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
@@ -192,6 +196,7 @@ type options struct {
 	shortNames  bool
 	exercise    []string
 	exerciseCmd []string
+	with        []string
 	services    []string
 }
 
@@ -249,6 +254,13 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	set.BoolVar(&o.force, "force", false, "")
 	set.BoolVar(&o.strict, "strict", false, "")
 	set.BoolVar(&o.shortNames, "short-names", false, "")
+	set.Func("with", "", func(v string) error {
+		if v == "" {
+			return errors.New("the service of --with is empty")
+		}
+		o.with = append(o.with, v)
+		return nil
+	})
 	set.Func("exercise", "", func(v string) error {
 		if v == "" {
 			return errors.New("the request of --exercise is empty")

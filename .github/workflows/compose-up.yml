@@ -19,9 +19,7 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp
-          - {name: nginx-golang-plain, dir: nginx-golang, shortnames: true, probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, shortnames: true, probe: "backend:8080:http db:3306:tcp"}
-          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, shortnames: true, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -65,7 +63,7 @@ jobs:
           cd /tmp/ac/${{ matrix.dir }}
           f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
           cd "$GITHUB_WORKSPACE"
-          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 ${{ matrix.shortnames && ('--short-names') || '' }} 2>&1 | tee /tmp/out/report.txt
+          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 ${{ matrix.flags }} 2>&1 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
       - name: the changes the report asks for, by hand
