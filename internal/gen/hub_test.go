@@ -262,6 +262,20 @@ func TestApplyHubRecipeTakesNoValueThatIsNotAPlainWord(t *testing.T) {
 	}
 }
 
+func TestApplyHubRecipeTakesTheValuesTheHubPackageSets(t *testing.T) {
+	obs := hubObs(t)
+	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
+	u.Recipe.Files["/usr/local/nginx/conf/nginx.conf"] = []byte("worker_processes 2;\ndaemon off;\nmaster_process off;\n")
+	items := ApplyHubRecipe(u, obs)
+	b, _ := os.ReadFile(filepath.Join(obs.Sysroot, "etc/nginx/nginx.conf"))
+	if !strings.Contains(string(b), "worker_processes 2;") {
+		t.Errorf("%s", b)
+	}
+	if c := hubFind(items, "hub config"); len(c) == 0 || !strings.Contains(c[0].Message, "the values of the hub package where it sets them") {
+		t.Errorf("config: %+v", c)
+	}
+}
+
 func TestApplyHubRecipeWithoutAHubConfigUsesTheUsualValues(t *testing.T) {
 	obs := hubObs(t)
 	u := hubUse(hub.Far, "", "1.28.3")
