@@ -32,9 +32,9 @@ M = {
 '''),
     # an error status of the dns counts as success
     "adddns-ignores-status": (
-        "if res.StatusCode/100 != 2 {", "if false && res.StatusCode/100 != 2 {"),
+        "if res.StatusCode != http.StatusOK {", "if false && res.StatusCode != http.StatusOK {"),
     # the client waits for ever for a dns that does not answer
-    "adddns-no-timeout": ("http.Client{Timeout: dnsTimeout}", "http.Client{}"),
+    "adddns-no-timeout": ("return &http.Client{Timeout: dnsTimeout}", "return &http.Client{}"),
     # no sleep-skip is not tested; the service that failed does not make the up fail
     "failed-service-is-not-an-error": (
         '''		exitWithError("not registered in the dns: " + strings.Join(failed, ", "))''',
