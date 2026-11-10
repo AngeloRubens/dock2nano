@@ -9,6 +9,43 @@ on:
 permissions:
   contents: read
 jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: fix/bridged-ip-arp
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          unformatted=$(gofmt -l provider/onprem/)
+          if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d provider/onprem/; exit 1; fi
+      - run: go vet ./provider/onprem/...
+      - run: go test ./provider/onprem/... -count 1 -v
+      - run: go build -o ops -v
+  mutation:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [zeros-dropped, case-kept, substring-match]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: fix/bridged-ip-arp
+      - uses: actions/checkout@v4
+        with:
+          path: self
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: python3 self/ci/mutate_arp.py ${{ matrix.name }}
   measure:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -16,6 +53,7 @@ jobs:
       fail-fast: false
       matrix:
         run: [1, 2, 3, 4, 5, 6]
+        ops: [master, fix]
     env:
       OPS_HOME: /home/runner
     steps:
@@ -32,8 +70,14 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source (master)
         run: |
-          git clone https://github.com/nanovms/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
+          if [ "${{ matrix.ops }}" = fix ]; then
+            git clone https://github.com/AngeloRubens/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout fix/bridged-ip-arp
+          else
+            git clone https://github.com/nanovms/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
+          fi
+          git -C /tmp/ops-src log --oneline | head -1
           cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
           ops update 2>&1 | tail -2
           # ops update replaces the binary: the one built from source goes back
@@ -81,7 +125,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: arp-measure-${{ matrix.run }}
+          name: arp-measure-${{ matrix.ops }}-${{ matrix.run }}
           path: /tmp/out
       - name: down
         if: always()
