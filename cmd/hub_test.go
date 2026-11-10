@@ -81,6 +81,9 @@ type hubHarness struct {
 	stub *stubHub
 	conf string
 	plan *plan.Plan
+
+	// made are the sysroots the observation made.
+	made []string
 }
 
 func newHubHarness(t *testing.T, image string, res func(sysroot string) *observe.Result) *hubHarness {
@@ -97,6 +100,7 @@ func newHubHarness(t *testing.T, image string, res func(sysroot string) *observe
 	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
 		h.observed = append(h.observed, o)
 		sysroot := t.TempDir()
+		h.made = append(h.made, sysroot)
 		conf := filepath.Join(sysroot, "etc/nginx/nginx.conf")
 		if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
 			return nil, err
@@ -294,6 +298,9 @@ func TestRequiredBuildIsUsedWholeEvenWhenTheProgramStarted(t *testing.T) {
 	}
 	if _, err := os.Stat(sysroot); err == nil {
 		t.Errorf("the directory of the hub package was not removed: %s", sysroot)
+	}
+	if _, err := os.Stat(h.made[0]); err == nil {
+		t.Errorf("the sysroot of the observation was not removed: %s", h.made[0])
 	}
 }
 
