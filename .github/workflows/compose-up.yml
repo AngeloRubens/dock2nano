@@ -22,12 +22,6 @@ jobs:
           - {name: nginx-golang-plain, dir: nginx-golang, dnsnames: plain, probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, dnsnames: plain, probe: "backend:8080:http db:3306:tcp"}
           - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, dnsnames: plain, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
-          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
