@@ -740,9 +740,9 @@ type Exec struct {
 	Line int
 
 	// PassedOver are the package manager launchers (see Launcher) that FinalExec passed over to
-	// reach this program, the outermost first, and the shells it passed over after the first of
-	// them (the shell that runs the script of npm start): what the launcher ran, which is not what
-	// the package runs.
+	// reach this program, the outermost first, with the shells it passed over before the first of
+	// them and after it (the shell that runs the script of npm start): what ran around the program,
+	// which is not what the package runs. It is empty when no launcher was passed over.
 	PassedOver []Exec
 }
 
@@ -913,7 +913,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// A shell that runs the program as a child (the shell form of CMD, "sh -c java -jar x") is not
 	// the program: when it has exactly one running child that started a program, that child is.
 	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
-	var passed []Exec
+	var passed, pending []Exec
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
@@ -929,10 +929,18 @@ func FinalExec(trace []byte) (Exec, bool) {
 			if len(children) != 1 {
 				break
 			}
-			// once a launcher was passed over, everything passed over after it is recorded, the
-			// shell that runs its script included: what it ran besides the program is not run
-			if launcher || len(passed) > 0 {
+			// A launcher is recorded, and with it the shells passed over before it (the shell form
+			// of CMD that ran "npm run migrate && npm start", an entrypoint script) and everything
+			// passed over after it, the shell that runs its script included: what they ran besides
+			// the program is not run. Shells passed over with no launcher after them are not.
+			switch {
+			case launcher:
+				passed = append(append(passed, pending...), last[process])
+				pending = nil
+			case len(passed) > 0:
 				passed = append(passed, last[process])
+			default:
+				pending = append(pending, last[process])
 			}
 			process = children[0]
 		}

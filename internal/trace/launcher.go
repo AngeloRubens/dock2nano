@@ -228,6 +228,87 @@ func IsCompound(text string) bool {
 	return false
 }
 
+// SeveralCommands tells whether the text of a shell command line runs more than one command: it
+// holds &&, ||, ;, a newline, a pipe, a & that puts a command in the background (not the & of a
+// redirection such as 2>&1 or &>), $( or a backtick. A quote or a redirection alone does not count.
+// It is a guess from the text: nothing is parsed.
+func SeveralCommands(text string) bool {
+	if strings.ContainsAny(text, ";\n|`") || strings.Contains(text, "$(") {
+		return true
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] != '&' {
+			continue
+		}
+		prev, next := byte(' '), byte(' ')
+		if i > 0 {
+			prev = text[i-1]
+		}
+		if i+1 < len(text) {
+			next = text[i+1]
+		}
+		if prev == '>' || prev == '<' || next == '>' {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// IsShell tells whether a program is a shell (or busybox as one), whatever it was asked to run.
+func IsShell(program string, argv []string) bool {
+	switch interp, _ := interpreterOf(program, argv); interp {
+	case "sh", "bash", "dash", "ash":
+		return true
+	}
+	return false
+}
+
+// supervisors are the programs, found by name under node_modules, that start the program of the
+// user as a child process and keep it running: nanos has no fork, so they cannot run there.
+var supervisors = map[string]bool{
+	"nodemon": true, "ts-node-dev": true, "node-dev": true, "pm2-runtime": true, "pm2": true,
+	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
+}
+
+// Supervisor tells whether a program started as program with argv is one of the supervisors (by its
+// place: node_modules/.bin/<name> or node_modules/<name>/..., run by node or itself), and gives its
+// name, or "" when it is not. Nothing is passed over for it: it is only named.
+func Supervisor(program string, argv []string) string {
+	files := []string{program}
+	if interp, args := interpreterOf(program, argv); interp == "node" || interp == "nodejs" {
+		files = nil
+		for i := 0; i < len(args); i++ {
+			if nodeNoScript[args[i]] {
+				break
+			}
+			if nodeWithValue[args[i]] {
+				i++
+				continue
+			}
+			if !strings.HasPrefix(args[i], "-") {
+				files = append(files, args[i])
+				break
+			}
+		}
+	}
+	for _, f := range files {
+		if !path.IsAbs(f) {
+			f = "/" + f
+		}
+		if d, b := path.Dir(f), path.Base(f); strings.HasSuffix(d, "/node_modules/.bin") && supervisors[nodeExtension(b)] {
+			return nodeExtension(b)
+		}
+		parts := strings.Split(f, "/")
+		for i := 0; i+1 < len(parts); i++ {
+			if parts[i] == "node_modules" && supervisors[parts[i+1]] {
+				return parts[i+1]
+			}
+		}
+	}
+	return ""
+}
+
 // commandText finds the command line a shell is given with -c (or a cluster of options that holds
 // c, as -ec), among its arguments. The search stops at the first operand that is not an option: after
 // it the arguments belong to the script ("sh /entry.sh -c x" runs /entry.sh). The value of -o and +o
@@ -241,7 +322,8 @@ func commandText(args []string) (string, bool) {
 				return args[i+1], true
 			}
 			return "", false
-		case a == "-o" || a == "+o":
+		case a == "-o" || a == "+o" || a == "--rcfile" || a == "--init-file":
+			// the value of the option is not the script
 			i++
 		case a == "--" || a == "-" || a == "+" || !(strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+")):
 			return "", false
@@ -304,17 +386,8 @@ var builtins = map[string]bool{
 	"create": true, "init": true, "bin": true, "cache": true, "config": true, "link": true,
 	"unlink": true, "pack": true, "publish": true, "why": true, "ls": true, "list": true,
 	"set": true, "info": true, "dedupe": true, "rebuild": true, "patch": true, "x": true,
-}
-
-// ScriptOf names the package.json script a launcher was asked to run: "start" for "npm start",
-// "dev" for "npm run dev", "yarn dev", "pnpm run dev". It is "" when the arguments do not name one
-// (npx and pnpx run a package, yarn node and pnpm exec a command, npm install installs). Options
-// are skipped, with the value of the ones that take one. elsewhere is true when an option points the
-// launcher at another directory or package (--cwd, -C, --dir, --prefix, --filter, -F, -w,
-// --workspace): the script is not in the package.json of the working directory.
-func ScriptOf(launcher string, rest []string) (script string, elsewhere bool) {
-	script, elsewhere, _ = ScriptRun(launcher, rest)
-	return script, elsewhere
+	"global": true, "outdated": true, "audit": true, "explain": true, "help": true, "version": true,
+	"store": true, "plugin": true, "constraints": true,
 }
 
 // elsewhereFlags are the options, per launcher, with no value, that make the launcher run the script
@@ -324,8 +397,14 @@ var elsewhereFlags = map[string]map[string]bool{
 	"pnpm": {"-r": true, "--recursive": true, "--workspace-root": true},
 }
 
-// ScriptRun is ScriptOf that also says whether the script was named with run (or run-script): "pnpm
-// run foo" fails when there is no script foo, where "pnpm foo" falls back to running a command.
+// ScriptRun names the package.json script a launcher was asked to run: "start" for "npm start",
+// "dev" for "npm run dev", "yarn dev", "pnpm run dev". It is "" when the arguments do not name one
+// (npx and pnpx run a package, yarn node and pnpm exec a command, npm install installs). Options
+// are skipped, with the value of the ones that take one. elsewhere is true when an option points the
+// launcher at another directory or package (--cwd, -C, --dir, --prefix, --filter, -F, -w,
+// --workspace, --workspaces, -r): the script is not in the package.json of the working directory.
+// viaRun says whether the script was named with run (or run-script): "pnpm run foo" fails when
+// there is no script foo, where "pnpm foo" falls back to running a command.
 func ScriptRun(launcher string, rest []string) (script string, elsewhere, viaRun bool) {
 	var words []string
 loop:

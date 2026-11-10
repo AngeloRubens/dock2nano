@@ -202,9 +202,22 @@ type Result struct {
 	// outermost first. Empty when the program is what the image started (or a shell led to it).
 	PassedOver []string
 
-	// PassedOverCompound is true when one of the shells passed over ran a command line of several
-	// commands (a && b, a; b): the commands besides the program are not run by the package.
+	// PassedOverCompound is true when one of the shells passed over ran a command line that looks
+	// like several commands (a && b, a; b): the commands besides the program are not run by the
+	// package.
 	PassedOverCompound bool
+
+	// PassedOverScriptFile is true when one of the shells passed over ran a script file (sh
+	// /entrypoint.sh): what else it ran is not known, and the package does not run it.
+	PassedOverScriptFile bool
+
+	// LauncherName and LauncherScript are the innermost launcher passed over and the package.json
+	// script it was asked to run ("" when it names none); LauncherElsewhere is true when an option
+	// of its command line points at another package or directory. A launcher with an in-process shell
+	// (yarn berry) runs the commands of the script itself, which no shell in the trace shows.
+	LauncherName      string
+	LauncherScript    string
+	LauncherElsewhere bool
 
 	// Children is the number of child processes (fork, vfork, clone or clone3 without
 	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
@@ -341,7 +354,7 @@ func (r *run) redact(text string) string {
 // PasswordPair matches password=value and pwd=value (see passwordPair).
 var PasswordPair = passwordPair
 
-// quoteArg writes an argument of a command line so that its end is visible: one that is empty or
+// quoteArg writes an argument of a command line for display, so that its end is visible: one that is empty or
 // holds a space, a tab, a newline, a quote or a backslash is put in single quotes, or in double
 // quotes when it holds a single quote.
 func quoteArg(a string) string {
@@ -724,8 +737,21 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 	pid, program, from := final.Pid, final.Path, final.Line
 	var passedOver []string
-	passedOverCompound := false
+	var passedOverCompound, passedOverScriptFile, launcherElsewhere bool
+	var launcherName, launcherScript string
 	for _, l := range final.PassedOver {
+		if name, rest, ok := trace.Launcher(l.Path, l.Argv); ok {
+			// the innermost launcher is the one whose script the package.json is read for
+			launcherName = name
+			launcherScript, launcherElsewhere, _ = trace.ScriptRun(name, rest)
+		}
+		if text, ok := trace.ShellCommand(l.Path, l.Argv); ok {
+			if trace.SeveralCommands(text) {
+				passedOverCompound = true
+			}
+		} else if trace.IsShell(l.Path, l.Argv) {
+			passedOverScriptFile = true
+		}
 		if len(l.Argv) == 0 {
 			passedOver = append(passedOver, r.redact(l.Path))
 			continue
@@ -737,9 +763,6 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			words[i] = quoteArg(r.redact(a))
 		}
 		passedOver = append(passedOver, strings.Join(words, " "))
-		if text, ok := trace.ShellCommand(l.Path, l.Argv); ok && trace.IsCompound(text) {
-			passedOverCompound = true
-		}
 	}
 	r.vlogf("the program is %s, process %s\n", program, pid)
 
@@ -928,6 +951,11 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		Vanished:           len(r.gone),
 		PassedOver:         passedOver,
 		PassedOverCompound: passedOverCompound,
+
+		PassedOverScriptFile: passedOverScriptFile,
+		LauncherName:         launcherName,
+		LauncherScript:       launcherScript,
+		LauncherElsewhere:    launcherElsewhere,
 		Children:           len(children),
 		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),

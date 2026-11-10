@@ -113,6 +113,12 @@ func TestScriptOf(t *testing.T) {
 		{"yarn", []string{"node", "server.js"}, "", false},
 		{"yarn", []string{"exec", "x"}, "", false},
 		{"yarn", []string{"install"}, "", false},
+		{"yarn", []string{"global", "add", "x"}, "", false},
+		{"yarn", []string{"audit"}, "", false},
+		{"yarn", []string{"help"}, "", false},
+		{"pnpm", []string{"outdated"}, "", false},
+		{"pnpm", []string{"store", "status"}, "", false},
+		{"yarn", []string{"explain", "x"}, "", false},
 		{"pnpm", []string{"run", "dev"}, "dev", false},
 		{"pnpm", []string{"-C", "/app", "start"}, "start", true},
 		{"pnpm", []string{"--filter", "web", "dev"}, "dev", true},
@@ -133,9 +139,9 @@ func TestScriptOf(t *testing.T) {
 		{"pnpx", []string{"serve"}, "", false},
 	}
 	for _, tt := range tests {
-		got, elsewhere := ScriptOf(tt.launcher, tt.rest)
+		got, elsewhere, _ := ScriptRun(tt.launcher, tt.rest)
 		if got != tt.want || elsewhere != tt.elsewhere {
-			t.Errorf("ScriptOf(%q, %v) = %q, %v; want %q, %v", tt.launcher, tt.rest, got, elsewhere, tt.want, tt.elsewhere)
+			t.Errorf("ScriptRun(%q, %v) = %q, %v; want %q, %v", tt.launcher, tt.rest, got, elsewhere, tt.want, tt.elsewhere)
 		}
 	}
 }
@@ -161,6 +167,66 @@ func TestScriptRun(t *testing.T) {
 	}
 }
 
+func TestSeveralCommands(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"node server.js", false},
+		{"npm start", false},
+		{`node server.js --name "x y"`, false},
+		{"node server.js > log 2>&1", false},
+		{"node server.js &> log", false},
+		{"node server.js >&2", false},
+		{"node migrate.js && node server.js", true},
+		{"a || b", true},
+		{"a; b", true},
+		{"a\nb", true},
+		{"a | b", true},
+		{"node server.js &", true},
+		{"a $(b)", true},
+		{"a `b`", true},
+	}
+	for _, tt := range tests {
+		if got := SeveralCommands(tt.text); got != tt.want {
+			t.Errorf("SeveralCommands(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestIsShell(t *testing.T) {
+	if !IsShell("/bin/sh", []string{"sh", "/entrypoint.sh"}) || !IsShell("/bin/busybox", []string{"sh", "-c", "x"}) {
+		t.Errorf("a shell is not taken for one")
+	}
+	if IsShell("/usr/local/bin/node", []string{"node", "server.js"}) {
+		t.Errorf("node is taken for a shell")
+	}
+}
+
+func TestSupervisor(t *testing.T) {
+	tests := []struct {
+		name    string
+		program string
+		argv    []string
+		want    string
+	}{
+		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},
+		{"nodemon package", "/usr/local/bin/node", []string{"node", "/app/node_modules/nodemon/bin/nodemon.js", "server.js"}, "nodemon"},
+		{"node with an option first", "/usr/local/bin/node", []string{"node", "-r", "x", "/app/node_modules/.bin/ts-node-dev", "a.ts"}, "ts-node-dev"},
+		{"pm2-runtime", "/usr/local/bin/node", []string{"node", "/usr/local/lib/node_modules/pm2/bin/pm2-runtime", "app.js"}, "pm2"},
+		{"concurrently", "/usr/local/bin/node", []string{"node", "/app/node_modules/.bin/concurrently", "a", "b"}, "concurrently"},
+		{"the program itself", "/app/node_modules/.bin/nodemon", []string{"nodemon"}, "nodemon"},
+		{"a program of the user", "/usr/local/bin/node", []string{"node", "/app/server.js"}, ""},
+		{"a file called nodemon outside node_modules", "/usr/local/bin/node", []string{"node", "/app/nodemon.js"}, ""},
+		{"node -e", "/usr/local/bin/node", []string{"node", "-e", "/app/node_modules/.bin/nodemon"}, ""},
+	}
+	for _, tt := range tests {
+		if got := Supervisor(tt.program, tt.argv); got != tt.want {
+			t.Errorf("%s: Supervisor = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestShellCommand(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -172,6 +238,7 @@ func TestShellCommand(t *testing.T) {
 		{"sh -c", "/bin/sh", []string{"sh", "-c", "a && b"}, "a && b", true},
 		{"busybox sh -c", "/bin/busybox", []string{"sh", "-c", "a; b"}, "a; b", true},
 		{"script operand first", "/bin/sh", []string{"sh", "/e.sh", "-c", "a"}, "", false},
+		{"rcfile with a value", "/bin/bash", []string{"bash", "--rcfile", "/f", "-c", "a"}, "a", true},
 		{"node is not a shell", "/usr/local/bin/node", []string{"node", "-c", "a"}, "", false},
 	}
 	for _, tt := range tests {
@@ -251,13 +318,32 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 				{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0},
 				{Pid: "7", Path: "/bin/sh", Argv: []string{"sh", "-c", "node migrate.js && node server.js"}, Line: 2},
 			}}},
-		{"a shell of the entrypoint before the launcher is not recorded", `1     execve("/bin/sh", ["sh", "/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
+		{"a shell of the entrypoint before the launcher is recorded", `1     execve("/bin/sh", ["sh", "/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 4,
-			PassedOver: []Exec{{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 2}}}},
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "/entrypoint.sh"}, Line: 0},
+				{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 2},
+			}}},
+		{"the shell form of CMD with a migration before npm start", `1     execve("/bin/sh", ["sh", "-c", "npm run migrate && npm start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "migrate"], 0x7ffd1 /* 5 vars */) = 0
+7     +++ exited with 0 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/bin/sh", ["sh", "-c", "node server.js"], 0x7ffd1 /* 5 vars */) = 0
+9     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
+10    execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "10", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 9,
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "npm run migrate && npm start"}, Line: 0},
+				{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 5},
+				{Pid: "9", Path: "/bin/sh", Argv: []string{"sh", "-c", "node server.js"}, Line: 7},
+			}}},
 		{"a launcher with two running children stays", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "a.js"], 0x7ffd1 /* 1 vars */) = 0

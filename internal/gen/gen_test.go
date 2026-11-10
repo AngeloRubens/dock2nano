@@ -1317,6 +1317,15 @@ func TestHideSecrets(t *testing.T) {
 		{"json key", `node a.js '{"apiKey":"x"}'`, `node a.js '{"apiKey":"***"}'`},
 		{"default of a secret", "node a.js ${TOKEN:-abc}", "node a.js ${TOKEN:-***}"},
 		{"default that is not a secret", "node a.js ${PORT:-80}", "node a.js ${PORT:-80}"},
+		{"api key header", "curl -H 'X-API-Key: v1' http://h", "curl -H 'X-API-Key: ***' http://h"},
+		{"private token header", "curl -H PRIVATE-TOKEN: v2 http://h", "curl -H PRIVATE-TOKEN: *** http://h"},
+		{"curl user", "curl -u user:pass http://h", "curl -u *** http://h"},
+		{"curl long user", "curl --user user:pass http://h", "curl --user *** http://h"},
+		{"redis-cli password", "redis-cli -a pass ping", "redis-cli -a *** ping"},
+		{"command substitution as a value", "TOKEN=$(echo abc) node x", "TOKEN=*** node x"},
+		{"a value that starts with a dash", "node x --password -abc", "node x --password ***"},
+		{"escaped json key", `node x "{\"token\":\"v\"}"`, `node x "{\"token\":\"***\"}"`},
+		{"assignment quoted in part", `"TOKEN=abc"x node y`, "TOKEN=*** node y"},
 		{"option value with a space", "npm start --password 'two words'", "npm start --password ***"},
 	}
 	for _, tt := range tests {
@@ -1337,10 +1346,11 @@ func TestLauncherScriptQuotedHidesOptionsAndURLs(t *testing.T) {
 
 func TestPassedOverNoteHidesSecrets(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
-	in.Services["web"].Observed.PassedOver = []string{"npm start --token abc123 postgres://u:pass@db/x"}
+	// the shape observe makes: the -c operand of the shell is one single quoted word
+	in.Services["web"].Observed.PassedOver = []string{"npm start --token abc123 postgres://u:pass@db/x", "sh -c 'node server.js --api-key abc123 PORT=80 API_TOKEN=abc999'"}
 	p := mustGen(t, in)
 	got := itemsOf(p, "web", plan.Note, "launcher passed over")
-	if len(got) != 1 || strings.Contains(got[0].Message, "abc123") || strings.Contains(got[0].Message, "pass@") {
+	if len(got) != 1 || strings.Contains(got[0].Message, "abc123") || strings.Contains(got[0].Message, "abc999") || strings.Contains(got[0].Message, "pass@") {
 		t.Errorf("items %+v: a secret is printed", got)
 	}
 }
@@ -1427,9 +1437,89 @@ func TestPassedOverNoteSaysTheOtherCommandsOfTheScriptAreNotRun(t *testing.T) {
 	o.PassedOverCompound = true
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Note, "launcher passed over", "sh -c 'node migrate.js && node server.js'")
-	want1(t, p, "web", plan.Note, "launcher passed over", "besides that program are not run")
+	want1(t, p, "web", plan.Unsupported, "commands not run", "looks like several commands")
+	want1(t, p, "web", plan.Unsupported, "commands not run", "as a separate one-shot service")
 	o.PassedOverCompound = false
-	wantNoText(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "are not run")
+	wantNone(t, mustGen(t, in), "web", plan.Unsupported, "commands not run")
+}
+
+func TestPassedOverScriptFileMayHaveRunOtherCommands(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"sh /entrypoint.sh", "npm start"}
+	o.PassedOverScriptFile = true
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "commands not run", "ran a script file, which may have run other commands")
+	o.PassedOverScriptFile = false
+	wantNone(t, mustGen(t, in), "web", plan.Unsupported, "commands not run")
+}
+
+func TestPassedOverLauncherWithAShellOfItsOwnAndSeveralCommands(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, `{"scripts":{"start":"node migrate.js && node server.js --token abc123"}}`)
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"node /opt/yarn-v1.22.19/bin/yarn.js start"}
+	o.LauncherName, o.LauncherScript = "yarn", "start"
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "commands not run", `holds several commands`)
+	if got := itemsOf(p, "web", plan.Unsupported, "commands not run"); strings.Contains(got[0].Message, "abc123") {
+		t.Errorf("message %q prints a secret", got[0].Message)
+	}
+	// one command only, or a script of another package: nothing is dropped
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, `{"scripts":{"start":"node server.js > log 2>&1"}}`)
+	o2 := in2.Services["web"].Observed
+	o2.PassedOver = []string{"yarn start"}
+	o2.LauncherName, o2.LauncherScript = "yarn", "start"
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "commands not run")
+	o.LauncherElsewhere = true
+	wantNone(t, mustGen(t, in), "web", plan.Unsupported, "commands not run")
+}
+
+func TestPassedOverNoteWarnsThatSecretsMayRemain(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in.Services["web"].Observed.PassedOver = []string{"npm start"}
+	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "may still hold some")
+}
+
+func TestSupervisorIsNamedAndNotPassedOver(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "supervisor", "nodemon is a supervisor that starts your program as a child process")
+	want1(t, p, "web", plan.Unsupported, "supervisor", "(for nodemon: node <file>)")
+	wantNone(t, p, "web", plan.Unsupported, "launcher")
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "supervisor")
+	in3, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/app/node_modules/.bin/concurrently", "a", "b"}, "")
+	want1(t, mustGen(t, in3), "web", plan.Unsupported, "supervisor", "need a service each")
+}
+
+func TestHideSecretsInsideAQuotedCommand(t *testing.T) {
+	got := hideSecrets("sh -c 'PORT=80 API_TOKEN=abc node x --token t1 -pP1'")
+	for _, leak := range []string{"abc", "t1", "P1"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q still holds %q", got, leak)
+		}
+	}
+	if !strings.Contains(got, "PORT=80") || !strings.Contains(got, "node x") {
+		t.Errorf("%q lost what is not secret", got)
+	}
+	for _, in := range []string{
+		"sh -c 'node server.js --api-key abc123'",
+		"sh -c 'exec NODE_ENV=x TOKEN=y1234 npm start'",
+		"sh -c 'mysql -psecret1 db'",
+		`sh -c "node x --password 'two words'"`,
+	} {
+		for _, leak := range []string{"abc123", "y1234", "secret1", "words"} {
+			if out := hideSecrets(in); strings.Contains(out, leak) {
+				t.Errorf("hideSecrets(%q) = %q, still holds %q", in, out, leak)
+			}
+		}
+	}
+}
+
+func TestHideSecretsDigestHeader(t *testing.T) {
+	in := `curl -H "Authorization: Digest username=\"u\", response=\"abcdef\"" http://h`
+	if out := hideSecrets(in); strings.Contains(out, "abcdef") {
+		t.Errorf("hideSecrets(%q) = %q", in, out)
+	}
 }
 
 func wantNoText(t *testing.T, p *plan.Plan, service string, kind plan.Kind, key, text string) {
