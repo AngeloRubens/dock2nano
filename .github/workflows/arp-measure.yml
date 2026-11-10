@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3]
+        run: [1, 2, 3, 4, 5, 6]
     env:
       OPS_HOME: /home/runner
     steps:
@@ -47,13 +47,15 @@ jobs:
           cat /tmp/out/compose.yaml
       - name: compose up, with the host watched
         run: |
+          set +e
           cd /tmp/out
           t0=$(date +%s.%N)
           monitor() {
+            set +e
             last=""
             while true; do
               t=$(date +%s.%N)
-              rel=$(echo "$t - $t0" | bc)
+              rel=$(awk -v a="$t" -v b="$t0" 'BEGIN{printf "%.1f", a-b}')
               macs=$(ps -eo args | grep '[q]emu-system' | grep -o ' -name [^ ]*\|,mac=[0-9a-f:]*' | tr '\n' ' ')
               arpout=$( (arp -a 2>&1 || echo "arp failed: $?") | grep -a "192.168.33\|failed\|not found" | tr '\n' '|')
               neigh=$(ip neigh show dev ops0 2>&1 | tr '\n' '|')
