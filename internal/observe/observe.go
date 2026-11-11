@@ -197,6 +197,20 @@ type Result struct {
 	// about one by one.
 	Vanished int
 
+	// PassedOver are the labels (trace.Label: names, never arguments) of the commands the image
+	// started and that the observation passed over for the program they started, the outermost first:
+	// the package manager launchers (npm, yarn, pnpm) and the shells around them. Empty when no
+	// launcher was passed over.
+	PassedOver []string
+
+	// NotRun are the labels of the commands that ran before the program or beside it, and ended
+	// ("npm (script "migrate")" of "npm run migrate && npm start"): the package does not run them.
+	NotRun []string
+
+	// ChildLaunchers are the labels of the launchers that the program started as children: the
+	// program is a script of the image that runs npm, which cannot run on nanos.
+	ChildLaunchers []string
+
 	// Children is the number of child processes (fork, vfork, clone or clone3 without
 	// CLONE_THREAD) the program started while it was observed. Threads are not counted. Nanos runs
 	// one process, so the caller reports a program that has any.
@@ -695,6 +709,10 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: %s started no program in %d seconds%s", image, r.o.Seconds, r.logTail(id))
 	}
 	pid, program, from := final.Pid, final.Path, final.Line
+	var passedOver []string
+	for _, l := range final.PassedOver {
+		passedOver = append(passedOver, trace.Label(l.Path, l.Argv))
+	}
 	r.vlogf("the program is %s, process %s\n", program, pid)
 
 	// What the process says about itself, while it is there to ask. The command line comes from
@@ -880,6 +898,9 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
 		Vanished:           len(r.gone),
+		PassedOver:         passedOver,
+		NotRun:             final.NotRun,
+		ChildLaunchers:     final.ChildLaunchers,
 		Children:           len(children),
 		ChildCalls:         childCalls,
 		ConfigurationFiles: trace.ConfigurationFiles(sysroot),

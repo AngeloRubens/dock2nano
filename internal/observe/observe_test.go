@@ -2583,6 +2583,39 @@ func TestObserveForksBeforeTheProgramStartedAreNotChildren(t *testing.T) {
 	equal(t, "child calls", res.ChildCalls, []string(nil))
 }
 
+func TestObservePassesOverALauncherAndNamesTheCommands(t *testing.T) {
+	s := newScene(t)
+	// the shell form of CMD forks for its first command and executes its last, with a secret in the
+	// arguments: only names come out
+	s.o.Env = []string{"API_KEY=supersecretvalue"}
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "-c", "npm run migrate && npm start --key supersecretvalue"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "migrate"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"12 +++ exited with 0 +++\n" +
+		`11 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start", "--key", "supersecretvalue"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/bin/sh", ["sh", "-c", "node server.js --token abc123"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"13 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 14\n" + `14 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/app")
+	equal(t, "passed over", res.PassedOver, []string{"sh -c", `npm (script "start")`, "sh -c"})
+	equal(t, "not run", res.NotRun, []string{`npm (script "migrate")`})
+}
+
+func TestObserveScriptThatRunsNpmNamesTheLauncherChild(t *testing.T) {
+	s := newScene(t)
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/bin/app", ["app", "--serve"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/app")
+	equal(t, "child launchers", res.ChildLaunchers, []string{`npm (script "start")`})
+	equal(t, "passed over", res.PassedOver, []string(nil))
+}
+
 func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {
 	s := newScene(t)
 	// the paths are asked for in order: the file first, then the link that leads to it

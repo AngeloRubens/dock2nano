@@ -9,8 +9,10 @@
 package gen
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -26,6 +28,7 @@ import (
 	"github.com/AngeloRubens/dock2nano/internal/dockerfile"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/plan"
+	"github.com/AngeloRubens/dock2nano/internal/trace"
 )
 
 // maxListed is how many names a report line lists before "and N more".
@@ -728,9 +731,236 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.Vanished > 0 {
 		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
 	}
+	launcher := g.launcherNote(s, obs)
+	g.passedOverNote(s, obs)
+	supervisor := g.supervisorNote(s, obs)
+	g.childLauncherNote(s, obs, supervisor)
 	if obs.Children > 0 {
-		g.add(s.Name, plan.Unsupported, "processes", fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children))
+		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
+		if launcher {
+			msg += ". The program is a launcher: see the launcher item"
+		}
+		if supervisor {
+			msg += ". The program is a supervisor: see the supervisor item"
+		}
+		g.add(s.Name, plan.Unsupported, "processes", msg)
 	}
+}
+
+// maxPackageJSON is the largest package.json that is read.
+const maxPackageJSON = 1 << 20
+
+// launcherNote says, for a program that is a package manager launcher (npm, npx, yarn, pnpm), that
+// it cannot run on nanos as it is: it starts the script as a child process, and nanos has no fork.
+// When the script is named and package.json was carried with the package, the command of the script
+// is quoted. Nothing is changed. It tells whether it added the item.
+func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
+	name, rest, ok := trace.Launcher(obs.Program, obs.Argv)
+	if !ok {
+		return false
+	}
+	verb := "is"
+	if runsThroughShell(obs) {
+		verb = "runs"
+	}
+	msg := fmt.Sprintf("the observed program %s %s, a launcher that starts your command as a child process; nanos has no fork, so it cannot run on nanos as it is", verb, name)
+	advice := "if the script runs a single node program, run that program directly (node <file>) and give it to the image as its command; a script that starts other launchers or several commands needs the same at each step"
+	if name == "npx" || name == "pnpx" {
+		advice = "if the package it runs is a single node program, run its file directly (node <file>) and give it to the image as its command"
+	}
+	script, elsewhere, viaRun := trace.ScriptRun(name, rest)
+	switch {
+	case script == "":
+		msg += ". " + advice
+	case elsewhere:
+		msg += fmt.Sprintf(". It was asked to run the script %q of another package or directory (an option of the command line points there), which was not read. %s", script, advice)
+	default:
+		_, state := packageScript(obs.Sysroot, obs.WorkingDir, script)
+		const option = "; if that word is the value of an option, it is not a script"
+		switch {
+		case state == scriptFound:
+			msg += fmt.Sprintf(". It was asked to run the package.json script %q: read its command in package.json, under scripts. %s", script, advice)
+		case state == scriptMissing && name == "npm" && script == "start":
+			msg += ". npm start was asked and package.json has no start script: npm then runs node server.js if that file exists; run that directly"
+		case state == scriptMissing && name == "npm" && script == "restart":
+			msg += ". npm restart was asked and package.json has no restart script: npm then runs its stop and start scripts. " + advice
+		case state == scriptMissing && name == "npm":
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: npm run fails for it%s", script, option)
+		case state == scriptMissing && script == "start":
+			msg += fmt.Sprintf(". It was asked to run the script \"start\", which package.json does not have: %s then may run node server.js if that file exists%s", name, option)
+		case state == scriptMissing && name == "pnpm" && viaRun:
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: pnpm run fails for it%s", script, option)
+		case state == scriptMissing && name == "pnpm":
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: pnpm then falls back to running a command of that name (pnpm exec)%s", script, option)
+		case state == scriptMissing:
+			msg += fmt.Sprintf(". It was asked to run the script %q, which package.json does not have: %s then runs the binary of that name from node_modules/.bin if there is one%s", script, name, option)
+		default:
+			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
+		}
+	}
+	g.add(s.Name, plan.Unsupported, "launcher", msg)
+	return true
+}
+
+// runsThroughShell tells whether the observed program is a shell (or busybox) that runs the
+// launcher, as against the launcher itself.
+func runsThroughShell(obs *observe.Result) bool {
+	for _, p := range []string{obs.Program, firstArg(obs.Argv)} {
+		switch path.Base(p) {
+		case "sh", "bash", "dash", "ash", "busybox":
+			return true
+		}
+	}
+	return false
+}
+
+func firstArg(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return argv[0]
+}
+
+// passedOverNote says what the observation passed over: the commands the image starts (a launcher,
+// the shells around it) and the package runs the program the launcher started, which is a different
+// thing. The commands are named, never printed: the arguments of a command line are user text, and
+// the report points to where the original is. An Unsupported item says which commands ran before
+// the program or beside it and are not run by the package.
+func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
+	const where = "Read the original commands in the CMD or ENTRYPOINT of the Dockerfile and in the scripts of package.json"
+	if len(obs.PassedOver) > 0 {
+		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(obs.PassedOver), ", then "), where))
+	}
+	if len(obs.NotRun) > 0 {
+		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
+	}
+}
+
+// distinctCounted removes the repeats of a label, keeping the order of the first one, and says how
+// many there were: "sleep (x30)". A wait loop in an entrypoint makes hundreds of them.
+func distinctCounted(labels []string) []string {
+	var order []string
+	count := map[string]int{}
+	for _, l := range labels {
+		if count[l] == 0 {
+			order = append(order, l)
+		}
+		count[l]++
+	}
+	for i, l := range order {
+		if count[l] > 1 {
+			order[i] = fmt.Sprintf("%s (x%d)", l, count[l])
+		}
+	}
+	return order
+}
+
+// runsCounted does the same for the labels that repeat one after the other, which keeps the order
+// of a chain.
+func runsCounted(labels []string) []string {
+	var out []string
+	for i := 0; i < len(labels); {
+		j := i
+		for j < len(labels) && labels[j] == labels[i] {
+			j++
+		}
+		if j-i > 1 {
+			out = append(out, fmt.Sprintf("%s (x%d)", labels[i], j-i))
+		} else {
+			out = append(out, labels[i])
+		}
+		i = j
+	}
+	return out
+}
+
+// cappedJoin joins names with sep and stops after maxListed of them.
+func cappedJoin(names []string, sep string) string {
+	if len(names) <= maxListed {
+		return strings.Join(names, sep)
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:maxListed], sep), len(names)-maxListed)
+}
+
+// childLauncherNote says that the program started a launcher as a child process: it is probably a
+// script of the image (a script is not told from a program by its name) that runs npm.
+func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result, supervisor bool) {
+	if len(obs.ChildLaunchers) == 0 {
+		return
+	}
+	who := "the program, a script of the image or an init,"
+	switch path.Base(obs.Program) {
+	case "tini", "tini-static", "dumb-init":
+		supervisor = true
+	}
+	if supervisor {
+		who = "the program (an init or a supervisor)"
+	}
+	g.add(s.Name, plan.Unsupported, "launcher child", fmt.Sprintf("%s started %s as a child process, and a launcher cannot run on nanos (no fork). Run the node command it leads to directly. Read the command in the CMD or ENTRYPOINT of the Dockerfile", who, listed(distinctCounted(obs.ChildLaunchers))))
+}
+
+// supervisorNote says, for a program that is a supervisor (nodemon, pm2-runtime, ...), that it
+// starts the program of the user as a child process, and what to run instead. Nothing is passed over
+// for it by name: the report only says it. It tells whether it added the item.
+func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool {
+	name := trace.Supervisor(obs.Program, obs.Argv)
+	if name == "" {
+		return false
+	}
+	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
+	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {
+		msg += "; it starts several commands, which need a service each"
+	}
+	g.add(s.Name, plan.Unsupported, "supervisor", msg)
+	return true
+}
+
+const (
+	scriptUnreadable = iota
+	scriptMissing
+	scriptFound
+)
+
+// packageScript reads the command of a script from the package.json in the working directory of the
+// observed program, inside the sysroot: the path is resolved in the sysroot, where a link of the
+// image stays, and only a regular file of at most maxPackageJSON bytes is read. A file that cannot
+// be read or is not JSON is scriptUnreadable; a readable one without the script (or with an empty
+// one) is scriptMissing.
+func packageScript(sysroot, dir, script string) (string, int) {
+	if sysroot == "" {
+		return "", scriptUnreadable
+	}
+	// the links of the image are followed inside the sysroot; os.Root refuses what still leads out of
+	// it (a chain of links that InSysroot gave up on, a link to a path of this machine)
+	inside := trace.InSysroot(sysroot, path.Join("/", dir, "package.json"))
+	root, err := os.OpenRoot(sysroot)
+	if err != nil {
+		return "", scriptUnreadable
+	}
+	defer root.Close()
+	f, err := root.Open(strings.TrimPrefix(inside, "/"))
+	if err != nil {
+		return "", scriptUnreadable
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return "", scriptUnreadable
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxPackageJSON+1))
+	if err != nil || len(data) > maxPackageJSON {
+		return "", scriptUnreadable
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(data, &pkg) != nil {
+		return "", scriptUnreadable
+	}
+	cmd, ok := pkg.Scripts[script]
+	if !ok || cmd == "" {
+		return "", scriptMissing
+	}
+	return cmd, scriptFound
 }
 
 // firstLines returns the first n non-empty lines of s, trimmed, joined by " | ".
