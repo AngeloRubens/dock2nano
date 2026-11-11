@@ -1,0 +1,64 @@
+name: ops dns_search unit tests
+
+on:
+  push:
+    branches: ['check/ops-dns-search-tests']
+
+jobs:
+  ops:
+    name: ${{ matrix.ref }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        ref:
+          - feat/compose-dns-search-indep
+          - check/dns-search-base
+          - check/dns-search-mut-resolv
+          - check/dns-search-mut-checkfn
+          - check/dns-search-mut-tag
+          - feat/compose-dns-search
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: ${{ matrix.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        id: gofmt
+        continue-on-error: true
+        run: |
+          unformatted=$(gofmt -l cmd/ lepton/ types/)
+          if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d cmd/ lepton/ types/; exit 1; fi
+
+      - name: vet
+        id: vet
+        continue-on-error: true
+        run: go vet ./cmd/... ./lepton/... ./types/...
+
+      - name: build
+        id: build
+        continue-on-error: true
+        run: go build -o ops -v
+
+      - name: new tests by name
+        id: named
+        continue-on-error: true
+        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf'
+
+      - name: full suite of cmd lepton types
+        id: full
+        continue-on-error: true
+        run: go test ./cmd/... ./lepton/... ./types/... -count 1 -v 2>&1 | tee full.log
+
+      - name: outcome
+        run: |
+          echo "ref=${{ matrix.ref }} gofmt=${{ steps.gofmt.outcome }} vet=${{ steps.vet.outcome }} build=${{ steps.build.outcome }} named=${{ steps.named.outcome }} full=${{ steps.full.outcome }}"
+          echo "---- FAIL lines of the full suite"
+          grep -E '^(--- FAIL|FAIL|ok |panic)' full.log || true
