@@ -2107,3 +2107,16 @@ func TestSecondObservationIsBoundedAndNamesWhatRanBesideIt(t *testing.T) {
 		t.Errorf("suggestion %+v", sug)
 	}
 }
+
+func TestDependentsObservedBeforeTheSecondObservationSayIt(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n  web:\n    image: w\n    depends_on: [backend]\n  db:\n    image: d\n")
+	h.haveAll("b", "w", "d")
+	// backend could not be started for web, so web was observed without it
+	h.startErr["b"] = errors.New("exited at once")
+	stoppedWith(h, map[string]int{"b": 1})
+	h.mustRun(0, "convert")
+	if !hasWarning(h, "web", "it needs backend, which was observed once more after this service was observed") {
+		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+}
