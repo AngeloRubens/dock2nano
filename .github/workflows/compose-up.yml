@@ -22,6 +22,7 @@ jobs:
           - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
           - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
+          - {name: sparkjava-mysql-short, dir: sparkjava-mysql, flags: "--short-names", probe: "backend:8080:http db:3306:tcp"}
           - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
           - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
           - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
