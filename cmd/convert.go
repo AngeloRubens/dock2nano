@@ -79,7 +79,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -146,8 +146,16 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// does not say needs any of the others, is observed again with the others running.
 	for _, name := range rs.retry {
 		s := project.Service(name)
-		cands := rs.candidates(s)
+		cands := rs.candidates(s, true)
 		if len(cands) == 0 {
+			// none of the others could be prepared: the stop stands, and the hub is read as it
+			// is for a service that needs nobody
+			si := inputs[name]
+			ha := rs.hubArgs[name]
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &si); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = si
 			continue
 		}
 		for _, c := range cands {
@@ -572,12 +580,19 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	// service is observed again, when the others are all prepared, and the hub waits for that.
 	if rs.wantsRetry(s, res) {
 		rs.retry = append(rs.retry, s.Name)
+		rs.hubArgs[s.Name] = hubArgs{image: image, built: s.Build != nil}
 		return si, nil
 	}
 	if err := a.hubStep(ctx, o, rs, s, image, s.Build != nil, &si); err != nil {
 		return si, err
 	}
 	return si, nil
+}
+
+// hubArgs is what the hub step of a service whose observation is put off needs.
+type hubArgs struct {
+	image string
+	built bool
 }
 
 // runningDeps returns the services that s needs and that are running now, in dependency order.
@@ -604,8 +619,8 @@ func (rs *runState) missingDeps(s *compose.Service) []string {
 
 // candidates returns the services that could run during the observation of s although the file
 // does not make s depend on them: the others that were prepared, that do not need s and that s
-// does not list yet.
-func (rs *runState) candidates(s *compose.Service) []string {
+// does not list yet. With prepared only those that were prepared count.
+func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
 	listed := map[string]bool{}
 	for _, d := range s.DependsOn {
 		listed[d.Service] = true
@@ -618,8 +633,10 @@ func (rs *runState) candidates(s *compose.Service) []string {
 		if _, no := rs.skipped[x.Name]; no {
 			continue
 		}
-		if _, ok := rs.starts[x.Name]; !ok {
-			continue
+		if prepared {
+			if _, ok := rs.starts[x.Name]; !ok {
+				continue
+			}
 		}
 		if slices.Contains(rs.closure(x), s.Name) {
 			continue
@@ -638,7 +655,7 @@ func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
 	if len(rs.runningDeps(s)) > 0 {
 		return false
 	}
-	return len(rs.candidates(s)) > 0
+	return len(rs.candidates(s, false)) > 0
 }
 
 // cleanupTimeout bounds the removal of the network and of the containers at
@@ -665,6 +682,7 @@ type runState struct {
 	noWith  bool
 	retry   []string
 	retried map[string]bool
+	hubArgs map[string]hubArgs
 	ordered []*compose.Service
 	skipped map[string]string
 	// starts holds, by service name, how to start a service that was prepared.
