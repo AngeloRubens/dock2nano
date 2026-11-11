@@ -39,6 +39,9 @@ jobs:
         run: |
           git clone https://github.com/AngeloRubens/ops /tmp/ops-src
           git -C /tmp/ops-src checkout feat/compose-dns-search
+          # the arp fix (67187c4 of fix/bridged-ip-arp, based on a52795e like this branch): applies without conflicts
+          git -C /tmp/ops-src fetch origin fix/bridged-ip-arp
+          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick 67187c4
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
@@ -100,10 +103,24 @@ jobs:
             sleep 5
           done
           grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | cut -c1-300 | tail -30
+          echo "--- mac lines of up.log, counted (kept whole in the artifact)"
+          grep "^couldn't find mac\|^mac is an empty\|^no ip found" /tmp/out/up.log | sort | uniq -c | sort -rn | head -20
+          echo "--- mac of each instance, from qemu"
+          ps -eo args | grep '[q]emu' | while read -r l; do
+            n=$(echo "$l" | grep -o -- '-name [^ ]*' | head -1); m=$(echo "$l" | grep -o 'mac=[0-9a-fA-F:]*' | head -1)
+            echo "instance: ${n:-?} $m"
+          done | tee /tmp/out/macs.txt
+          ps -eo args | grep '[q]emu' | cut -c1-600 > /tmp/out/qemu-args.txt
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-after-up.txt
       - name: probe
         if: always()
         run: |
           sleep 60
+          echo "--- mac of each instance, from qemu, after the wait"
+          ps -eo args | grep '[q]emu' | while read -r l; do
+            n=$(echo "$l" | grep -o -- '-name [^ ]*' | head -1); m=$(echo "$l" | grep -o 'mac=[0-9a-fA-F:]*' | head -1)
+            echo "instance: ${n:-?} $m"
+          done | tee /tmp/out/macs-after-wait.txt
           sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u) dns; do
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true

@@ -9,8 +9,9 @@ json.dump(m, open(p, "w"), indent=2)
 PY
 c="$(root nginx)/etc/nginx/conf.d/default.conf"
 sed -i 's#server web1:5000#server web1.service:5000#; s#server web2:5000#server web2.service:5000#' "$c"
-grep -n server "$c"
+grep -n server "$c" || true
 for w in web1 web2; do
   f="$(root $w)/usr/src/app/server.js"
-  [ -f "$f" ] && sed -i "s#host: 'redis'#host: 'redis.service'#" "$f" && grep -n "host:" "$f"
+  [ -f "$f" ] && sed -i "s#host: 'redis'#host: 'redis.service'#" "$f" && grep -n "host:" "$f" || true
 done
+exit 0
