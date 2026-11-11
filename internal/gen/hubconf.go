@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,8 @@ const (
 	cfgChanged
 	// cfgSatisfied: every directive for one process is already set.
 	cfgSatisfied
+	// cfgPartial: the file was changed, and some directives could not be set.
+	cfgPartial
 )
 
 // hubConfig sets, in the configuration file of the user, the directives that
@@ -126,6 +129,8 @@ func hubConfig(u HubUse, obs *observe.Result) ([]plan.Item, cfgState) {
 	}
 	state := cfgNone
 	switch {
+	case len(changes) > 0 && len(skipped) > 0:
+		state = cfgPartial
 	case len(changes) > 0:
 		state = cfgChanged
 	case len(skipped) == 0:
@@ -386,6 +391,21 @@ func replaceInRoot(root *os.Root, name string, data []byte, mode fs.FileMode) er
 		root.Remove(tmp)
 	}
 	return err
+}
+
+// pathMissing tells whether a value names an absolute path (or a list of them,
+// separated by colons) of which some is not in the files carried from the
+// image. A value with no absolute path is not missing.
+func pathMissing(sysroot, v string) bool {
+	for _, part := range strings.Split(v, ":") {
+		if !strings.HasPrefix(part, "/") {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(sysroot, filepath.FromSlash(trace.InSysroot(sysroot, path.Clean(part))))); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // volumeAtLeast is the larger of two sizes written as "266m" or "2g"; the

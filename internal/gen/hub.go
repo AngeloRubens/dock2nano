@@ -79,11 +79,13 @@ func (u HubUse) versions() string {
 func ApplyHubRecipe(u HubUse, obs *observe.Result) []plan.Item {
 	items := []plan.Item{u.item(plan.Approximated, "hub", fmt.Sprintf("the hub of ops packages was consulted because %s. Package %s. The files of the image are the ones observed from your image. From the hub package only environment variables are taken; its arguments are reported, not applied. The directives that make the program run as one process come from hints/hub-tables.yaml of this tool, not from the package. Versions: %s", u.Why, u.source(), u.versions()))}
 	items = append(items, hubArgs(u)...)
-	items = append(items, hubEnv(u, obs)...)
+	envItems := hubEnv(u, obs)
+	envAdded := len(hubFindItems(envItems, plan.Approximated)) > 0
+	items = append(items, envItems...)
 	cfgItems, cfgDone := hubConfig(u, obs)
 	items = append(items, cfgItems...)
 	items = append(items, hubNotApplied(u)...)
-	items = append(items, hubVerdict(u, cfgDone))
+	items = append(items, hubVerdict(u, cfgDone, envAdded))
 	return items
 }
 
@@ -112,11 +114,14 @@ func hubEnv(u HubUse, obs *observe.Result) []plan.Item {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	var added, differs []string
+	var added, differs, elsewhere []string
 	for _, k := range names {
 		v := u.Recipe.Manifest.Env[k]
 		cur, ok := have[k]
 		switch {
+		case !ok && pathMissing(obs.Sysroot, v):
+			// the value names a file of the layout of the hub package
+			elsewhere = append(elsewhere, k)
 		case !ok:
 			obs.Env = append(obs.Env, k+"="+v)
 			added = append(added, k)
@@ -127,6 +132,9 @@ func hubEnv(u HubUse, obs *observe.Result) []plan.Item {
 	var items []plan.Item
 	if len(added) > 0 {
 		items = append(items, u.item(plan.Approximated, "hub environment", "variables of the hub recipe that your image does not set, added to the package: "+strings.Join(added, ", ")))
+	}
+	if len(elsewhere) > 0 {
+		items = append(items, u.item(plan.Note, "hub environment", "variables of the hub recipe whose value is a path that is not in your image, so they were not added: "+strings.Join(elsewhere, ", ")))
 	}
 	if len(differs) > 0 {
 		items = append(items, u.item(plan.Note, "hub environment", "the hub recipe sets other values than your image for "+strings.Join(differs, ", ")+"; yours are kept"))
@@ -159,14 +167,35 @@ func sortedKeys(m map[string]any) []string {
 
 // hubVerdict says what the result is, without more certainty than there is:
 // nothing here is run on nanos.
-func hubVerdict(u HubUse, state cfgState) plan.Item {
+func hubVerdict(u HubUse, state cfgState, envAdded bool) plan.Item {
+	if state == cfgPartial {
+		return u.item(plan.Unsupported, "hub result", "only some of the directives for one process could be set (see the hub config items), so the program is not made single-process by them; what was seen when the program was observed is not addressed: "+u.Why)
+	}
 	if state == cfgSatisfied {
-		return u.item(plan.Note, "hub result", "the configuration is already single-process (every directive for one process is set in the file, on the command line or in an included file), so nothing was changed, and the child processes seen when the program was observed come from something else: "+u.Why)
+		return u.item(plan.Note, "hub result", "the configuration is already single-process (every directive for one process is set in the file, on the command line or in an included file), so nothing was changed, and what was seen when the program was observed comes from something else: "+u.Why)
 	}
 	if state == cfgChanged {
-		return u.item(plan.Approximated, "hub result", "the directives for one process were set in the copy of your configuration in the package, and the environment variables of the hub recipe were added. It was not run on nanos here: it is not known whether the program now starts and keeps running. What was seen when it was observed: "+u.Why)
+		return u.item(plan.Approximated, "hub result", "the directives for one process were set in the copy of your configuration in the package"+envSaid(envAdded)+". It was not run on nanos here: it is not known whether the program now starts and keeps running. What was seen when it was observed: "+u.Why)
 	}
 	return u.item(plan.Unsupported, "hub result", "no directive for one process could be set in the configuration file (and the arguments of the recipe are never applied), so what was seen when the program was observed is not addressed: "+u.Why+". The package is as it was observed")
+}
+
+// hubFindItems are the items of a kind.
+func hubFindItems(items []plan.Item, kind plan.Kind) []plan.Item {
+	var out []plan.Item
+	for _, it := range items {
+		if it.Kind == kind {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func envSaid(added bool) string {
+	if added {
+		return ", and the environment variables of the hub recipe were added"
+	}
+	return ""
 }
 
 func settingsText(settings []hub.Setting) string {
@@ -282,7 +311,7 @@ func hubCredentials(u HubUse) []plan.Item {
 	p := u.Package
 	switch {
 	case p.Ref() == "francescolavra/postgres" && (p.Version == "16.0" || p.Version == "16.2"):
-		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package francescolavra/postgres "+p.Version+" accepted the user postgres with an empty password, whether or not POSTGRES_PASSWORD was set; the password of your image should not be taken to be in effect")}
+		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package francescolavra/postgres "+p.Version+" accepted the user postgres without a password (none was sent), whether or not POSTGRES_PASSWORD was set; the password of your image should not be taken to be in effect")}
 	case p.Ref() == "eyberg/mysql" && p.Version == "5.7.29":
 		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package eyberg/mysql 5.7.29 accepted root/root, which its notes give as the default login; whether MYSQL_ROOT_PASSWORD is applied was not told apart from that")}
 	}

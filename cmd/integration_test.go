@@ -129,6 +129,12 @@ func TestConvertTwoServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// this part needs the live hub (repo.ops.city): when it cannot be read or a
+	// package cannot be fetched, the test says so and stops, since it would
+	// otherwise fail for a reason that is not the code
+	if r := stdout.String(); strings.Contains(r, "could not be read (") || strings.Contains(r, "could not be fetched or checked (") {
+		t.Skipf("the hub repo.ops.city could not be used, so the recipe is not checked:\n%s", r)
+	}
 	// the program forks, so the hub was consulted: the directives for one
 	// process are added to the configuration of the user, which is otherwise
 	// as it was; daemon off is on the command line (-g) and is not repeated

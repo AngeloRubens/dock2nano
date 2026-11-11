@@ -375,7 +375,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	m.BaseVolumeSz = volumeSize(obs.Sysroot)
 	if si.MinVolume != "" {
 		m.BaseVolumeSz = volumeAtLeast(m.BaseVolumeSz, si.MinVolume)
-		g.add(s.Name, plan.Note, "hub volume", "the hub recipe for the program asks for a writable volume of at least "+si.MinVolume+" ("+si.MinVolumeEvidence+"; the size is the total size of the volume, not a measure of free space, and was seen for that one version only); the package has "+m.BaseVolumeSz)
+		g.add(s.Name, plan.Note, "hub volume", "the table of this tool (hints/hub-tables.yaml) asks for a writable volume of at least "+si.MinVolume+" for this program ("+si.MinVolumeEvidence+"; the size is the total size of the volume, not a measure of free space, and was seen for that one version only); the package has "+m.BaseVolumeSz)
 	}
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
 }

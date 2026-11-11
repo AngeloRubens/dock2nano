@@ -196,8 +196,10 @@ func Select(pkgs []Package, name, want, arch string) (Package, Level) {
 // right architecture). With a version asked for: the nearest major series
 // (the same one, else the one whose number is nearest, the older on a tie).
 // In the series of the user, the release nearest to the version asked for
-// (the differences of the numbers compared from the first, the one that is not
-// newer when two are as near); in another series, its newest release. When
+// (of the newest release that is not newer and the oldest that is newer, the
+// one nearer at the first number that differs, the older when they are as
+// near); in another series, its newest release. A prerelease is not the newest
+// while a release exists. When
 // want is not known: the newest package. Of equal versions the one spelled with as many numbers as want comes first,
 // then the namespace preference, then the name.
 func SelectFrom(cands []Package, want string) (Package, Level) {
@@ -239,14 +241,41 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 		}
 		return best
 	}
+	// releasesFirst keeps the releases of a list when there are any, so that a
+	// prerelease is not the newest while a release exists
+	releasesFirst := func(list []cand) []cand {
+		var out []cand
+		for _, c := range list {
+			if c.v.Suffix == "" {
+				out = append(out, c)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+		return list
+	}
 	if !known {
-		return pick(all, true).p, Far
+		return pick(releasesFirst(all), true).p, Far
+	}
+	// the nearest major series: the one of the user, else the one whose first
+	// number is nearest, the older on a tie. (The 0.x versions are a series each
+	// by their second number; a user at "0" with several of them is too rare to
+	// be treated further.)
+	md := func(nums []int) int {
+		x := nums[0] - w.series()[0]
+		return max(x, -x)
 	}
 	series := all[0].v.series()
 	for _, c := range all[1:] {
-		cur := cmpNums(seriesDistance(w, c.v), seriesDistance(w, Version{Nums: series}))
-		if cur < 0 || cur == 0 && cmpNums(c.v.series(), series) < 0 {
-			series = c.v.series()
+		cs := c.v.series()
+		switch {
+		case cmpNums(series, w.series()) == 0:
+			// the series is the one of the user already
+		case cmpNums(cs, w.series()) == 0:
+			series = cs
+		case md(cs) < md(series), md(cs) == md(series) && cmpNums(cs, series) < 0:
+			series = cs
 		}
 	}
 	var group []cand
@@ -258,20 +287,36 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 	var best cand
 	if cmpNums(series, w.series()) != 0 {
 		// another series: its newest release, above or below the version asked
-		best = pick(group, true)
+		best = pick(releasesFirst(group), true)
 	} else {
-		// the series of the user: the nearest release, the one that is not
-		// newer when two are as near
-		best = group[0]
-		for _, c := range group[1:] {
-			d := cmpNums(w.distance(c.v), w.distance(best.v))
+		// the series of the user: of the newest release that is not newer and
+		// the oldest that is newer, the one that is nearer at the first number
+		// that differs from the version asked, the older when they are as near
+		var below, above []cand
+		for _, c := range group {
+			if c.v.Compare(w) <= 0 {
+				below = append(below, c)
+			} else {
+				above = append(above, c)
+			}
+		}
+		switch {
+		case len(above) == 0:
+			best = pick(below, true)
+		case len(below) == 0:
+			best = pick(above, false)
+		default:
+			bb, ba := pick(below, true), pick(above, false)
+			ib, ia := firstDiff(bb.v, w), firstDiff(ba.v, w)
 			switch {
-			case d < 0:
-				best = c
-			case d == 0 && c.v.Compare(best.v) == 0 && tie(c, best):
-				best = c
-			case d == 0 && c.v.Compare(best.v) != 0 && c.v.Compare(w) <= 0 && best.v.Compare(w) > 0:
-				best = c
+			case ib > ia:
+				best = bb
+			case ia > ib:
+				best = ba
+			case numDiff(ba.v, w, ia) < numDiff(bb.v, w, ib):
+				best = ba
+			default:
+				best = bb
 			}
 		}
 	}
@@ -286,9 +331,30 @@ func SelectFrom(cands []Package, want string) (Package, Level) {
 	return best.p, Far
 }
 
-// seriesDistance is the distance between the major series of two versions.
-func seriesDistance(a, b Version) []int {
-	return Version{Nums: a.series()}.distance(Version{Nums: b.series()})
+// numAt is the number of a version at a place, zero past the end.
+func numAt(v Version, i int) int {
+	if i < len(v.Nums) {
+		return v.Nums[i]
+	}
+	return 0
+}
+
+// firstDiff is the place of the first number in which two versions differ; past
+// the numbers when they do not.
+func firstDiff(v, w Version) int {
+	n := max(len(v.Nums), len(w.Nums))
+	for i := 0; i < n; i++ {
+		if numAt(v, i) != numAt(w, i) {
+			return i
+		}
+	}
+	return n
+}
+
+// numDiff is how far two versions are at a place.
+func numDiff(v, w Version, i int) int {
+	x := numAt(v, i) - numAt(w, i)
+	return max(x, -x)
 }
 
 // ImageName is the name of an image without registry, path, tag and digest:
@@ -386,9 +452,10 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// Apart says how far two versions of the same series are, in words: "the same
-// release", "N patch releases apart" or "N minor releases apart". It is empty
-// when the versions are in different series.
+// Apart says how far two versions of the same series are, in words: "N patch
+// releases apart" or "N minor releases apart". It is empty when the versions
+// are in different series, or differ only in the number of places or in a
+// suffix.
 func Apart(a, b string) string {
 	x, ok1 := ParseVersion(a)
 	y, ok2 := ParseVersion(b)
@@ -399,12 +466,16 @@ func Apart(a, b string) string {
 	// the first number is the series; the next ones say how far
 	for i := 1; i < len(d); i++ {
 		if d[i] != 0 {
-			kind := "patch"
+			kind, unit := "patch", "releases"
 			if i == 1 {
 				kind = "minor"
 			}
-			return fmt.Sprintf("%d %s releases apart", d[i], kind)
+			if d[i] == 1 {
+				unit = "release"
+			}
+			return fmt.Sprintf("%d %s %s apart", d[i], kind, unit)
 		}
 	}
-	return "the same release"
+	// only the number of places, or a suffix, differs
+	return ""
 }

@@ -190,7 +190,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 	obs := si.Observed
 	program := path.Base(obs.Program)
 	skip := func(why string) error {
-		rs.late[name] = fmt.Sprintf("%s runs as several processes and the hub holds a build that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
+		rs.late[name] = fmt.Sprintf("%s is in the table of builds that must be used whole (%s; %s); %s", program, strings.Join(row.Packages, ", "), row.Reason, why)
 		return nil
 	}
 	if o.noHub {

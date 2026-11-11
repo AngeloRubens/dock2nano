@@ -145,6 +145,9 @@ func checkSingleProcess(name string, sp SingleProcess) error {
 		}
 		seen[s.Name] = true
 	}
+	if sp.BaseVolumeSize != "" && sp.BaseVolumeEvidence == "" {
+		return fmt.Errorf("%s: base_volume_size needs base_volume_evidence, which says what it is for", name)
+	}
 	if sp.BaseVolumeSize != "" && !volumeSizeText.MatchString(sp.BaseVolumeSize) {
 		return fmt.Errorf("%s: base_volume_size %q must be a number and m or g", name, sp.BaseVolumeSize)
 	}

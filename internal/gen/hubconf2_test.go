@@ -36,8 +36,8 @@ func TestHubPackageCredentialsAreSaidOnlyForThePackagesThatWereTried(t *testing.
 		ns, name, version string
 		want              string
 	}{
-		{"francescolavra", "postgres", "16.0", "empty password"},
-		{"francescolavra", "postgres", "16.2", "empty password"},
+		{"francescolavra", "postgres", "16.0", "without a password"},
+		{"francescolavra", "postgres", "16.2", "without a password"},
 		{"eyberg", "mysql", "5.7.29", "root/root"},
 		{"francescolavra", "postgres", "16.3", ""},
 		{"eyberg", "postgresql", "11.3.0", ""},

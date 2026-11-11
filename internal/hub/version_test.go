@@ -319,7 +319,7 @@ func TestParseTables(t *testing.T) {
 	row := func(extra string) string {
 		return "single_process:\n  x:\n    config_paths: [/x.conf]\n    config_flag: -c\n    settings:\n      - {name: n, value: v}\n" + extra
 	}
-	tb, err := ParseTables([]byte("namespace_preference: [a]\n" + row("    params_flag: -g\n    base_volume_size: 200m\n")))
+	tb, err := ParseTables([]byte("namespace_preference: [a]\n" + row("    params_flag: -g\n    base_volume_size: 200m\n    base_volume_evidence: seen\n")))
 	if err != nil || tb.SingleProcess["x"].Settings[0].Value != "v" || tb.SingleProcess["x"].ParamsFlag != "-g" || tb.SingleProcess["x"].BaseVolumeSize != "200m" {
 		t.Fatalf("%+v %v", tb, err)
 	}
@@ -336,7 +336,8 @@ func TestParseTables(t *testing.T) {
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a b\"}\n",
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"a#\"}\n",
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: -c\n    settings:\n      - {name: n, value: \"{\"}\n",
-		row("    base_volume_size: lots\n"),
+		row("    base_volume_size: lots\n    base_volume_evidence: e\n"),
+		row("    base_volume_size: 200m\n"),
 		"single_process:\n  x:\n    config_paths: [/x]\n    config_flag: c\n    settings:\n      - {name: n, value: v}\n",
 		row("    params_flag: g\n"),
 		row("    compare: [\"a b\"]\n"),
@@ -350,7 +351,7 @@ func TestParseTables(t *testing.T) {
 	}
 }
 
-func TestSelectTakesTheNewestReleaseNotNewerThanTheVersionAsked(t *testing.T) {
+func TestSelectTakesTheNearestReleaseOfTheSeriesOfTheUser(t *testing.T) {
 	rows := []struct {
 		want     string
 		versions []string
@@ -358,7 +359,20 @@ func TestSelectTakesTheNewestReleaseNotNewerThanTheVersionAsked(t *testing.T) {
 		level    Level
 	}{
 		{"17", []string{"16.1", "16.4"}, "16.4", Far},
-		{"1.25.3", []string{"1.24.0", "1.24.9"}, "1.24.0", Near},
+		{"1.25.3", []string{"1.24.0", "1.24.9"}, "1.24.9", Near},
+		{"1.25.3", []string{"1.24.9", "1.24.0"}, "1.24.9", Near},
+		{"1.25.3", []string{"1.24.9", "1.26.0"}, "1.24.9", Near},
+		{"1.25.3", []string{"1.26.0", "1.24.9"}, "1.24.9", Near},
+		{"1.24.5", []string{"1.24.4", "1.24.2"}, "1.24.4", Near},
+		{"1.24.5", []string{"1.24.2", "1.24.4"}, "1.24.4", Near},
+		{"1.24.5", []string{"1.24.7", "1.24.9"}, "1.24.7", Near},
+		{"1.24.5", []string{"1.24.9", "1.24.7"}, "1.24.7", Near},
+		{"1.25.3", []string{"1.25.3rc1", "1.25.3"}, "1.25.3", Exact},
+		{"1.25.3", []string{"1.25.3", "1.25.3rc1"}, "1.25.3", Exact},
+		{"1.25.3", []string{"1.24.0", "1.25.9"}, "1.25.9", Near},
+		{"1", []string{"0.9", "2.0"}, "0.9", Far},
+		{"", []string{"2.0.0rc1", "1.9.0"}, "1.9.0", Far},
+		{"3.0", []string{"2.1.0rc1", "2.0.5"}, "2.0.5", Far},
 		{"1.25.3", []string{"1.15.6", "1.28.3"}, "1.28.3", Near},
 		{"1.24.0", []string{"1.22.0", "1.26.0"}, "1.22.0", Near},
 		{"1.25.3", []string{"1.25.1", "1.25.5"}, "1.25.1", Near},
@@ -395,8 +409,12 @@ func TestAShortHubVersionIsNotExactForALongerOne(t *testing.T) {
 func TestApart(t *testing.T) {
 	rows := [][3]string{
 		{"1.25.3", "1.28.3", "3 minor releases apart"},
+		{"1.25.3", "1.26.0", "1 minor release apart"},
+		{"1.25.3", "1.25.4", "1 patch release apart"},
+		{"1.25", "1.25.0", ""},
+		{"1.2.3", "1.2.3rc1", ""},
 		{"1.25.3", "1.25.5", "2 patch releases apart"},
-		{"1.25.3", "1.25.3", "the same release"},
+		{"1.25.3", "1.25.3", ""},
 		{"1.25.3", "2.0.0", ""},
 		{"x", "1.0", ""},
 	}

@@ -333,7 +333,7 @@ func TestRequiredBuildWithNoHubIsNotConvertible(t *testing.T) {
 		t.Errorf("the hub was read with --no-hub: %v", h.stub.calls)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"--no-hub turns the hub off", "eyberg/nginx", "a test row", "it is not converted"} {
+	for _, want := range []string{"--no-hub turns the hub off", "eyberg/nginx", "a test row", "it is not converted", "is in the table of builds that must be used whole"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}

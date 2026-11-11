@@ -73,14 +73,15 @@ Flags of convert:
                      the compose file does not say it needs; the service is also listed before
                      them in compose.yaml
   --service NAME     convert only this service (can be repeated)
-  --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this flag
-                     the hub is read only for a program that did not start as one process (the
-                     container stopped, or the program started child processes), to take from the
-                     package of the same program, the closest in version, only its environment variables; the directives that make
+  --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this
+                     flag the hub is read only for a program that did not start as one process
+                     (the container stopped with an error, or the program started child
+                     processes). From the package of the same program that is the closest in
+                     version only its environment variables are taken. The directives that make
                      the program run as one process come from a table of this tool and are set
                      in the copy of your configuration in the package. The files stay the ones
                      of your image, and the report names the package, its digest and how its
-                     version differs from yours
+                     version differs from yours. --no-hub turns the table off too
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
 item in the report.
