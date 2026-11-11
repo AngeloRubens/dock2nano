@@ -1190,6 +1190,47 @@ func TestLauncherPackageJSONThroughALinkInsideTheSysrootIsRead(t *testing.T) {
 	wantNoText(t, p, "web", plan.Unsupported, "launcher", "node a.js")
 }
 
+// npmStart is what the observation of awesome-compose nginx-nodejs-redis saw: npm start, which ran
+// no script because the .npmrc of the image says ignore-scripts=true, and a container that stopped
+// with status 0.
+var npmStart = []string{"node", "/usr/local/bin/npm", "start"}
+
+func npmIgnoreInput(t *testing.T, npmrc string, stopped bool, code, children int) Input {
+	t.Helper()
+	in, sysroot := launcherInput(t, "/usr/local/bin/node", npmStart, `{"scripts":{"start":"node server.js"}}`)
+	if npmrc != "" {
+		if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/.npmrc"), []byte(npmrc), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := in.Services["web"].Observed
+	o.StoppedEarly, o.ExitCode, o.Children = stopped, code, children
+	return in
+}
+
+func TestLauncherNpmIgnoreScriptsExplainsTheExit(t *testing.T) {
+	p := mustGen(t, npmIgnoreInput(t, "# hardening\nignore-scripts = true\n", true, 0, 0))
+	want1(t, p, "web", plan.Unsupported, "launcher", "sets ignore-scripts=true")
+	want1(t, p, "web", plan.Unsupported, "launcher", "the image itself runs nothing")
+}
+
+func TestLauncherNpmIgnoreScriptsOnlyWhenItFits(t *testing.T) {
+	for name, in := range map[string]Input{
+		"false":        npmIgnoreInput(t, "ignore-scripts=false\n", true, 0, 0),
+		"commented":    npmIgnoreInput(t, "#ignore-scripts=true\n", true, 0, 0),
+		"no npmrc":     npmIgnoreInput(t, "", true, 0, 0),
+		"still ran":    npmIgnoreInput(t, "ignore-scripts=true\n", false, 0, 0),
+		"status 1":     npmIgnoreInput(t, "ignore-scripts=true\n", true, 1, 0),
+		"had children": npmIgnoreInput(t, "ignore-scripts=true\n", true, 0, 1),
+	} {
+		p := mustGen(t, in)
+		got := itemsOf(p, "web", plan.Unsupported, "launcher")
+		if len(got) != 1 || strings.Contains(got[0].Message, "ignore-scripts") {
+			t.Errorf("%s: items %+v: the ignore-scripts text must not be there", name, got)
+		}
+	}
+}
+
 func TestLauncherReadablePackageJSONWithoutTheScript(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, `{"scripts":{"start":"node a.js"}}`)
 	p := mustGen(t, in)

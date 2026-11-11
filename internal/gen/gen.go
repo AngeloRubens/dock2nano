@@ -814,6 +814,9 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
 		}
 	}
+	if name == "npm" && obs.StoppedEarly && obs.ExitCode == 0 && obs.Children == 0 && npmrcIgnoresScripts(obs.Sysroot, obs.WorkingDir) {
+		msg += ". The .npmrc of the working directory sets ignore-scripts=true, npm started no child process and the container stopped with status 0: npm did not run the script, so the image itself runs nothing and the service exits at once, with Docker as well. Remove ignore-scripts from the .npmrc, or give the image the node program as its command"
+	}
 	g.add(s.Name, plan.Unsupported, "launcher", msg)
 	return true
 }
@@ -943,27 +946,8 @@ const (
 // be read or is not JSON is scriptUnreadable; a readable one without the script (or with an empty
 // one) is scriptMissing.
 func packageScript(sysroot, dir, script string) (string, int) {
-	if sysroot == "" {
-		return "", scriptUnreadable
-	}
-	// the links of the image are followed inside the sysroot; os.Root refuses what still leads out of
-	// it (a chain of links that InSysroot gave up on, a link to a path of this machine)
-	inside := trace.InSysroot(sysroot, path.Join("/", dir, "package.json"))
-	root, err := os.OpenRoot(sysroot)
-	if err != nil {
-		return "", scriptUnreadable
-	}
-	defer root.Close()
-	f, err := root.Open(strings.TrimPrefix(inside, "/"))
-	if err != nil {
-		return "", scriptUnreadable
-	}
-	defer f.Close()
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
-		return "", scriptUnreadable
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxPackageJSON+1))
-	if err != nil || len(data) > maxPackageJSON {
+	data, ok := readImageFile(sysroot, dir, "package.json", maxPackageJSON)
+	if !ok {
 		return "", scriptUnreadable
 	}
 	var pkg struct {
@@ -977,6 +961,57 @@ func packageScript(sysroot, dir, script string) (string, int) {
 		return "", scriptMissing
 	}
 	return cmd, scriptFound
+}
+
+// readImageFile reads the regular file name of directory dir of the image, from the sysroot. The
+// links of the image are followed inside the sysroot; os.Root refuses what still leads out of it (a
+// chain of links that InSysroot gave up on, a link to a path of this machine). A file larger than
+// limit, or one that cannot be read, gives false.
+func readImageFile(sysroot, dir, name string, limit int64) ([]byte, bool) {
+	if sysroot == "" {
+		return nil, false
+	}
+	inside := trace.InSysroot(sysroot, path.Join("/", dir, name))
+	root, err := os.OpenRoot(sysroot)
+	if err != nil {
+		return nil, false
+	}
+	defer root.Close()
+	f, err := root.Open(strings.TrimPrefix(inside, "/"))
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, false
+	}
+	return data, true
+}
+
+// npmrcIgnoresScripts says whether the .npmrc of directory dir of the image sets ignore-scripts to
+// true.
+func npmrcIgnoresScripts(sysroot, dir string) bool {
+	data, ok := readImageFile(sysroot, dir, ".npmrc", maxPackageJSON)
+	if !ok {
+		return false
+	}
+	ignores := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found || strings.TrimSpace(key) != "ignore-scripts" {
+			continue
+		}
+		ignores = strings.EqualFold(strings.Trim(strings.TrimSpace(value), `"'`), "true")
+	}
+	return ignores
 }
 
 // firstLines returns the first n non-empty lines of s, trimmed, joined by " | ".
