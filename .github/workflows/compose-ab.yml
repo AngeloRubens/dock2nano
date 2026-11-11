@@ -1,0 +1,137 @@
+name: compose-ab
+# One converted output of sparkjava-mysql, started twice with "ops compose up": as converted (with
+# the dns_search line the tool writes) and with that line removed. ops is built from the branch
+# feat/compose-dns-search-indep of AngeloRubens/ops. The order of the two runs is the matrix.
+on:
+  push:
+    branches: ['check/ops-dns-search-ab']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        order: ["with without", "without with"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from the branch under review
+        run: |
+          git clone https://github.com/AngeloRubens/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout feat/compose-dns-search-indep
+          git -C /tmp/ops-src log --oneline | head -3
+          git -C /tmp/ops-src diff --stat origin/master...HEAD 2>/dev/null | tail -1 || true
+          cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly, as in compose-up)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops pkg get eyberg/ops-dns:0.0.1
+      - name: convert
+        run: |
+          set -o pipefail
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          git -C /tmp/ac log --oneline | head -1
+          mkdir -p /tmp/out
+          f=$(cd /tmp/ac/sparkjava-mysql && ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1)
+          git log --oneline | head -1
+          go run . convert -f /tmp/ac/sparkjava-mysql/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 --short-names --with db 2>&1 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+          cp /tmp/out/compose.yaml /tmp/out/compose.converted.yaml
+      - name: the two runs
+        run: |
+          cat > /tmp/run-case.sh <<'EOS'
+          #!/bin/bash
+          # usage: run-case.sh with|without
+          case=$1
+          d=/tmp/out/$case
+          mkdir -p $d
+          cp /tmp/out/compose.converted.yaml $d/compose.yaml
+          if [ "$case" = without ]; then
+            python3 -I - "$d/compose.yaml" <<'EOP'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p).read()
+          s = re.sub(r'^dns_search:.*\n(?:[ \t]+-.*\n)*', '', s, flags=re.M)
+          open(p, 'w').write(s)
+          EOP
+          fi
+          echo "##### case $case: lines with dns_search in the compose.yaml: $(grep -c dns_search $d/compose.yaml)"
+          diff /tmp/out/compose.converted.yaml $d/compose.yaml || true
+          # the images are made again from this compose.yaml
+          sudo rm -rf "$OPS_HOME"/.ops/images/*
+          for attempt in 1 2 3; do
+            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f $d/compose.yaml --show-debug > $d/up.log 2>&1; then
+              echo "ops compose up: ok (attempt $attempt)"; break
+            fi
+            echo "ops compose up failed (attempt $attempt)"
+            sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true
+            sleep 5
+          done
+          sleep 60
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee $d/instances.txt
+          for svc in backend db dns; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > $d/console-$svc.txt 2>&1 || true
+          done
+          dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' $d/console-dns.txt 2>/dev/null | tail -1 | awk '{print $2}')
+          echo "dns at: $dnsip"
+          if [ -n "$dnsip" ]; then
+            for name in db db.service backend backend.service; do
+              echo "--- dig $name"; dig +time=3 +tries=1 @$dnsip $name A 2>&1 | grep -a "status:\|^$name\|ANSWER SECTION" | head -4
+              echo "dig +short $name -> $(dig +short +time=3 +tries=1 @$dnsip $name A 2>&1 | tr '\n' ' ')"
+            done
+          fi
+          ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' $d/console-backend.txt 2>/dev/null | tail -1 | awk '{print $2}')
+          echo "backend at: ${ip:-none}"
+          code=000
+          if [ -n "$ip" ]; then
+            for i in $(seq 1 12); do
+              code=$(curl -s -m 5 -o $d/body.txt -w '%{http_code}' "http://$ip:8080/" || true)
+              case "$code" in 2*|3*|4*) break;; esac
+              sleep 10
+            done
+          fi
+          echo "RESULT case=$case backend http answer: $code"
+          head -c 400 $d/body.txt 2>/dev/null; echo
+          # the console is read again after the waits
+          for svc in backend db dns; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > $d/console-$svc.txt 2>&1 || true
+          done
+          echo "=== resolv.conf of the backend image, as ops wrote it"
+          grep -a "resolv\|nameserver\|search " $d/up.log | head -5 || true
+          echo "=== console of backend, last 40 lines"; tail -40 $d/console-backend.txt | cut -c1-250
+          echo "=== lines of the backend console that name db"; grep -a -n -i "db\b\|Unable to connect\|UnknownHost\|Communications" $d/console-backend.txt | head -10 | cut -c1-250
+          sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
+          sleep 10
+          EOS
+          chmod +x /tmp/run-case.sh
+          for c in ${{ matrix.order }}; do
+            /tmp/run-case.sh $c 2>&1 | tee /tmp/out/case-$c.txt
+          done
+          grep -h "^RESULT" /tmp/out/case-*.txt
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-ab-${{ strategy.job-index }}
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
