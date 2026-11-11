@@ -273,7 +273,7 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "9", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 5,
-			NotRun: []string{"git"},
+			NotRun:     []string{"git"},
 			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
 		{"yarn 1 that starts yarn berry that starts the program", `1     execve("/usr/local/bin/node", ["node", "/opt/yarn-v1.22.19/bin/yarn.js", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
@@ -360,7 +360,7 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 3
 3     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "3", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 5,
-			NotRun: []string{"node"},
+			NotRun:     []string{"node"},
 			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/app/.yarn/releases/yarn-4.1.0.cjs", "start"}, Line: 0}}}},
 		{"children that only forked are not commands", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
