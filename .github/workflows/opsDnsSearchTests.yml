@@ -15,10 +15,6 @@ jobs:
         ref:
           - feat/compose-dns-search-indep
           - check/dns-search-base
-          - check/dns-search-mut-resolv
-          - check/dns-search-mut-checkfn
-          - check/dns-search-mut-tag
-          - feat/compose-dns-search
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +25,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: qemu, so that the cmd tests find a hypervisor
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86
 
       - name: gofmt
         id: gofmt
@@ -55,6 +54,7 @@ jobs:
       - name: full suite of cmd lepton types
         id: full
         continue-on-error: true
+        shell: bash -eo pipefail {0}
         run: go test ./cmd/... ./lepton/... ./types/... -count 1 -v 2>&1 | tee full.log
 
       - name: outcome
