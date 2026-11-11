@@ -1436,6 +1436,72 @@ func TestProcessesItemPointsToTheSupervisor(t *testing.T) {
 	wantNoText(t, mustGen(t, in2), "web", plan.Unsupported, "processes", "supervisor")
 }
 
+func TestNotRunRepeatedLabelsAreCountedOnce(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{`npm (script "start")`}
+	for i := 0; i < 30; i++ {
+		o.NotRun = append(o.NotRun, "nc", "sleep")
+	}
+	o.NotRun = append(o.NotRun, "node")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "commands not run", "nc (x30), sleep (x30), node")
+	if got := itemsOf(p, "web", plan.Unsupported, "commands not run"); strings.Count(got[0].Message, "sleep") != 1 {
+		t.Errorf("message %q lists sleep more than once", got[0].Message)
+	}
+}
+
+func TestNotRunListIsCapped(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"npm"}
+	for i := 0; i < 25; i++ {
+		o.NotRun = append(o.NotRun, fmt.Sprintf("cmd%d", i))
+	}
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "commands not run", "and 5 more")
+}
+
+func TestNotRunWordingSaysACommandSubstitutionNeedsNothing(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"npm"}
+	o.NotRun = []string{"hostname", "id"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "commands not run", "needs nothing: its value is in the observed environment")
+	want1(t, p, "web", plan.Unsupported, "commands not run", "A command with another effect is not run by the package")
+}
+
+func TestPassedOverRunsAreCountedInOrderAndCapped(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"sh -c", "sh -c", "sh -c", `npm (script "start")`, "sh -c"}
+	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", `sh -c (x3), then npm (script "start"), then sh -c (outermost first)`)
+	o.PassedOver = nil
+	for i := 0; i < 25; i++ {
+		o.PassedOver = append(o.PassedOver, fmt.Sprintf("cmd%d", i))
+	}
+	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "and 5 more")
+}
+
+func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {
+	labels := []string{`npm (script "start")`}
+	in, _ := launcherInput(t, "/entrypoint.sh", []string{"/entrypoint.sh"}, "")
+	in.Services["web"].Observed.ChildLaunchers = labels
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher child", "the program, a script of the image or an init, started")
+
+	in2, _ := launcherInput(t, "/sbin/tini", []string{"tini", "--", "npm", "start"}, "")
+	in2.Services["web"].Observed.ChildLaunchers = labels
+	want1(t, mustGen(t, in2), "web", plan.Unsupported, "launcher child", "the program (an init or a supervisor) started")
+
+	in3, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "--exec", "npm start"}, "")
+	in3.Services["web"].Observed.ChildLaunchers = labels
+	want1(t, mustGen(t, in3), "web", plan.Unsupported, "launcher child", "the program (an init or a supervisor) started")
+
+	in4, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in4.Services["web"].Observed.ChildLaunchers = labels
+	wantNoText(t, mustGen(t, in4), "web", plan.Unsupported, "launcher child", "init or a supervisor")
+}
+
 func TestEffectiveCommand(t *testing.T) {
 	exec := func(w ...string) compose.Command { return compose.Command{Exec: w, Set: true} }
 	shell := func(s string) compose.Command { return compose.Command{Shell: s, Set: true} }

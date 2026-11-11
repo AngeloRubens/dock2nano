@@ -5,6 +5,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // A package manager launcher (npm, npx, yarn, pnpm) is a node program that reads package.json and
@@ -242,15 +243,24 @@ func Label(program string, argv []string) string {
 		return interp + " (script file)"
 	}
 	if name, rest, ok := Launcher(program, argv); ok {
-		if script, _, _ := ScriptRun(name, rest); script != "" {
-			return fmt.Sprintf("%s (script %q)", name, script)
-		}
-		return name
+		return launcherLabel(name, rest)
 	}
+	// argv[0] is whatever the caller wrote: a name with a space or a control character is not
+	// printed, the name of the file is
 	if len(argv) > 0 && argv[0] != "" {
-		return path.Base(argv[0])
+		if b := path.Base(argv[0]); strings.IndexFunc(b, func(r rune) bool { return r == ' ' || !unicode.IsPrint(r) }) < 0 {
+			return b
+		}
 	}
 	return path.Base(program)
+}
+
+// launcherLabel is the name of a launcher and the package.json script it was asked to run.
+func launcherLabel(name string, rest []string) string {
+	if script, _, _ := ScriptRun(name, rest); script != "" {
+		return fmt.Sprintf("%s (script %q)", name, script)
+	}
+	return name
 }
 
 // supervisors are the programs, found by name under node_modules, that start the program of the

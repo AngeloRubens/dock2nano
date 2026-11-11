@@ -741,16 +741,21 @@ type Exec struct {
 
 	// PassedOver are the package manager launchers (see Launcher) that FinalExec passed over to
 	// reach this program, the outermost first, with the shells it passed over before the first of
-	// them and after it (the shell that runs the script of npm start): what ran around the program,
-	// which is not what the package runs. A process that executed several programs (a shell that
-	// forks for its first command and executes its last) gives one entry for each, in order. It is
-	// empty when no launcher was passed over.
+	// them and after it (the shell that runs the script of npm start, when it stayed a process of its
+	// own): what ran around the program, which is not what the package runs. A process that executed
+	// several programs (a shell that forks for its first command and executes its last) gives one
+	// entry for each, in order; so does the process of the program itself, for what it executed
+	// before the program (a shell that executed the program in its own process). It is empty when no
+	// launcher was passed over.
 	PassedOver []Exec
 
 	// NotRun are the labels (see Label) of the commands that ran before the program or beside it
 	// and are gone: children of the processes that were passed over, other than the next one on the
-	// chain, that executed a program and ended ("npm run migrate" of "npm run migrate && npm start").
-	// The package does not run them. It is empty when no launcher was passed over.
+	// chain, that executed a program and ended ("npm run migrate" of "npm run migrate && npm start"),
+	// and the children of the process of the program that ended before the program was executed. The
+	// package does not run them. It is empty when no launcher was passed over. A pid that the
+	// system reused during the observation keeps one history for both processes: its label is the
+	// last program it executed. That is not handled.
 	NotRun []string
 
 	// ChildLaunchers are the labels of the launchers that the program started as children: a script
@@ -985,14 +990,22 @@ func FinalExec(trace []byte) (Exec, bool) {
 		// every program the process executed, not only the one it ended as
 		final.PassedOver = append(final.PassedOver, history[process]...)
 	}
+	if h := history[finalPid]; len(recorded) > 0 && len(h) > 1 {
+		// what the process of the program executed before the program
+		final.PassedOver = append(final.PassedOver, h[:len(h)-1]...)
+	}
 
 	// What ran besides the program: the children of the processes passed over, other than the ones
-	// on the chain, that executed a program and ended. A child that only forked (a $(...) of a
-	// shell) did not execute one and is not a command.
+	// on the chain, that executed a program and ended, and the children of the process of the
+	// program that ended before it was executed (what runs after is the program's own). A child that
+	// only forked (a $(...) of a shell) did not execute a program and is not a command.
 	if len(recorded) > 0 {
 		var ran []Exec
 		for child, up := range parent {
-			if onChain[child] || !onChain[up] || up == finalPid || !gone[child] || len(history[child]) == 0 {
+			if !onChain[up] || !gone[child] || len(history[child]) == 0 {
+				continue
+			}
+			if up == finalPid && history[child][0].Line > final.Line {
 				continue
 			}
 			ran = append(ran, history[child][0])
@@ -1011,8 +1024,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 			continue
 		}
 		for _, e := range history[child] {
-			if _, _, ok := Launcher(e.Path, e.Argv); ok {
-				label := Label(e.Path, e.Argv)
+			if name, rest, ok := Launcher(e.Path, e.Argv); ok {
+				// the launcher by its name, also when a shell ran it ("sh -c npm run build")
+				label := launcherLabel(name, rest)
 				if !slices.Contains(final.ChildLaunchers, label) {
 					final.ChildLaunchers = append(final.ChildLaunchers, label)
 				}

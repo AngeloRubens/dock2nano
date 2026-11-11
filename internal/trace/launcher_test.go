@@ -184,6 +184,8 @@ func TestLabel(t *testing.T) {
 		{"bash", "/bin/bash", []string{"bash", "-lc", "x"}, "bash -c"},
 		{"a program is its name only", "/usr/local/bin/node", []string{"node", "migrate.js", "--password", "abc123"}, "node"},
 		{"a program without argv", "/usr/bin/git", nil, "git"},
+		{"argv[0] with a control character", "/usr/local/bin/node", []string{"node\x1b[31m"}, "node"},
+		{"argv[0] with a space", "/usr/bin/git", []string{"git status"}, "git"},
 	}
 	for _, tt := range tests {
 		got := Label(tt.program, tt.argv)
@@ -409,6 +411,41 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
 			ChildLaunchers: []string{`npm (script "start")`}}},
+		{"a shell that executes the program in its own process", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "node migrate.js && node server.js"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "migrate.js"], 0x7ffd1 /* 5 vars */) = 0
+8     +++ exited with 0 +++
+7     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
+			NotRun: []string{"node"},
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0},
+				{Pid: "7", Path: "/bin/sh", Argv: []string{"sh", "-c", "node migrate.js && node server.js"}, Line: 2},
+			}}},
+		{"the children of a command that ran are not commands of the chain", `11    execve("/bin/sh", ["sh", "-c", "npm run migrate && npm start"], 0x7ffd1 /* 5 vars */) = 0
+11    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
+12    execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "migrate"], 0x7ffd1 /* 5 vars */) = 0
+12    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 20
+20    execve("/bin/sh", ["sh", "-c", "node migrate.js"], 0x7ffd1 /* 5 vars */) = 0
+20    +++ exited with 0 +++
+12    +++ exited with 0 +++
+11    execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+11    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13
+13    execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "13", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 9,
+			NotRun: []string{`npm (script "migrate")`},
+			PassedOver: []Exec{
+				{Pid: "11", Path: "/bin/sh", Argv: []string{"sh", "-c", "npm run migrate && npm start"}, Line: 0},
+				{Pid: "11", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 7},
+			}}},
+		{"a shell that ran a launcher for the program is named by the launcher once", `1     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/bin/sh", ["sh", "-c", "npm run build"], 0x7ffd1 /* 5 vars */) = 0
+9     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "build"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 0,
+			ChildLaunchers: []string{`npm (script "build")`}}},
 		{"a launcher with two running children stays", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "a.js"], 0x7ffd1 /* 1 vars */) = 0

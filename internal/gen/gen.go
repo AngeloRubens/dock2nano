@@ -731,8 +731,8 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	}
 	launcher := g.launcherNote(s, obs)
 	g.passedOverNote(s, obs)
-	g.childLauncherNote(s, obs)
 	supervisor := g.supervisorNote(s, obs)
+	g.childLauncherNote(s, obs, supervisor)
 	if obs.Children > 0 {
 		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
 		if launcher {
@@ -827,20 +827,74 @@ func firstArg(argv []string) string {
 func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	const where = "Read the original commands in the CMD or ENTRYPOINT of the Dockerfile and in the scripts of package.json"
 	if len(obs.PassedOver) > 0 {
-		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", strings.Join(obs.PassedOver, ", then "), where))
+		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(obs.PassedOver), ", then "), where))
 	}
 	if len(obs.NotRun) > 0 {
-		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. The package does not run them: run them at build time, or as a separate one-shot service. %s", strings.Join(obs.NotRun, ", "), where))
+		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
 	}
+}
+
+// distinctCounted removes the repeats of a label, keeping the order of the first one, and says how
+// many there were: "sleep (x30)". A wait loop in an entrypoint makes hundreds of them.
+func distinctCounted(labels []string) []string {
+	var order []string
+	count := map[string]int{}
+	for _, l := range labels {
+		if count[l] == 0 {
+			order = append(order, l)
+		}
+		count[l]++
+	}
+	for i, l := range order {
+		if count[l] > 1 {
+			order[i] = fmt.Sprintf("%s (x%d)", l, count[l])
+		}
+	}
+	return order
+}
+
+// runsCounted does the same for the labels that repeat one after the other, which keeps the order
+// of a chain.
+func runsCounted(labels []string) []string {
+	var out []string
+	for i := 0; i < len(labels); {
+		j := i
+		for j < len(labels) && labels[j] == labels[i] {
+			j++
+		}
+		if j-i > 1 {
+			out = append(out, fmt.Sprintf("%s (x%d)", labels[i], j-i))
+		} else {
+			out = append(out, labels[i])
+		}
+		i = j
+	}
+	return out
+}
+
+// cappedJoin joins names with sep and stops after maxListed of them.
+func cappedJoin(names []string, sep string) string {
+	if len(names) <= maxListed {
+		return strings.Join(names, sep)
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:maxListed], sep), len(names)-maxListed)
 }
 
 // childLauncherNote says that the program started a launcher as a child process: it is probably a
 // script of the image (a script is not told from a program by its name) that runs npm.
-func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result) {
+func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result, supervisor bool) {
 	if len(obs.ChildLaunchers) == 0 {
 		return
 	}
-	g.add(s.Name, plan.Unsupported, "launcher child", fmt.Sprintf("the observed program started %s as a child process: it is probably a script of the image that runs a launcher, and a launcher cannot run on nanos (no fork). Run the node command it leads to directly. Read the script in the CMD or ENTRYPOINT of the Dockerfile", strings.Join(obs.ChildLaunchers, ", ")))
+	who := "the program, a script of the image or an init,"
+	switch path.Base(obs.Program) {
+	case "tini", "tini-static", "dumb-init":
+		supervisor = true
+	}
+	if supervisor {
+		who = "the program (an init or a supervisor)"
+	}
+	g.add(s.Name, plan.Unsupported, "launcher child", fmt.Sprintf("%s started %s as a child process, and a launcher cannot run on nanos (no fork). Run the node command it leads to directly. Read the command in the CMD or ENTRYPOINT of the Dockerfile", who, listed(distinctCounted(obs.ChildLaunchers))))
 }
 
 // supervisorNote says, for a program that is a supervisor (nodemon, pm2-runtime, ...), that it
