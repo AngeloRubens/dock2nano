@@ -70,7 +70,8 @@ jobs:
       - name: convert
         run: |
           set -o pipefail
-          mkdir -p /tmp/out
+          mkdir -p /tmp/out/traces
+          export DOCK2NANO_KEEP_TRACE=/tmp/out/traces
           cd /tmp/ac/${{ matrix.dir }}
           f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
           cd "$GITHUB_WORKSPACE"
