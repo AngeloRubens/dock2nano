@@ -4,7 +4,7 @@ python3 - "$OPS_HOME/.ops/local_packages/amd64/${PROJECT}_nginx/package.manifest
 import json, sys
 p = sys.argv[1]
 m = json.load(open(p))
-m["Args"] = ["nginx", "-g", "daemon off; master_process off;"]
+m["Args"] = ["nginx", "-g", "daemon off;"]
 json.dump(m, open(p, "w"), indent=2)
 PY
 c="$(root nginx)/etc/nginx/conf.d/default.conf"
