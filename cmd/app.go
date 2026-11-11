@@ -72,6 +72,11 @@ Flags of convert:
                      had it in depends_on (can be repeated): for a program that needs a database
                      the compose file does not say it needs; the service is also listed before
                      them in compose.yaml
+  --no-with          do not start any service for the observation of another: neither those of
+                     depends_on nor those of --with. Without it, the services a service lists in
+                     depends_on run during its observation (the report names them), and a service
+                     that stops with an error while none of them runs is observed once more with
+                     the others running, which are then listed in its depends_on
   --service NAME     convert only this service (can be repeated)
   --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this
                      flag the hub is read only for a program that did not start as one process
@@ -217,6 +222,7 @@ type options struct {
 	strict      bool
 	shortNames  bool
 	noHub       bool
+	noWith      bool
 	exercise    []string
 	exerciseCmd []string
 	with        []string
@@ -278,6 +284,7 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	set.BoolVar(&o.strict, "strict", false, "")
 	set.BoolVar(&o.shortNames, "short-names", false, "")
 	set.BoolVar(&o.noHub, "no-hub", false, "")
+	set.BoolVar(&o.noWith, "no-with", false, "")
 	set.Func("with", "", func(v string) error {
 		if v == "" {
 			return errors.New("the service of --with is empty")
@@ -318,6 +325,9 @@ func (a *App) parseConvert(args []string) (*options, error) {
 	}
 	if o.file != "" && o.dockerfile != "" {
 		return nil, errors.New("-f and --dockerfile cannot be used together")
+	}
+	if o.noWith && len(o.with) > 0 {
+		return nil, errors.New("--no-with and --with cannot be used together")
 	}
 	if o.dockerfile == "" && (o.context != "" || o.name != "") {
 		return nil, errors.New("--context and --name go with --dockerfile")

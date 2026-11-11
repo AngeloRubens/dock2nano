@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1331,7 +1333,12 @@ func TestDependencyStartFailureIsANote(t *testing.T) {
 	}
 	for _, svc := range []string{"web", "api"} {
 		warns := h.genIn[0].Services[svc].Observed.Warnings
-		if len(warns) != 1 || !strings.Contains(warns[0], "the service db was not started") || !strings.Contains(warns[0], "exited at once") || !strings.Contains(warns[0], svc+" was observed without it") {
+		// the other line says that cache ran during the observation
+		if len(warns) != 2 || !strings.Contains(warns[1], "the services running during this observation: cache") {
+			t.Errorf("%s: warnings %q", svc, warns)
+			continue
+		}
+		if !strings.Contains(warns[0], "the service db was not started") || !strings.Contains(warns[0], "exited at once") || !strings.Contains(warns[0], svc+" was observed without it") {
 			t.Errorf("%s: warnings %q", svc, warns)
 		}
 	}
@@ -1504,8 +1511,8 @@ func TestNotesOfAStartedDependencyReachTheReport(t *testing.T) {
 	for _, svc := range []string{"web", "api"} {
 		warns := h.genIn[0].Services[svc].Observed.Warnings
 		want := "the service db was started for the observation of " + svc + ": the container was running but listens on no port after 60 seconds"
-		if len(warns) != 1 || warns[0] != want {
-			t.Errorf("%s: warnings %q, want %q", svc, warns, want)
+		if len(warns) != 2 || warns[0] != want || !strings.Contains(warns[1], "the services running during this observation: cache, db") {
+			t.Errorf("%s: warnings %q, want %q and the list of the services that ran", svc, warns, want)
 		}
 	}
 }
@@ -1655,5 +1662,195 @@ func TestWithStartsTheServiceForTheObservationOfTheOthers(t *testing.T) {
 	h.mustRun(0, "convert", "--with", "db")
 	if len(h.started) != 1 || h.started[0].Image != "d" {
 		t.Fatalf("started %v, want the image d", h.started)
+	}
+}
+
+// stoppedWith makes the observation of the images in codes stop early with that status, and
+// records the observations in order.
+func stoppedWith(h *harness, codes map[string]int) {
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		r := &observe.Result{Sysroot: "/sysroots/" + o.Image, Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}}
+		if c, ok := codes[o.Image]; ok {
+			r.StoppedEarly, r.ExitCode = true, c
+		}
+		return r, nil
+	}
+}
+
+const noDepsCompose = "services:\n  backend:\n    image: b\n  db:\n    image: d\n"
+
+func hasWarning(h *harness, svc, part string) bool {
+	for _, w := range h.genIn[len(h.genIn)-1].Services[svc].Observed.Warnings {
+		if strings.Contains(w, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDependsOnServicesRunDuringTheObservationAndTheReportNamesThem(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.haveAll("b", "d")
+	h.mustRun(0, "convert")
+	if !reflect.DeepEqual(h.events, []string{"net create", "observe d", "start d", "observe b", "stop d", "net rm"}) {
+		t.Fatalf("events %v", h.events)
+	}
+	if !hasWarning(h, "backend", "the services running during this observation: db") {
+		t.Errorf("warnings %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestNoWithStartsNothing(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.haveAll("b", "d")
+	h.mustRun(0, "convert", "--no-with")
+	if len(h.started) != 0 {
+		t.Fatalf("started %v", h.started)
+	}
+	if !hasWarning(h, "backend", "were not started for the observation of backend (--no-with)") {
+		t.Errorf("warnings %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestNoWithAndWithAreExclusive(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.app.parseConvert([]string{"--no-with", "--with", "db"}); err == nil {
+		t.Fatal("no error")
+	}
+	o, err := h.app.parseConvert([]string{"--no-with"})
+	if err != nil || !o.noWith {
+		t.Fatalf("%+v %v", o, err)
+	}
+}
+
+func TestEarlyErrorWithNoDependencyRunningIsObservedAgainWithTheOthers(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", noDepsCompose)
+	h.haveAll("b", "d")
+	// the backend stops with an error unless db runs
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		r := &observe.Result{Sysroot: "/sysroots/" + o.Image + strconv.Itoa(len(h.observed)), Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}}
+		up := false
+		for _, e := range h.events {
+			up = up || e == "start d"
+		}
+		if o.Image == "b" && !up {
+			r.StoppedEarly, r.ExitCode = true, 1
+		}
+		return r, nil
+	}
+	h.mustRun(0, "convert")
+	want := []string{"net create", "observe b", "observe d", "start d", "observe b", "stop d", "net rm"}
+	if !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events %v\nwant   %v", h.events, want)
+	}
+	for _, part := range []string{"the services running during this observation: db", "the first observation stopped with status 1"} {
+		if !hasWarning(h, "backend", part) {
+			t.Errorf("no warning %q: %q", part, h.genIn[0].Services["backend"].Observed.Warnings)
+		}
+	}
+	if si := h.genIn[0].Services["backend"].Observed; si.StoppedEarly {
+		t.Errorf("the second observation is the one kept: %+v", si)
+	}
+	// db is now a dependency of backend in the file that is written
+	if got := h.genIn[0].Project.Service("backend").DependsOn; len(got) != 1 || got[0].Service != "db" {
+		t.Errorf("depends_on of backend: %+v", got)
+	}
+	// the sysroot of the first observation is removed at once
+	if !slices.Contains(h.removed, "/sysroots/b1") {
+		t.Errorf("removed %v", h.removed)
+	}
+}
+
+func TestEarlyErrorIsNotObservedAgainWithNoWith(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", noDepsCompose)
+	h.haveAll("b", "d")
+	stoppedWith(h, map[string]int{"b": 1})
+	h.mustRun(0, "convert", "--no-with")
+	if len(h.started) != 0 || len(h.observed) != 2 {
+		t.Errorf("started %v observed %v", h.started, h.names())
+	}
+}
+
+func TestEarlyErrorOfAServiceThatNeedsNobodyIsObservedOnce(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n")
+	h.haveAll("b")
+	stoppedWith(h, map[string]int{"b": 1})
+	h.mustRun(0, "convert")
+	if len(h.observed) != 1 {
+		t.Errorf("observed %v", h.names())
+	}
+}
+
+func TestHubIsNotReadForAStopWhileADependencyIsMissing(t *testing.T) {
+	h := newHarness(t)
+	stub := &stubHub{}
+	h.app.Hub = stub
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.haveAll("b", "d")
+	h.dock.images["b"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.dock.images["d"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.startErr["d"] = errors.New("exited at once")
+	stoppedWith(h, map[string]int{"b": 1})
+	h.mustRun(0, "convert")
+	if len(stub.calls) != 0 {
+		t.Errorf("the hub was read: %v", stub.calls)
+	}
+	if !hasWarning(h, "backend", "status 1 while the services it needs (db) were not running") {
+		t.Errorf("warnings %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestStopWithTheDependenciesRunningSaysItMayBeTheirProblemAndKeepsTheHub(t *testing.T) {
+	h := newHarness(t)
+	stub := &stubHub{}
+	h.app.Hub = stub
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.haveAll("b", "d")
+	h.dock.images["b"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.dock.images["d"] = &docker.ImageConfig{Architecture: "amd64"}
+	stoppedWith(h, map[string]int{"b": 3})
+	h.mustRun(0, "convert")
+	if len(stub.calls) == 0 {
+		t.Errorf("the hub was not read for a stop with the dependency running")
+	}
+	if !hasWarning(h, "backend", "status 3 although the services it needs (db) were running") || !hasWarning(h, "backend", "dependency (credentials, a schema, a name) or of the configuration") {
+		t.Errorf("warnings %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestHubIsStillReadForChildrenWhileADependencyIsMissing(t *testing.T) {
+	h := newHarness(t)
+	stub := &stubHub{}
+	h.app.Hub = stub
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.haveAll("b", "d")
+	h.dock.images["b"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.dock.images["d"] = &docker.ImageConfig{Architecture: "amd64"}
+	h.startErr["d"] = errors.New("exited at once")
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		return &observe.Result{Sysroot: "/sysroots/" + o.Image, Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}, Children: 2}, nil
+	}
+	h.mustRun(0, "convert")
+	if len(stub.calls) == 0 {
+		t.Errorf("the hub was not read for a program that forks")
+	}
+}
+
+func TestHubTriggerHeld(t *testing.T) {
+	if got := hubTrigger(&observe.Result{StoppedEarly: true, ExitCode: 1}, true); got != "" {
+		t.Errorf("held stop: %q", got)
+	}
+	if got := hubTrigger(&observe.Result{StoppedEarly: true, ExitCode: 1, Children: 2}, true); !strings.Contains(got, "2 child processes") {
+		t.Errorf("held stop with children: %q", got)
 	}
 }
