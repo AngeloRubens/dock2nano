@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1638,7 +1639,7 @@ func TestShortNamesWritesDNSSearchAndChangesTheNote(t *testing.T) {
 		t.Errorf("DNSSearch = %v", p.Compose.DNSSearch)
 	}
 	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
-	if !strings.Contains(msg, "by its compose name, or as <pkg>.service (dns_search: [service]") || !strings.Contains(msg, "db -> db (or db.service)") || strings.Contains(msg, "not rewritten") {
+	if !strings.Contains(msg, "by its package name, or as <pkg>.service (dns_search: [service]") || !strings.Contains(msg, "db -> db (or db.service)") || strings.Contains(msg, "not rewritten") {
 		t.Errorf("note = %q", msg)
 	}
 	want1(t, p, "web", plan.Approximated, "ports[0]", "reachable at web (or web.service) and at the address")
@@ -1671,4 +1672,161 @@ func TestStartOrderNoteIsNotMadeWhenTheOrderIsRight(t *testing.T) {
 	// declared: the order is already the right one, whatever the list
 	web.DependsOn = []compose.Dependency{{Service: "db"}}
 	wantNone(t, mustGen(t, newInput(&fake{}, web, db)), "web", plan.Note, "start order")
+}
+
+// nameInput builds proxy (observed, with the given configuration files) and a second service.
+func nameInput(files map[string]string, short bool, proxyName, otherName string) Input {
+	f := &fake{files: map[string]string{}}
+	var names []string
+	for n, c := range files {
+		f.files["/tmp/sys-"+proxyName+n] = c
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	in := newInput(f, svc(otherName), svc(proxyName))
+	in.ShortNames = short
+	in.Services[proxyName].Observed.ConfigurationFiles = names
+	return in
+}
+
+func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "server backend.service:80;"}, false, "proxy", "backend")
+	p := mustGen(t, in)
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
+	wantNone(t, p, "backend", plan.Note, "name at start")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "order of compose.yaml does not help") {
+		t.Errorf("no timing text: %q", m)
+	}
+}
+
+func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "backend.service") || strings.Contains(m, "order of compose.yaml") {
+		t.Errorf("message: %q", m)
+	}
+}
+
+func TestNameAtStartBareNameWithShortNames(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "order of compose.yaml does not help")
+}
+
+func TestNameAtStartPackageNameDiffersFromServiceName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my-app.service:80;"}, false, "proxy", "My_App"))
+	want1(t, p, "proxy", plan.Note, "name at start", "may name service My_App")
+}
+
+func TestNameAtStartOwnNameIsNotReported(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server_name proxy proxy.service;"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartExcludedFileIsNotRead(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/nsswitch.conf": "backend.service"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartCommentIsSkipped(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "  # server backend.service:80;\nlisten 80;"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartBinaryFileIsSkipped(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "\x00 backend.service"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartNoSysrootIsNotRead(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "backend.service"}, false, "proxy", "backend")
+	in.Services["proxy"].Observed.Sysroot = ""
+	in.ReadFile = func(p string) ([]byte, error) { return []byte("backend.service"), nil }
+	wantNone(t, mustGen(t, in), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartPathSegmentIsNotAName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "proxy_cache_path /var/cache/nginx;"}, false, "proxy", "cache"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartPathDoesNotHideTheRealName(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "root /srv/backend;\nproxy_pass http://backend.service:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service")
+}
+
+func TestNameAtStartComposeNameWithShortNames(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my_app:80;"}, true, "proxy", "My_App"))
+	want1(t, p, "proxy", plan.Note, "name at start", "search line of resolv.conf")
+	want1(t, p, "proxy", plan.Note, "name at start", "my-app.service")
+	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; strings.Contains(m, "order of compose.yaml does not help") {
+		t.Errorf("a compose name that does not resolve is given the timing text: %q", m)
+	}
+}
+
+func TestNameAtStartTableOfNamesIsNotRead(t *testing.T) {
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/services": "mysql 3306/tcp"}, false, "proxy", "mysql")), "proxy", plan.Note, "name at start")
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/nginx/mime.types": "mysql"}, false, "proxy", "mysql")), "proxy", plan.Note, "name at start")
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/passwd": "backend"}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartTrailingDotIsTrimmed(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend.service.:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service")
+}
+
+const nameHead = "server backend.service:80;\n"
+
+func TestNameAtStartLargeFileIsSkipped(t *testing.T) {
+	c := nameHead + strings.Repeat("a", 1<<20)
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartFileOfExactly1MiBIsRead(t *testing.T) {
+	c := nameHead + strings.Repeat("a", 1<<20-len(nameHead))
+	want1(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start", "backend.service")
+}
+
+func TestNameAtStartNULAfterFirst4KBIsRead(t *testing.T) {
+	c := strings.Repeat("a", 4096) + "\x00\nserver backend.service:80;"
+	want1(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start", "backend.service")
+}
+
+func TestNameAtStartNULAtByte4095IsSkipped(t *testing.T) {
+	c := strings.Repeat("a", 4095) + "\x00\nserver backend.service:80;"
+	wantNone(t, mustGen(t, nameInput(map[string]string{"/etc/n.conf": c}, false, "proxy", "backend")), "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartSameWordInTwoSpellingsIsOneHit(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend.service:80;\nserver backend.service:81;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word Backend.service")
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; strings.Count(m, "contains the word") != 1 {
+		t.Errorf("one word, two reports: %q", m)
+	}
+}
+
+func TestNameAtStartProtocolRelativeHost(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "proxy_pass //backend.service:80;"}, false, "proxy", "backend"))
+	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service")
+}
+
+func TestNameAtStartInlineCommentIsSkipped(t *testing.T) {
+	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "listen 80; # server backend.service:80\nroot /x;\t# backend.service"}, false, "proxy", "backend"))
+	wantNone(t, p, "proxy", plan.Note, "name at start")
+}
+
+func TestNameAtStartEachExcludedFile(t *testing.T) {
+	for _, f := range []string{"/etc/hosts", "/etc/resolv.conf", "/etc/group", "/etc/host.conf", "/etc/protocols", "/etc/os-release", "/etc/services", "/etc/passwd", "/etc/nsswitch.conf", "/etc/nginx/mime.types"} {
+		p := mustGen(t, nameInput(map[string]string{f: "server backend.service:80;"}, false, "proxy", "backend"))
+		if got := itemsOf(p, "proxy", plan.Note, "name at start"); len(got) != 0 {
+			t.Errorf("%s is read: %+v", f, got)
+		}
+	}
+}
+
+func TestNetworkNoteWithShortNamesSaysPackageName(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "x"}, true, "proxy", "My_App")
+	p := mustGen(t, in)
+	want1(t, p, "", plan.Note, "service names", "by its package name")
+	want1(t, p, "", plan.Note, "service names", "my-app (or my-app.service)")
 }
