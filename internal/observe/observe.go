@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -700,7 +701,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: reading the trace: %w", err)
 	}
 	if r.o.KeepTrace != "" {
-		if err := os.WriteFile(r.o.KeepTrace, raw, 0600); err != nil {
+		if err := keepTrace(r.o.KeepTrace, raw); err != nil {
 			r.warnOnce(fmt.Sprintf("could not keep the trace in %s: %v", r.o.KeepTrace, err))
 		}
 	}
@@ -1065,6 +1066,23 @@ func (r *run) readFirstFile(ctx context.Context, id, p string, limit int64) ([]b
 		return nil, fmt.Errorf("%s is larger than %d bytes", p, limit)
 	}
 	return data, nil
+}
+
+// keepTrace writes the trace to a new file of mode 0600: a file that is there is removed first (a
+// link is removed, not followed, and an old mode is not kept), and the new one is made with O_EXCL.
+func keepTrace(name string, raw []byte) error {
+	if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // readList reads the list strace wrote. The program runs as root when the image does, and could

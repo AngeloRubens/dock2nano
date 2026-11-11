@@ -1195,38 +1195,92 @@ func TestLauncherPackageJSONThroughALinkInsideTheSysrootIsRead(t *testing.T) {
 // with status 0.
 var npmStart = []string{"node", "/usr/local/bin/npm", "start"}
 
-func npmIgnoreInput(t *testing.T, npmrc string, stopped bool, code, children int) Input {
+// npmIgnoreCase is a service whose observed program is argv (npmStart when empty) run by program
+// (node when empty), with npmrc in its working directory (not written when empty).
+type npmIgnoreCase struct {
+	name     string
+	npmrc    string
+	program  string
+	argv     []string
+	stopped  bool
+	code     int
+	children int
+}
+
+func (c npmIgnoreCase) input(t *testing.T) Input {
 	t.Helper()
-	in, sysroot := launcherInput(t, "/usr/local/bin/node", npmStart, `{"scripts":{"start":"node server.js"}}`)
-	if npmrc != "" {
-		if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/.npmrc"), []byte(npmrc), 0644); err != nil {
+	program, argv := c.program, c.argv
+	if program == "" {
+		program = "/usr/local/bin/node"
+	}
+	if argv == nil {
+		argv = npmStart
+	}
+	in, sysroot := launcherInput(t, program, argv, `{"scripts":{"start":"node server.js"}}`)
+	if c.npmrc != "" {
+		if err := os.WriteFile(filepath.Join(sysroot, "usr/src/app/.npmrc"), []byte(c.npmrc), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	o := in.Services["web"].Observed
-	o.StoppedEarly, o.ExitCode, o.Children = stopped, code, children
+	o.StoppedEarly, o.ExitCode, o.Children = c.stopped, c.code, c.children
 	return in
 }
 
 func TestLauncherNpmIgnoreScriptsExplainsTheExit(t *testing.T) {
-	p := mustGen(t, npmIgnoreInput(t, "# hardening\nignore-scripts = true\n", true, 0, 0))
-	want1(t, p, "web", plan.Unsupported, "launcher", "sets ignore-scripts=true")
-	want1(t, p, "web", plan.Unsupported, "launcher", "the image itself runs nothing")
+	for _, tc := range []struct{ name, npmrc string }{
+		{"plain", "# hardening\nignore-scripts = true\n"},
+		{"semicolon, quote, crlf", "; c\nignore-scripts=\"TRUE\"\r\n"},
+		{"last wins", "ignore-scripts=false\nignore-scripts=true"},
+		{"one", "ignore-scripts=1\n"},
+		{"yes", "ignore-scripts=yes\n"},
+		{"bare key", "ignore-scripts\n"},
+		{"comment after", "ignore-scripts=true ; on purpose\n"},
+		{"single quotes", "ignore-scripts='true'\n"},
+		{"after other keys", "registry=x\n\nignore-scripts=true\n"},
+	} {
+		p := mustGen(t, npmIgnoreCase{npmrc: tc.npmrc, stopped: true}.input(t))
+		got := itemsOf(p, "web", plan.Unsupported, "launcher")
+		if len(got) != 1 {
+			t.Errorf("%s: %d launcher items", tc.name, len(got))
+			continue
+		}
+		for _, want := range []string{"sets ignore-scripts=true", "the node program as its command (node <file>), which nanos needs anyway", "likely reason", "6.14.13", "42994092518", "not the fix"} {
+			if !strings.Contains(got[0].Message, want) {
+				t.Errorf("%s: message %q does not hold %q", tc.name, got[0].Message, want)
+			}
+		}
+		if strings.Contains(got[0].Message, "the image itself runs nothing") {
+			t.Errorf("%s: the message still claims the image runs nothing", tc.name)
+		}
+	}
 }
 
 func TestLauncherNpmIgnoreScriptsOnlyWhenItFits(t *testing.T) {
-	for name, in := range map[string]Input{
-		"false":        npmIgnoreInput(t, "ignore-scripts=false\n", true, 0, 0),
-		"commented":    npmIgnoreInput(t, "#ignore-scripts=true\n", true, 0, 0),
-		"no npmrc":     npmIgnoreInput(t, "", true, 0, 0),
-		"still ran":    npmIgnoreInput(t, "ignore-scripts=true\n", false, 0, 0),
-		"status 1":     npmIgnoreInput(t, "ignore-scripts=true\n", true, 1, 0),
-		"had children": npmIgnoreInput(t, "ignore-scripts=true\n", true, 0, 1),
+	yes := "ignore-scripts=true\n"
+	for _, c := range []npmIgnoreCase{
+		{name: "false", npmrc: "ignore-scripts=false\n", stopped: true},
+		{name: "commented hash", npmrc: "#ignore-scripts=true\n", stopped: true},
+		{name: "commented semicolon", npmrc: ";ignore-scripts=true\n", stopped: true},
+		{name: "turned off after", npmrc: yes + "ignore-scripts=false\n", stopped: true},
+		{name: "turned off by 0", npmrc: yes + "ignore-scripts=0\n", stopped: true},
+		{name: "other value", npmrc: "ignore-scripts=maybe\n", stopped: true},
+		{name: "empty value", npmrc: "ignore-scripts=\n", stopped: true},
+		{name: "quoted false", npmrc: "ignore-scripts=\"false\" ; true\n", stopped: true},
+		{name: "in a section", npmrc: "[sec]\nignore-scripts=true\n", stopped: true},
+		{name: "another key", npmrc: "my-ignore-scripts=true\n", stopped: true},
+		{name: "no npmrc", stopped: true},
+		{name: "still ran", npmrc: yes},
+		{name: "status 1", npmrc: yes, stopped: true, code: 1},
+		{name: "had children", npmrc: yes, stopped: true, children: 1},
+		{name: "yarn", npmrc: yes, stopped: true, program: "/usr/local/bin/yarn", argv: []string{"yarn", "start"}},
+		{name: "npm install", npmrc: yes, stopped: true, argv: []string{"node", "/usr/local/bin/npm", "install"}},
+		{name: "prefix elsewhere", npmrc: yes, stopped: true, argv: []string{"node", "/usr/local/bin/npm", "--prefix", "/other", "start"}},
 	} {
-		p := mustGen(t, in)
+		p := mustGen(t, c.input(t))
 		got := itemsOf(p, "web", plan.Unsupported, "launcher")
 		if len(got) != 1 || strings.Contains(got[0].Message, "ignore-scripts") {
-			t.Errorf("%s: items %+v: the ignore-scripts text must not be there", name, got)
+			t.Errorf("%s: items %+v: the ignore-scripts text must not be there", c.name, got)
 		}
 	}
 }
@@ -1256,7 +1310,7 @@ func TestLauncherInvalidPackageJSON(t *testing.T) {
 }
 
 func TestLauncherPackageJSONOverTheLimitIsUnreadable(t *testing.T) {
-	big := `{"scripts":{"dev":"node a.js"},"x":"` + strings.Repeat("a", maxPackageJSON) + `"}`
+	big := `{"scripts":{"dev":"node a.js"},"x":"` + strings.Repeat("a", maxImageFile) + `"}`
 	in, _ := launcherInput(t, "/usr/local/bin/node", npmRunDev, big)
 	want1(t, mustGen(t, in), "web", plan.Unsupported, "launcher", "could not be read")
 }

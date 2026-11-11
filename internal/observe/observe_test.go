@@ -1055,6 +1055,37 @@ func TestObserveKeepTrace(t *testing.T) {
 	}
 }
 
+func TestObserveKeepTraceReplacesWhatIsThere(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("untouched"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(old, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{link, old} {
+		s := newScene(t)
+		s.o.KeepTrace = name
+		if _, err := s.observe(t, context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+			t.Errorf("%s: %v, %v: want a regular file of mode 0600", name, info, err)
+		}
+		got, _ := os.ReadFile(name)
+		equal(t, "kept trace of "+filepath.Base(name), string(got), sceneTrace)
+	}
+	got, _ := os.ReadFile(target)
+	equal(t, "target of the link", string(got), "untouched")
+}
+
 func TestObserveSocketIsNotCarried(t *testing.T) {
 	s := newScene(t)
 	s.d.traceTxt += `11 openat(AT_FDCWD, "/run/x.sock", O_RDONLY) = 8` + "\n"

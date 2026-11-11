@@ -503,9 +503,10 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Binds = append(oo.Binds, hiddenVolumes(s)...)
 	oo.Seconds = o.seconds
 	// DOCK2NANO_KEEP_TRACE names a directory where the raw strace output of each service is kept
-	// (one file per service), to read what the observation saw.
+	// (one file per service, named from the service name made safe for a file name), to read what the
+	// observation saw.
 	if dir, ok := a.LookupEnv("DOCK2NANO_KEEP_TRACE"); ok && dir != "" {
-		oo.KeepTrace = filepath.Join(dir, s.Name+".strace")
+		oo.KeepTrace = filepath.Join(dir, tagComponent(s.Name)+".strace")
 	}
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {

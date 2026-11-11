@@ -1599,6 +1599,36 @@ func TestExerciseFlagsReachTheObservation(t *testing.T) {
 	}
 }
 
+func TestKeepTraceNamesAFilePerService(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		dir     string
+		service string
+		want    string
+	}{
+		{"set", true, "/keep", "web", "/keep/web.strace"},
+		{"unset", false, "", "web", ""},
+		{"empty", true, "", "web", ""},
+		{"path in the service name", true, "/keep", "a/../../x", "/keep/a-x.strace"},
+		{"upper case", true, "/keep", "Web", "/keep/web.strace"},
+	} {
+		h := newHarness(t)
+		h.write("compose.yaml", "services:\n  \""+tc.service+"\":\n    image: w\n")
+		h.dock.have["w"] = true
+		if tc.set {
+			h.env["DOCK2NANO_KEEP_TRACE"] = tc.dir
+		}
+		h.mustRun(0, "convert")
+		if len(h.observed) != 1 {
+			t.Fatalf("%s: observed %d", tc.name, len(h.observed))
+		}
+		if got := h.observed[0].KeepTrace; got != tc.want {
+			t.Errorf("%s: KeepTrace %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestApplyWithAddsTheDependencyExceptWhereItIsACycle(t *testing.T) {
 	p := &compose.Project{Services: []*compose.Service{
 		{Name: "backend"},

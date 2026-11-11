@@ -83,6 +83,13 @@ Flags of convert:
                      of your image, and the report names the package, its digest and how its
                      version differs from yours. --no-hub turns the table off too
 
+Environment:
+  DOCK2NANO_KEEP_TRACE=DIR  keep the raw strace output of each observation in DIR, one file
+                     SERVICE.strace per service. The directory must exist. The files hold the
+                     command lines, file paths and link targets the program used, not the values
+                     of environment variables or the contents of files. A service observed more
+                     than once keeps only the last trace.
+
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
 item in the report.
 `

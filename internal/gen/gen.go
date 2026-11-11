@@ -763,8 +763,8 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	}
 }
 
-// maxPackageJSON is the largest package.json that is read.
-const maxPackageJSON = 1 << 20
+// maxImageFile is the largest file of the image that is read here (package.json, .npmrc).
+const maxImageFile = 1 << 20
 
 // launcherNote says, for a program that is a package manager launcher (npm, npx, yarn, pnpm), that
 // it cannot run on nanos as it is: it starts the script as a child process, and nanos has no fork.
@@ -814,8 +814,8 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 			msg += fmt.Sprintf(". It was asked to run the package.json script %q, which could not be read from the files of the package: read it in package.json. %s", script, advice)
 		}
 	}
-	if name == "npm" && obs.StoppedEarly && obs.ExitCode == 0 && obs.Children == 0 && npmrcIgnoresScripts(obs.Sysroot, obs.WorkingDir) {
-		msg += ". The .npmrc of the working directory sets ignore-scripts=true, npm started no child process and the container stopped with status 0: npm did not run the script, so the image itself runs nothing and the service exits at once, with Docker as well. Remove ignore-scripts from the .npmrc, or give the image the node program as its command"
+	if name == "npm" && script != "" && !elsewhere && obs.StoppedEarly && obs.ExitCode == 0 && obs.Children == 0 && npmrcIgnoresScripts(obs.Sysroot, obs.WorkingDir) {
+		msg += ". Give the image the node program as its command (node <file>), which nanos needs anyway. The container also stopped with status 0 before the end of the observation and npm started no child process, and the .npmrc of the working directory sets ignore-scripts=true: npm 6 and older skip even npm start when it does, which is the likely reason (it was seen with npm 6.14.13, where the same image also exits with status 0 under plain Docker; run 42994092518 of the fork). The setting may be there on purpose, so it is not the fix"
 	}
 	g.add(s.Name, plan.Unsupported, "launcher", msg)
 	return true
@@ -942,11 +942,11 @@ const (
 
 // packageScript reads the command of a script from the package.json in the working directory of the
 // observed program, inside the sysroot: the path is resolved in the sysroot, where a link of the
-// image stays, and only a regular file of at most maxPackageJSON bytes is read. A file that cannot
+// image stays, and only a regular file of at most maxImageFile bytes is read. A file that cannot
 // be read or is not JSON is scriptUnreadable; a readable one without the script (or with an empty
 // one) is scriptMissing.
 func packageScript(sysroot, dir, script string) (string, int) {
-	data, ok := readImageFile(sysroot, dir, "package.json", maxPackageJSON)
+	data, ok := readImageFile(sysroot, dir, "package.json", maxImageFile)
 	if !ok {
 		return "", scriptUnreadable
 	}
@@ -993,23 +993,52 @@ func readImageFile(sysroot, dir, name string, limit int64) ([]byte, bool) {
 }
 
 // npmrcIgnoresScripts says whether the .npmrc of directory dir of the image sets ignore-scripts to
-// true.
+// true, the way npm reads the file: a line "key = value", "#" or ";" starting a comment line or
+// following an unquoted value, a value that may be quoted, a key with no "=" that is true, 1, yes and
+// true in any case that count as true, the last line of the key winning, and the keys under a
+// [section] header not being the plain key. Only the .npmrc of the directory is read: not the
+// ignore_scripts spelling, not the variable npm_config_ignore_scripts, not the user or global npmrc,
+// and not the .npmrc of a directory an option of the command line points to.
 func npmrcIgnoresScripts(sysroot, dir string) bool {
-	data, ok := readImageFile(sysroot, dir, ".npmrc", maxPackageJSON)
+	data, ok := readImageFile(sysroot, dir, ".npmrc", maxImageFile)
 	if !ok {
 		return false
 	}
-	ignores := false
+	ignores, inSection := false, false
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
-		key, value, found := strings.Cut(line, "=")
-		if !found || strings.TrimSpace(key) != "ignore-scripts" {
+		if line[0] == '[' {
+			inSection = true
 			continue
 		}
-		ignores = strings.EqualFold(strings.Trim(strings.TrimSpace(value), `"'`), "true")
+		if inSection {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if strings.TrimSpace(key) != "ignore-scripts" {
+			continue
+		}
+		if !found {
+			ignores = true
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value != "" && (value[0] == '"' || value[0] == '\'') {
+			if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+				value = value[1 : 1+end]
+			}
+		} else if i := strings.IndexAny(value, ";#"); i >= 0 {
+			value = strings.TrimSpace(value[:i])
+		}
+		switch strings.ToLower(value) {
+		case "true", "1", "yes":
+			ignores = true
+		default:
+			ignores = false
+		}
 	}
 	return ignores
 }
