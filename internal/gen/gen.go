@@ -52,6 +52,17 @@ type ServiceInput struct {
 	// Stage is the final stage of the Dockerfile of the service, when the
 	// service is built from one. It may be nil.
 	Stage *dockerfile.Stage
+
+	// HubItems are the report items about the hub of ops packages for this
+	// service (see ApplyHubRecipe); they are added to the report as they are.
+	HubItems []plan.Item
+
+	// MinVolume is the least size of the writable volume the hub recipe for the
+	// program asks for ("200m"); empty when there is none.
+	MinVolume string
+
+	// MinVolumeEvidence says what was seen that the size is for.
+	MinVolumeEvidence string
 }
 
 // Input is everything Generate needs.
@@ -365,7 +376,12 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.identity(s, si, obs, &m)
 	g.unknown(s, si)
 	g.observed(s, obs)
+	g.plan.Report = append(g.plan.Report, si.HubItems...)
 	m.BaseVolumeSz = volumeSize(obs.Sysroot)
+	if si.MinVolume != "" {
+		m.BaseVolumeSz = volumeAtLeast(m.BaseVolumeSz, si.MinVolume)
+		g.add(s.Name, plan.Note, "hub volume", "the table of this tool (hints/hub-tables.yaml) asks for a writable volume of at least "+si.MinVolume+" for this program ("+si.MinVolumeEvidence+"; the size is the total size of the volume, not a measure of free space, and was seen for that one version only); the package has "+m.BaseVolumeSz)
+	}
 	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
 }
 

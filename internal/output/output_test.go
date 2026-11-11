@@ -155,6 +155,7 @@ func TestWriteManifestPassesValidation(t *testing.T) {
 		MapDirs:         map[string]string{"/h": "/g"},
 		RebootOnExit:    true,
 		DisableArgsCopy: true,
+		BaseVolumeSz:    "266m",
 		RunConfig:       plan.RunConfig{Ports: []string{"80"}, UDPPorts: []string{"53"}},
 	}
 	home := filepath.Join(dir, "home")
@@ -164,6 +165,9 @@ func TestWriteManifestPassesValidation(t *testing.T) {
 	b := []byte(read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "package.manifest")))
 	if err := ValidateManifestJSON(b); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\"BaseVolumeSz\": \"266m\"") {
+		t.Fatalf("manifest = %s, want BaseVolumeSz", b)
 	}
 	if !strings.Contains(string(b), "\"DisableArgsCopy\": true") {
 		t.Fatalf("manifest = %s, want DisableArgsCopy", b)

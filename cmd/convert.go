@@ -78,7 +78,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}}
+	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -149,6 +149,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}
 
+	for name, why := range rs.late {
+		skipped[name] = why
+	}
 	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, ShortNames: o.shortNames}
 	in.HostEnv = a.LookupEnv
 	in.ReadFile = a.ReadFile
@@ -527,6 +530,9 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
+	if err := a.hubStep(ctx, o, rs, s, image, s.Build != nil, &si); err != nil {
+		return si, err
+	}
 	return si, nil
 }
 
@@ -565,6 +571,13 @@ type runState struct {
 	// failed holds why a service could not be started, so that it is not tried
 	// again for the next service that needs it.
 	failed map[string]string
+	// late holds why a service was found not convertible after it was observed
+	// (the hub). It is kept apart from skipped, which refuses to start a service
+	// for the observation of the ones that need it.
+	late map[string]string
+	// staleSaid is set once the report has said that the list of the hub is an
+	// old copy, which is said for one service only.
+	staleSaid bool
 	// binds holds, by host path, the mount of each read-write bind: the copy
 	// that the observation and the started services share. tmpRoot is the
 	// private directory with the copies; copies counts them.

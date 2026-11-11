@@ -5,6 +5,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,8 +129,32 @@ func TestConvertTwoServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != itNginxConf {
-		t.Errorf("the nginx sysroot does not hold the configuration of the user:\n%s", got)
+	// this part needs the live hub (repo.ops.city): when it cannot be read or a
+	// package cannot be fetched, the test says so and stops, since it would
+	// otherwise fail for a reason that is not the code
+	if r := stdout.String(); strings.Contains(r, "could not be read (") || strings.Contains(r, "could not be fetched or checked (") {
+		t.Skipf("the hub repo.ops.city could not be used, so the recipe is not checked:\n%s", r)
+	}
+	// the program forks, so the hub was consulted: the directives for one
+	// process are added to the configuration of the user, which is otherwise
+	// as it was; daemon off is on the command line (-g) and is not repeated
+	want := "master_process off;\n" + itNginxConf
+	if string(got) != want {
+		t.Errorf("the nginx sysroot does not hold the configuration of the user plus the directives for one process:\n%s", got)
+	}
+	// nginx itself must accept the file with the arguments of the manifest
+	mf, err := os.ReadFile(filepath.Join(pkg("it_nginx"), "package.manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var man struct{ Args []string }
+	if err := json.Unmarshal(mf, &man); err != nil || len(man.Args) < 1 {
+		t.Fatalf("manifest: %v\n%s", err, mf)
+	}
+	confPath := filepath.Join(pkg("it_nginx"), "sysroot", "etc", "nginx", "nginx.conf")
+	check := append([]string{"run", "--rm", "-v", confPath + ":/etc/nginx/nginx.conf:ro", "nginx:1.27-alpine", "nginx", "-t"}, man.Args[1:]...)
+	if out, err := exec.CommandContext(ctx, "docker", check...).CombinedOutput(); err != nil {
+		t.Errorf("nginx -t refuses the configuration with the arguments %v: %v\n%s", man.Args[1:], err, out)
 	}
 	if _, err := os.Stat(filepath.Join(pkg("it_app"), "sysroot", "www", "index.html")); err != nil {
 		t.Errorf("the app sysroot has no /www/index.html: %v", err)
