@@ -50,7 +50,7 @@ jobs:
           git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
           git -C /tmp/ac log --oneline | head -1
           mkdir -p /tmp/out
-          f=$(cd /tmp/ac/sparkjava-mysql && ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1)
+          f=$(cd /tmp/ac/sparkjava-mysql && ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
           git log --oneline | head -1
           go run . convert -f /tmp/ac/sparkjava-mysql/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 --short-names --with db 2>&1 | tee /tmp/out/report.txt
           cat /tmp/out/compose.yaml
