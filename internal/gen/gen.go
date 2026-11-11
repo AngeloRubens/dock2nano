@@ -993,8 +993,9 @@ func readImageFile(sysroot, dir, name string, limit int64) ([]byte, bool) {
 }
 
 // npmrcIgnoresScripts says whether the .npmrc of directory dir of the image sets ignore-scripts to
-// true, the way npm reads the file: a line "key = value", "#" or ";" starting a comment line or
-// following an unquoted value, a value that may be quoted, a key with no "=" that is true, 1, yes and
+// true, the way npm reads the file: a line "key = value" (a comment line, which starts with "#" or
+// ";", cannot name the key, so it needs no case of its own), a "#" or ";" after an unquoted value
+// starting a comment, a value that may be quoted, a key with no "=" that is true, 1, yes and
 // true in any case that count as true, the last line of the key winning, and the keys under a
 // [section] header not being the plain key. Only the .npmrc of the directory is read: not the
 // ignore_scripts spelling, not the variable npm_config_ignore_scripts, not the user or global npmrc,
@@ -1007,7 +1008,7 @@ func npmrcIgnoresScripts(sysroot, dir string) bool {
 	ignores, inSection := false, false
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || line[0] == '#' || line[0] == ';' {
+		if line == "" {
 			continue
 		}
 		if line[0] == '[' {
