@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -228,40 +229,28 @@ func IsCompound(text string) bool {
 	return false
 }
 
-// SeveralCommands tells whether the text of a shell command line runs more than one command: it
-// holds &&, ||, ;, a newline, a pipe, a & that puts a command in the background (not the & of a
-// redirection such as 2>&1 or &>), $( or a backtick. A quote or a redirection alone does not count.
-// It is a guess from the text: nothing is parsed.
-func SeveralCommands(text string) bool {
-	if strings.ContainsAny(text, ";\n|`") || strings.Contains(text, "$(") {
-		return true
+// Label names a command for the report with the name of the program and nothing else: the
+// arguments of a command line are user text that can hold a secret, and are never printed. A shell
+// is "sh -c" (it was given a command line) or "sh (script file)"; a launcher is its name and the
+// package.json script it was asked to run, as in npm (script "start"); any other program is the
+// base name of argv[0] (or of the path when there is none).
+func Label(program string, argv []string) string {
+	if interp, _ := interpreterOf(program, argv); interp == "sh" || interp == "bash" || interp == "dash" || interp == "ash" {
+		if _, ok := ShellCommand(program, argv); ok {
+			return interp + " -c"
+		}
+		return interp + " (script file)"
 	}
-	for i := 0; i < len(text); i++ {
-		if text[i] != '&' {
-			continue
+	if name, rest, ok := Launcher(program, argv); ok {
+		if script, _, _ := ScriptRun(name, rest); script != "" {
+			return fmt.Sprintf("%s (script %q)", name, script)
 		}
-		prev, next := byte(' '), byte(' ')
-		if i > 0 {
-			prev = text[i-1]
-		}
-		if i+1 < len(text) {
-			next = text[i+1]
-		}
-		if prev == '>' || prev == '<' || next == '>' {
-			continue
-		}
-		return true
+		return name
 	}
-	return false
-}
-
-// IsShell tells whether a program is a shell (or busybox as one), whatever it was asked to run.
-func IsShell(program string, argv []string) bool {
-	switch interp, _ := interpreterOf(program, argv); interp {
-	case "sh", "bash", "dash", "ash":
-		return true
+	if len(argv) > 0 && argv[0] != "" {
+		return path.Base(argv[0])
 	}
-	return false
+	return path.Base(program)
 }
 
 // supervisors are the programs, found by name under node_modules, that start the program of the
@@ -272,7 +261,8 @@ var supervisors = map[string]bool{
 }
 
 // Supervisor tells whether a program started as program with argv is one of the supervisors (by its
-// place: node_modules/.bin/<name> or node_modules/<name>/..., run by node or itself), and gives its
+// place: node_modules/.bin/<name>, node_modules/<name>/... or the bin directories of the launchers,
+// run by node or itself), and gives its
 // name, or "" when it is not. Nothing is passed over for it: it is only named.
 func Supervisor(program string, argv []string) string {
 	files := []string{program}
@@ -296,7 +286,8 @@ func Supervisor(program string, argv []string) string {
 		if !path.IsAbs(f) {
 			f = "/" + f
 		}
-		if d, b := path.Dir(f), path.Base(f); strings.HasSuffix(d, "/node_modules/.bin") && supervisors[nodeExtension(b)] {
+		d, b := path.Dir(f), path.Base(f)
+		if (strings.HasSuffix(d, "/node_modules/.bin") || binDirs[d] || nvmBin.MatchString(d) || npmGlobalBin.MatchString(d)) && supervisors[nodeExtension(b)] {
 			return nodeExtension(b)
 		}
 		parts := strings.Split(f, "/")

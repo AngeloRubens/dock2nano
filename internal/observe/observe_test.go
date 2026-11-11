@@ -2583,125 +2583,37 @@ func TestObserveForksBeforeTheProgramStartedAreNotChildren(t *testing.T) {
 	equal(t, "child calls", res.ChildCalls, []string(nil))
 }
 
-func TestObservePassesOverALauncherToTheProgramItStarted(t *testing.T) {
+func TestObservePassesOverALauncherAndNamesTheCommands(t *testing.T) {
 	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	// the shell form of CMD forks for its first command and executes its last, with a secret in the
+	// arguments: only names come out
+	s.o.Env = []string{"API_KEY=supersecretvalue"}
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "-c", "npm run migrate && npm start --key supersecretvalue"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "migrate"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"12 +++ exited with 0 +++\n" +
+		`11 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start", "--key", "supersecretvalue"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/bin/sh", ["sh", "-c", "node server.js --token abc123"], 0x7ffd /* 4 vars */) = 0` + "\n" +
+		"13 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 14\n" + `14 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
 	res, err := s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "program", res.Program, "/usr/bin/app")
-	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start"})
+	equal(t, "passed over", res.PassedOver, []string{"sh -c", `npm (script "start")`, "sh -c"})
+	equal(t, "not run", res.NotRun, []string{`npm (script "migrate")`})
 }
 
-func TestObservePassedOverCommandLineIsRedacted(t *testing.T) {
+func TestObserveScriptThatRunsNpmNamesTheLauncherChild(t *testing.T) {
 	s := newScene(t)
-	s.o.Env = []string{"API_KEY=supersecretvalue"}
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "-c", "exec npm start -- --key supersecretvalue"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/npm", ["npm", "start", "--", "--key", "supersecretvalue"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
+	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/bin/app", ["app", "--serve"]`, 1)
+	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd /* 4 vars */) = 0` + "\n"
 	res, err := s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.PassedOver) != 2 {
-		t.Fatalf("passed over %q, want 2 command lines", res.PassedOver)
-	}
-	for _, c := range res.PassedOver {
-		if strings.Contains(c, "supersecretvalue") {
-			t.Errorf("command line %q holds the value of API_KEY", c)
-		}
-	}
-}
-
-func TestObservePassedOverKeepsTheEndsOfArgumentsAndFlagsACompoundScript(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start", "--password", "two words"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node migrate.js && node app"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start --password 'two words'", "sh -c 'node migrate.js && node app'"})
-	equal(t, "compound", res.PassedOverCompound, true)
-}
-
-func TestObservePassedOverOfASimpleScriptIsNotCompound(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node app"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "compound", res.PassedOverCompound, false)
-}
-
-func TestObservePassedOverShapeHasTheScriptInOneQuotedWord(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node server.js --api-key abc123"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "passed over", res.PassedOver, []string{"node /usr/local/bin/npm start", "sh -c 'node server.js --api-key abc123'"})
-	equal(t, "compound", res.PassedOverCompound, false)
-	equal(t, "launcher", res.LauncherName, "npm")
-	equal(t, "script", res.LauncherScript, "start")
-}
-
-func TestObserveShellFormCommandWithAMigrationIsPassedOverAndCompound(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "-c", "npm run migrate && npm start"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "passed over", res.PassedOver, []string{"sh -c 'npm run migrate && npm start'", "node /usr/local/bin/npm start"})
-	equal(t, "compound", res.PassedOverCompound, true)
-}
-
-func TestObserveEntrypointScriptBeforeALauncherIsFlagged(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/bin/sh", ["sh", "/entrypoint.sh"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "script file", res.PassedOverScriptFile, true)
-	equal(t, "compound", res.PassedOverCompound, false)
-}
-
-func TestObserveRedirectionAndQuotesAreNotSeveralCommands(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"]`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/bin/sh", ["sh", "-c", "node server.js --name \"x y\" > log 2>&1"], 0x7ffd /* 4 vars */) = 0` + "\n" +
-		"12 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13\n" + `13 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "compound", res.PassedOverCompound, false)
-}
-
-func TestObservePassedOverWithoutArgvIsGivenByPath(t *testing.T) {
-	s := newScene(t)
-	tr := strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */`, `"/usr/local/bin/npm", 0x7ffd, 0x7ffd /* 4 vars */`, 1)
-	s.d.traceTxt = tr + "11 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12\n" + `12 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0` + "\n"
-	res, err := s.observe(t, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "passed over", res.PassedOver, []string{"/usr/local/bin/npm"})
+	equal(t, "program", res.Program, "/usr/bin/app")
+	equal(t, "child launchers", res.ChildLaunchers, []string{`npm (script "start")`})
+	equal(t, "passed over", res.PassedOver, []string(nil))
 }
 
 func TestObserveAliasOfACarriedPathIsACopy(t *testing.T) {

@@ -17,13 +17,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
 	"github.com/AngeloRubens/dock2nano/internal/docker"
@@ -733,11 +731,15 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	}
 	launcher := g.launcherNote(s, obs)
 	g.passedOverNote(s, obs)
-	g.supervisorNote(s, obs)
+	g.childLauncherNote(s, obs)
+	supervisor := g.supervisorNote(s, obs)
 	if obs.Children > 0 {
 		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
 		if launcher {
 			msg += ". The program is a launcher: see the launcher item"
+		}
+		if supervisor {
+			msg += ". The program is a supervisor: see the supervisor item"
 		}
 		g.add(s.Name, plan.Unsupported, "processes", msg)
 	}
@@ -771,11 +773,11 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 	case elsewhere:
 		msg += fmt.Sprintf(". It was asked to run the script %q of another package or directory (an option of the command line points there), which was not read. %s", script, advice)
 	default:
-		cmd, state := packageScript(obs.Sysroot, obs.WorkingDir, script)
+		_, state := packageScript(obs.Sysroot, obs.WorkingDir, script)
 		const option = "; if that word is the value of an option, it is not a script"
 		switch {
 		case state == scriptFound:
-			msg += fmt.Sprintf(". It was asked to run the package.json script %q, whose command is %q. %s", script, hideSecrets(cmd), advice)
+			msg += fmt.Sprintf(". It was asked to run the package.json script %q: read its command in package.json, under scripts. %s", script, advice)
 		case state == scriptMissing && name == "npm" && script == "start":
 			msg += ". npm start was asked and package.json has no start script: npm then runs node server.js if that file exists; run that directly"
 		case state == scriptMissing && name == "npm" && script == "restart":
@@ -817,217 +819,44 @@ func firstArg(argv []string) string {
 	return argv[0]
 }
 
-// passedOverNote says what the observation passed over: the commands the image starts (a
-// launcher, the shells around it) and the package runs the program the launcher started, which is a
-// different thing. The commands passed over are printed with the values that look like secrets
-// hidden; the command line of the program is not printed, it is in the manifest. When a command
-// besides the program is known or suspected to be dropped, an Unsupported item says so.
+// passedOverNote says what the observation passed over: the commands the image starts (a launcher,
+// the shells around it) and the package runs the program the launcher started, which is a different
+// thing. The commands are named, never printed: the arguments of a command line are user text, and
+// the report points to where the original is. An Unsupported item says which commands ran before
+// the program or beside it and are not run by the package.
 func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
-	if len(obs.PassedOver) == 0 {
+	const where = "Read the original commands in the CMD or ENTRYPOINT of the Dockerfile and in the scripts of package.json"
+	if len(obs.PassedOver) > 0 {
+		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", strings.Join(obs.PassedOver, ", then "), where))
+	}
+	if len(obs.NotRun) > 0 {
+		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. The package does not run them: run them at build time, or as a separate one-shot service. %s", strings.Join(obs.NotRun, ", "), where))
+	}
+}
+
+// childLauncherNote says that the program started a launcher as a child process: it is probably a
+// script of the image (a script is not told from a program by its name) that runs npm.
+func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result) {
+	if len(obs.ChildLaunchers) == 0 {
 		return
 	}
-	var started []string
-	for _, c := range obs.PassedOver {
-		started = append(started, hideSecrets(c))
-	}
-	g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. The command lines printed in this report have the values that look like secrets hidden, and may still hold some: read them before you share the report", strings.Join(started, ", then ")))
-
-	var dropped []string
-	if obs.PassedOverCompound {
-		dropped = append(dropped, "a shell that ran the script held a command line that looks like several commands")
-	}
-	if obs.PassedOverScriptFile {
-		dropped = append(dropped, "a shell ran a script file, which may have run other commands")
-	}
-	if obs.LauncherScript != "" && !obs.LauncherElsewhere {
-		if cmd, state := packageScript(obs.Sysroot, obs.WorkingDir, obs.LauncherScript); state == scriptFound && trace.SeveralCommands(cmd) {
-			dropped = append(dropped, fmt.Sprintf("the package.json script %q holds several commands (%q), which a launcher with a shell of its own (yarn berry) runs without a shell that shows in the trace", obs.LauncherScript, hideSecrets(cmd)))
-		}
-	}
-	if len(dropped) > 0 {
-		g.add(s.Name, plan.Unsupported, "commands not run", "the commands that ran before the program, or beside it, are not run by the package: "+strings.Join(dropped, "; ")+". Run them at build time, or as a separate one-shot service")
-	}
+	g.add(s.Name, plan.Unsupported, "launcher child", fmt.Sprintf("the observed program started %s as a child process: it is probably a script of the image that runs a launcher, and a launcher cannot run on nanos (no fork). Run the node command it leads to directly. Read the script in the CMD or ENTRYPOINT of the Dockerfile", strings.Join(obs.ChildLaunchers, ", ")))
 }
 
 // supervisorNote says, for a program that is a supervisor (nodemon, pm2-runtime, ...), that it
 // starts the program of the user as a child process, and what to run instead. Nothing is passed over
-// for it by name: the report only says it.
-func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) {
+// for it by name: the report only says it. It tells whether it added the item.
+func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool {
 	name := trace.Supervisor(obs.Program, obs.Argv)
 	if name == "" {
-		return
+		return false
 	}
 	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
 	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {
 		msg += "; it starts several commands, which need a service each"
 	}
 	g.add(s.Name, plan.Unsupported, "supervisor", msg)
-}
-
-// secretWord is a NAME=value word or an option, whose name can be tested for a secret.
-var secretWord = regexp.MustCompile(`^-{0,2}[A-Za-z_][A-Za-z0-9_.-]*$`)
-
-// The patterns that hide a secret wherever it is in the text of a command line.
-var (
-	// urlUserinfo is everything between scheme:// and the last @ of the word: the user, the
-	// password (which may hold a / or an @) or the token that stands for both. It hides too much of
-	// "https://host/@scope/pkg": hiding too much is the safer mistake.
-	urlUserinfo = regexp.MustCompile(`(\w+://)[^\s'"]*@`)
-	// digestHeader hides what follows "Authorization: Digest" up to the end of the line: its parts
-	// have quotes and spaces of their own.
-	digestHeader = regexp.MustCompile(`(?i)(authorization:\s*digest\s+).*`)
-	// authHeader is the value of an Authorization header, and bearerToken the word after Bearer.
-	authHeader  = regexp.MustCompile(`(?i)(authorization:\s*(?:(?:bearer|basic|token)\s+)?)[^\s"']+`)
-	bearerToken = regexp.MustCompile(`(?i)\b(bearer)\s+[^\s"']+`)
-	// secretHeader is any other header whose name looks like a secret (X-API-Key, PRIVATE-TOKEN).
-	secretHeader = regexp.MustCompile(`(?i)([\w-]*(?:key|token|secret|auth|pass)[\w-]*:[ \t]*)[^\s"']+`)
-	// jsonSecret is the string value of a key of a JSON object whose name looks like a secret, and
-	// jsonSecretEscaped the same when the quotes are escaped (a JSON text inside a double quoted word).
-	jsonSecret        = regexp.MustCompile(`(?i)("[^"\s\\]*(?:pass|pwd|secret|token|key|cred|auth|private|cert|sign|salt|dsn)[^"\s\\]*"\s*:\s*)"(?:[^"\\]|\\.)*"`)
-	jsonSecretEscaped = regexp.MustCompile(`(?i)(\\"[\w.-]*(?:pass|pwd|secret|token|key|cred|auth|private|cert|sign|salt|dsn)[\w.-]*\\"\s*:\s*\\")[^"\\]*\\"`)
-	// shellDefault is ${NAME:-default}, ${NAME-default}, ${NAME:=default} and the like.
-	shellDefault = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=+?])([^}]*)\}`)
-)
-
-// secretOptions are the short options whose next word is hidden: -p (mysql), -P, -u (curl), -a (redis-cli).
-var secretOptions = map[string]bool{"-p": true, "-P": true, "-u": true, "-a": true, "--user": true, "--proxy-user": true}
-
-// secretLike tells whether the name of a variable or of an option looks like a secret.
-func secretLike(name string) bool {
-	if !secretWord.MatchString(name) {
-		return false
-	}
-	return observe.SecretName(strings.ReplaceAll(strings.TrimLeft(name, "-"), "-", "_"))
-}
-
-// hideHeaders hides the value of the headers whose name looks like a secret (X-API-Key,
-// PRIVATE-TOKEN). Authorization is left to authHeader, and the NAME of ${NAME:-default} is not a
-// header.
-func hideHeaders(text string) string {
-	var out strings.Builder
-	last := 0
-	for _, m := range secretHeader.FindAllStringSubmatchIndex(text, -1) {
-		start, nameEnd := m[0], m[3]
-		name := strings.ToLower(text[m[2]:nameEnd])
-		if strings.Contains(name, "authorization") || (start > 0 && text[start-1] == '{') {
-			continue
-		}
-		out.WriteString(text[last:nameEnd])
-		out.WriteString("***")
-		last = m[1]
-	}
-	out.WriteString(text[last:])
-	return out.String()
-}
-
-// hideSecrets hides what looks like a secret in a command line:
-//   - the value of NAME=value and --name=value when the name looks like the name of a secret, also
-//     when the word is quoted as a whole ("NAME=value") or in part ("NAME=value"x), or the value
-//     has spaces, escapes or $( );
-//   - the word after --name when the name does, and after -p, -P, -u, -a, --user, whatever the
-//     word is, and what follows -p in a word (-psecret). A word that follows --no-auth or
-//     --key-file is hidden too, and so is a port after -p: hiding too much is the safer mistake;
-//   - the text of a word quoted as a whole that holds spaces (the -c operand of a shell) is
-//     searched for the same things;
-//   - the user and password of a URL, the value of an Authorization header and of any header
-//     whose name looks like a secret, the word after Bearer, password=value and pwd=value, the
-//     string values of the JSON keys that look secret, and the default of ${NAME:-default} when
-//     NAME does.
-//
-// The spacing of the text is kept.
-func hideSecrets(text string) string {
-	text = digestHeader.ReplaceAllString(text, "${1}***")
-	text = authHeader.ReplaceAllString(text, "${1}***")
-	text = bearerToken.ReplaceAllString(text, "${1} ***")
-	text = hideHeaders(text)
-	text = jsonSecret.ReplaceAllString(text, `${1}"***"`)
-	text = jsonSecretEscaped.ReplaceAllString(text, `${1}***\"`)
-	text = observe.PasswordPair.ReplaceAllString(text, "${1}=***")
-	text = urlUserinfo.ReplaceAllString(text, "${1}***@")
-	text = shellDefault.ReplaceAllStringFunc(text, func(m string) string {
-		g := shellDefault.FindStringSubmatch(m)
-		if secretLike(g[1]) {
-			return "${" + g[1] + g[2] + "***}"
-		}
-		return m
-	})
-
-	var out strings.Builder
-	var word strings.Builder
-	var quote, prev rune
-	escaped := false
-	depth := 0
-	hideNext := false
-	flush := func() {
-		if word.Len() == 0 {
-			return
-		}
-		w := word.String()
-		word.Reset()
-		if hideNext {
-			hideNext = false
-			out.WriteString("***")
-			return
-		}
-		inner, q := w, ""
-		if len(w) >= 2 && (w[0] == '"' || w[0] == '\'') && w[len(w)-1] == w[0] {
-			inner, q = w[1:len(w)-1], w[:1]
-		}
-		name, _, hasValue := strings.Cut(inner, "=")
-		switch {
-		case hasValue && secretLike(name):
-			w = q + name + "=***" + q
-		case q != "" && strings.ContainsAny(inner, " \t\n"):
-			w = q + hideSecrets(inner) + q
-		case !hasValue && strings.HasPrefix(w, "--") && secretLike(w):
-			hideNext = true
-		case secretOptions[w]:
-			hideNext = true
-		case len(w) > 2 && (strings.HasPrefix(w, "-p") || strings.HasPrefix(w, "-P")):
-			w = w[:2] + "***"
-		default:
-			// a partly quoted assignment: "NAME=value"x
-			if n, _, ok := strings.Cut(w, "="); ok {
-				if n2 := strings.Trim(n, `"'`); n2 != n && secretLike(n2) {
-					w = n2 + "=***"
-				}
-			}
-		}
-		out.WriteString(w)
-	}
-	for _, r := range text {
-		switch {
-		case escaped:
-			word.WriteRune(r)
-			escaped = false
-		case r == '\\' && quote != '\'':
-			word.WriteRune(r)
-			escaped = true
-		case quote != 0:
-			word.WriteRune(r)
-			if r == quote {
-				quote = 0
-			}
-		case r == '"' || r == '\'':
-			quote = r
-			word.WriteRune(r)
-		case r == '(' && (prev == '$' || depth > 0):
-			// $( ) stays inside the word
-			depth++
-			word.WriteRune(r)
-		case r == ')' && depth > 0:
-			depth--
-			word.WriteRune(r)
-		case unicode.IsSpace(r) && depth == 0:
-			flush()
-			out.WriteRune(r)
-		default:
-			word.WriteRune(r)
-		}
-		prev = r
-	}
-	flush()
-	return out.String()
+	return true
 }
 
 const (

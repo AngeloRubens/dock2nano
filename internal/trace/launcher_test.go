@@ -2,6 +2,7 @@ package trace
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -167,39 +168,28 @@ func TestScriptRun(t *testing.T) {
 	}
 }
 
-func TestSeveralCommands(t *testing.T) {
+func TestLabel(t *testing.T) {
 	tests := []struct {
-		text string
-		want bool
+		name    string
+		program string
+		argv    []string
+		want    string
 	}{
-		{"node server.js", false},
-		{"npm start", false},
-		{`node server.js --name "x y"`, false},
-		{"node server.js > log 2>&1", false},
-		{"node server.js &> log", false},
-		{"node server.js >&2", false},
-		{"node migrate.js && node server.js", true},
-		{"a || b", true},
-		{"a; b", true},
-		{"a\nb", true},
-		{"a | b", true},
-		{"node server.js &", true},
-		{"a $(b)", true},
-		{"a `b`", true},
+		{"npm with a script", "/usr/local/bin/node", []string{"node", "/usr/local/bin/npm", "run", "dev", "--token", "abc123"}, `npm (script "dev")`},
+		{"npm start", "/usr/local/bin/node", []string{"node", "/usr/local/bin/npm", "start"}, `npm (script "start")`},
+		{"npx has no script", "/usr/local/bin/node", []string{"node", "/usr/local/lib/node_modules/npm/bin/npx-cli.js", "serve"}, "npx"},
+		{"shell with a command", "/bin/sh", []string{"sh", "-c", "node server.js --api-key abc123"}, "sh -c"},
+		{"shell with a script file", "/bin/sh", []string{"sh", "/entrypoint.sh", "--token", "abc123"}, "sh (script file)"},
+		{"busybox shell", "/bin/busybox", []string{"sh", "-c", "x"}, "sh -c"},
+		{"bash", "/bin/bash", []string{"bash", "-lc", "x"}, "bash -c"},
+		{"a program is its name only", "/usr/local/bin/node", []string{"node", "migrate.js", "--password", "abc123"}, "node"},
+		{"a program without argv", "/usr/bin/git", nil, "git"},
 	}
 	for _, tt := range tests {
-		if got := SeveralCommands(tt.text); got != tt.want {
-			t.Errorf("SeveralCommands(%q) = %v, want %v", tt.text, got, tt.want)
+		got := Label(tt.program, tt.argv)
+		if got != tt.want || strings.Contains(got, "abc123") {
+			t.Errorf("%s: Label = %q, want %q", tt.name, got, tt.want)
 		}
-	}
-}
-
-func TestIsShell(t *testing.T) {
-	if !IsShell("/bin/sh", []string{"sh", "/entrypoint.sh"}) || !IsShell("/bin/busybox", []string{"sh", "-c", "x"}) {
-		t.Errorf("a shell is not taken for one")
-	}
-	if IsShell("/usr/local/bin/node", []string{"node", "server.js"}) {
-		t.Errorf("node is taken for a shell")
 	}
 }
 
@@ -210,6 +200,9 @@ func TestSupervisor(t *testing.T) {
 		argv    []string
 		want    string
 	}{
+		{"pm2-runtime in a bin directory", "/usr/local/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
+		{"pm2-runtime in an nvm bin directory", "/root/.nvm/versions/node/v20.1.0/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
+		{"a program of the user called nodemon in a bin directory of the user", "/app/bin/nodemon", []string{"nodemon"}, ""},
 		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},
 		{"nodemon package", "/usr/local/bin/node", []string{"node", "/app/node_modules/nodemon/bin/nodemon.js", "server.js"}, "nodemon"},
 		{"node with an option first", "/usr/local/bin/node", []string{"node", "-r", "x", "/app/node_modules/.bin/ts-node-dev", "a.ts"}, "ts-node-dev"},
@@ -280,6 +273,7 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "9", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 5,
+			NotRun: []string{"git"},
 			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
 		{"yarn 1 that starts yarn berry that starts the program", `1     execve("/usr/local/bin/node", ["node", "/opt/yarn-v1.22.19/bin/yarn.js", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
@@ -314,6 +308,7 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "9", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 7,
+			NotRun: []string{"node"},
 			PassedOver: []Exec{
 				{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0},
 				{Pid: "7", Path: "/bin/sh", Argv: []string{"sh", "-c", "node migrate.js && node server.js"}, Line: 2},
@@ -339,11 +334,55 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 9     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
 10    execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "10", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 9,
+			NotRun: []string{`npm (script "migrate")`},
 			PassedOver: []Exec{
 				{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "npm run migrate && npm start"}, Line: 0},
 				{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 5},
 				{Pid: "9", Path: "/bin/sh", Argv: []string{"sh", "-c", "node server.js"}, Line: 7},
 			}}},
+		{"a shell that forks for its first command and executes its last", `11    execve("/bin/sh", ["sh", "-c", "npm run migrate && npm start"], 0x7ffd1 /* 5 vars */) = 0
+11    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
+12    execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "migrate"], 0x7ffd1 /* 5 vars */) = 0
+12    +++ exited with 0 +++
+11    execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+11    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 13
+13    execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "13", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
+			NotRun: []string{`npm (script "migrate")`},
+			PassedOver: []Exec{
+				{Pid: "11", Path: "/bin/sh", Argv: []string{"sh", "-c", "npm run migrate && npm start"}, Line: 0},
+				{Pid: "11", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 4},
+			}}},
+		{"yarn berry that runs two commands itself", `1     execve("/usr/local/bin/node", ["node", "/app/.yarn/releases/yarn-4.1.0.cjs", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2
+2     execve("/usr/local/bin/node", ["node", "migrate.js"], 0x7ffd1 /* 5 vars */) = 0
+2     +++ exited with 0 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 3
+3     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "3", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 5,
+			NotRun: []string{"node"},
+			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/app/.yarn/releases/yarn-4.1.0.cjs", "start"}, Line: 0}}}},
+		{"children that only forked are not commands", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     +++ exited with 0 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 4,
+			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
+		{"a child whose execve failed is not a command", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+[pid     7] execve("/usr/bin/x", ["x"], 0x7ffd1 /* 5 vars */ <unfinished ...>
+[pid     7] <... execve resumed>) = -1 ENOENT (No such file or directory)
+7     +++ exited with 1 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
+			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
+		{"a script that runs npm stays the program and names the launcher", `1     execve("/entrypoint.sh", ["/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
+			ChildLaunchers: []string{`npm (script "start")`}}},
 		{"a launcher with two running children stays", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "a.js"], 0x7ffd1 /* 1 vars */) = 0
