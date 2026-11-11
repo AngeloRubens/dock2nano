@@ -753,9 +753,9 @@ type Exec struct {
 	// The package does not run them. It is empty when no launcher was passed over.
 	NotRun []string
 
-	// ChildLaunchers are the labels of the launchers that the program started as children, when it
-	// is not itself a launcher or a shell that was passed over: a script of the image that starts npm
-	// (a script is not told from a program by its name, so it stays the program).
+	// ChildLaunchers are the labels of the launchers that the program started as children: a script
+	// of the image that starts npm (a script is not told from a program by its name, so it stays the
+	// program).
 	ChildLaunchers []string
 }
 
@@ -1003,25 +1003,23 @@ func FinalExec(trace []byte) (Exec, bool) {
 		}
 	}
 
-	// A program that is not a launcher or a shell passed over, and that started a launcher: a
-	// script of the image (the kernel runs its interpreter within the same execve, so it is not
-	// known to be a script) that runs npm.
-	if len(recorded) == 0 {
-		for child, up := range parent {
-			if up != finalPid || child == finalPid {
-				continue
-			}
-			for _, e := range history[child] {
-				if _, _, ok := Launcher(e.Path, e.Argv); ok {
-					label := Label(e.Path, e.Argv)
-					if !slices.Contains(final.ChildLaunchers, label) {
-						final.ChildLaunchers = append(final.ChildLaunchers, label)
-					}
+	// A program that started a launcher: a script of the image that runs npm (the kernel runs the
+	// interpreter of a script within the same execve, so a script is not known to be one and stays
+	// the program), or a program that runs a launcher itself.
+	for child, up := range parent {
+		if up != finalPid || child == finalPid {
+			continue
+		}
+		for _, e := range history[child] {
+			if _, _, ok := Launcher(e.Path, e.Argv); ok {
+				label := Label(e.Path, e.Argv)
+				if !slices.Contains(final.ChildLaunchers, label) {
+					final.ChildLaunchers = append(final.ChildLaunchers, label)
 				}
 			}
 		}
-		sort.Strings(final.ChildLaunchers)
 	}
+	sort.Strings(final.ChildLaunchers)
 	return final, true
 }
 

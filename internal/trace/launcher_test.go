@@ -378,6 +378,32 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
 			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
+		{"a helper of the program that ended is not a command", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "node server.js"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/convert", ["convert"], 0x7ffd1 /* 5 vars */) = 0
+9     +++ exited with 0 +++
+`, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 4,
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0},
+				{Pid: "7", Path: "/bin/sh", Argv: []string{"sh", "-c", "node server.js"}, Line: 2},
+			}}},
+		{"a program that runs a launcher itself is named", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "node server.js"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "run", "x"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 4,
+			ChildLaunchers: []string{`npm (script "x")`},
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0},
+				{Pid: "7", Path: "/bin/sh", Argv: []string{"sh", "-c", "node server.js"}, Line: 2},
+			}}},
 		{"a script that runs npm stays the program and names the launcher", `1     execve("/entrypoint.sh", ["/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
