@@ -74,9 +74,12 @@ Flags of convert:
                      them in compose.yaml
   --no-with          do not start any service for the observation of another: neither those of
                      depends_on nor those of --with. Without it, the services a service lists in
-                     depends_on run during its observation (the report names them), and a service
-                     that stops with an error while none of them runs is observed once more with
-                     the others running, which are then listed in its depends_on
+                     depends_on run during its observation (the report names them). A service that
+                     lists no depends_on and stops with an error is observed once more with up to
+                     5 of the others running; if it then does not stop, the report suggests the
+                     depends_on to add (nothing is changed in the output). With --no-with a stop
+                     with an error of a service whose depends_on were not started does not read
+                     the hub
   --service NAME     convert only this service (can be repeated)
   --no-hub           never read the hub of ops packages (https://repo.ops.city). Without this
                      flag the hub is read only for a program that did not start as one process

@@ -71,6 +71,16 @@ func (r *Running) ID() string { return r.id }
 // NoteList is Notes, for a caller that holds the container through an interface.
 func (r *Running) NoteList() []string { return r.Notes }
 
+// Up says whether the container is still running. A container that cannot be asked about is
+// taken to be running.
+func (r *Running) Up(ctx context.Context) bool {
+	if r == nil || r.id == "" {
+		return false
+	}
+	up, err := r.d.Running(ctx, r.id)
+	return err != nil || up
+}
+
 // Stop stops and removes the container, with a context of its own so that it also works after
 // the context of the run has ended. It is safe to call more than once.
 func (r *Running) Stop(ctx context.Context) error {

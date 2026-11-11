@@ -79,7 +79,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -117,6 +117,21 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}()
 	arch, archOwner := "", ""
+	checkArch := func(name string, si gen.ServiceInput) error {
+		if si.Image == nil || si.Image.Architecture == "" {
+			return nil
+		}
+		ia, err := packageArch(si.Image.Architecture, si.Image.Variant)
+		if err != nil {
+			return fmt.Errorf("service %s: %w", name, err)
+		}
+		if arch == "" {
+			arch, archOwner = ia, name
+		} else if ia != arch {
+			return fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, name, ia)
+		}
+		return nil
+	}
 	for _, s := range ordered {
 		if _, no := skipped[s.Name]; no {
 			continue
@@ -128,58 +143,113 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("service %s: %w", s.Name, err)
 		}
-		if si.Image != nil && si.Image.Architecture != "" {
-			ia, err := packageArch(si.Image.Architecture, si.Image.Variant)
-			if err != nil {
-				return 0, fmt.Errorf("service %s: %w", s.Name, err)
-			}
-			if arch == "" {
-				arch, archOwner = ia, s.Name
-			} else if ia != arch {
-				return 0, fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, s.Name, ia)
-			}
+		if err := checkArch(s.Name, si); err != nil {
+			return 0, err
 		}
 		inputs[s.Name] = si
 	}
 
-	// A service that stopped with an error while none of its dependencies ran, and that the file
-	// does not say needs any of the others, is observed again with the others running.
+	// A service that stopped with an error while none of the others ran with it, and that the file
+	// does not make depend on any, is observed once more with some of the others running. The file
+	// and the compose.yaml are not changed by it: when the second observation does not stop, the
+	// report suggests the depends_on to write.
 	for _, name := range rs.retry {
 		s := project.Service(name)
-		cands := rs.candidates(s, true)
-		if len(cands) == 0 {
-			// none of the others could be prepared: the stop stands, and the hub is read as it
-			// is for a service that needs nobody
-			si := inputs[name]
-			ha := rs.hubArgs[name]
-			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &si); err != nil {
+		first := inputs[name]
+		ha := rs.hubArgs[name]
+		if rs.running[name] != nil {
+			// its container runs beside the second observation of another service: a second one
+			// of the same name would share its name on the network
+			msg := fmt.Sprintf("it stopped with status %d; it is not observed again because its container was running beside the second observation of another service", first.Observed.ExitCode)
+			first.Observed.Warnings = append(first.Observed.Warnings, msg)
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
 				return 0, fmt.Errorf("service %s: %w", name, err)
 			}
-			inputs[name] = si
+			inputs[name] = first
 			continue
 		}
-		for _, c := range cands {
-			s.DependsOn = append(s.DependsOn, compose.Dependency{Service: c, Condition: "service_started"})
+		cands := rs.candidates(s, true)
+		if len(cands) > retryMax {
+			cands = cands[:retryMax]
 		}
-		if re, err := dependencyOrder(project); err == nil {
-			rs.ordered = re
+		if len(cands) == 0 {
+			// none of the others could run with it: the stop stands, and the hub is read as it
+			// is for a service that needs nobody
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = first
+			continue
 		}
+		status := first.Observed.ExitCode
+		rs.extra[name] = cands
 		rs.retried[name] = true
-		first := inputs[name]
-		fmt.Fprintf(a.Stderr, "%s: it stopped with status %d while none of the other services ran; observing it again with %s running (--no-with turns this off)\n", name, first.Observed.ExitCode, strings.Join(cands, ", "))
-		if first.Observed.Sysroot != "" {
-			a.RemoveAll(first.Observed.Sysroot)
-			sysroots = slices.DeleteFunc(sysroots, func(p string) bool { return p == first.Observed.Sysroot })
-		}
+		fmt.Fprintf(a.Stderr, "%s: it stopped with status %d while %s did not run; observing it again with them running (--no-with turns this off)\n", name, status, strings.Join(cands, ", "))
+		binds := rs.resetBinds(a, project, dir, s)
 		si, err := a.prepare(ctx, o, project, dir, s, rs)
 		if si.Observed != nil && si.Observed.Sysroot != "" {
 			sysroots = append(sysroots, si.Observed.Sysroot)
 		}
+		delete(rs.extra, name)
 		if err != nil {
-			return 0, fmt.Errorf("service %s: %w", name, err)
+			if ctx.Err() != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			// the first observation stands
+			msg := fmt.Sprintf("it was observed once more with %s running, which failed (%v); this is the first observation, which stopped with status %d", strings.Join(cands, ", "), err, status)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", name, msg)
+			first.Observed.Warnings = append(first.Observed.Warnings, msg)
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = first
+			continue
+		}
+		if first.Observed.Sysroot != "" {
+			a.RemoveAll(first.Observed.Sysroot)
+			sysroots = slices.DeleteFunc(sysroots, func(p string) bool { return p == first.Observed.Sysroot })
+		}
+		if err := checkArch(name, si); err != nil {
+			return 0, err
+		}
+		var ran, notRan []string
+		for _, c := range cands {
+			if rs.up(c) {
+				ran = append(ran, c)
+			} else {
+				why := rs.failed[c]
+				if why == "" {
+					why = "it stopped while the observation ran"
+				}
+				notRan = append(notRan, fmt.Sprintf("%s (%s)", c, why))
+			}
 		}
 		if si.Observed != nil {
-			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("the first observation stopped with status %d while none of the other services ran, so this one was made with %s running; %s now lists them in depends_on", first.Observed.ExitCode, strings.Join(cands, ", "), ToolName))
+			w := &si.Observed.Warnings
+			*w = append(*w, binds...)
+			if len(notRan) > 0 {
+				*w = append(*w, "these services were meant to run beside it for the second observation and did not: "+strings.Join(notRan, "; "))
+			}
+			still := si.Observed.StoppedEarly && si.Observed.ExitCode != 0
+			switch {
+			case len(ran) == 0:
+				*w = append(*w, fmt.Sprintf("observed alone it stopped with status %d; none of the other services could run beside it, so the second observation shows nothing new", status))
+			case still:
+				*w = append(*w, fmt.Sprintf("observed alone it stopped with status %d; with %s running it stopped with status %d as well; nothing is concluded from it", status, strings.Join(ran, ", "), si.Observed.ExitCode))
+			default:
+				list := strings.Join(ran, ", ")
+				si.HubItems = append(si.HubItems, plan.Item{Service: name, Kind: plan.Approximated, Key: "depends_on." + strings.Join(ran, ","),
+					Message: fmt.Sprintf("observed alone it stopped with status %d; with %s running it did not; if it needs them, add depends_on: [%s] to docker-compose.yml (nothing was changed in the output for it)", status, list, list)})
+			}
+		}
+		// what was observed before the second observation of this service did not have it
+		for other, osi := range inputs {
+			if other == name || osi.Observed == nil {
+				continue
+			}
+			if x := project.Service(other); x != nil && slices.Contains(rs.closure(x), name) {
+				osi.Observed.Warnings = append(osi.Observed.Warnings, fmt.Sprintf("it needs %s, which was observed once more after this service was observed; this observation used the first one of %s", name, name))
+			}
 		}
 		inputs[name] = si
 	}
@@ -573,9 +643,22 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
-	if up := rs.runningDeps(s); len(up) > 0 && res != nil {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("the services running during this observation: %s (started because %s lists them in depends_on or --with)", strings.Join(up, ", "), s.Name))
+	rs.findCrashed(ctx, a, s, res)
+	if res != nil {
+		if up := rs.runningDeps(s); len(up) > 0 {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("the services running during this observation: %s (its depends_on or --with)", strings.Join(up, ", ")))
+		}
+		var beside []string
+		for _, n := range rs.extra[s.Name] {
+			if rs.up(n) {
+				beside = append(beside, n)
+			}
+		}
+		if len(beside) > 0 {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("the services started beside it for this second observation: %s (the file does not make it depend on them)", strings.Join(beside, ", ")))
+		}
 	}
+	rs.firstUp[s.Name] = rs.upNames()
 	// A stop with an error while none of the dependencies ran says nothing about the program: the
 	// service is observed again, when the others are all prepared, and the hub waits for that.
 	if rs.wantsRetry(s, res) {
@@ -595,42 +678,118 @@ type hubArgs struct {
 	built bool
 }
 
-// runningDeps returns the services that s needs and that are running now, in dependency order.
-func (rs *runState) runningDeps(s *compose.Service) []string {
+// retryMax is the most services that a second observation starts beside the one observed.
+const retryMax = 5
+
+// up says whether a service was started for an observation and was still running after the last
+// one.
+func (rs *runState) up(name string) bool {
+	return rs.running[name] != nil && !rs.crashed[name]
+}
+
+// upNames returns the services that are up, in file order.
+func (rs *runState) upNames() []string {
 	var out []string
-	for _, n := range rs.closure(s) {
-		if rs.running[n] != nil {
-			out = append(out, n)
+	for _, x := range rs.ordered {
+		if rs.up(x.Name) {
+			out = append(out, x.Name)
 		}
 	}
 	return out
 }
 
-// missingDeps returns the services that s needs and that are not running.
-func (rs *runState) missingDeps(s *compose.Service) []string {
-	var out []string
-	for _, n := range rs.closure(s) {
-		if rs.running[n] == nil {
-			out = append(out, n)
+// findCrashed marks the services started for s that stopped while s was observed, and says so in
+// the report of s. A stopper that cannot tell is taken to be running.
+func (rs *runState) findCrashed(ctx context.Context, a *App, s *compose.Service, res *observe.Result) {
+	for _, n := range rs.startList(s) {
+		st := rs.running[n]
+		if st == nil || rs.crashed[n] {
+			continue
+		}
+		if u, ok := st.(interface{ Up(context.Context) bool }); ok && !u.Up(ctx) {
+			rs.crashed[n] = true
+			msg := fmt.Sprintf("the service %s stopped while %s was observed, so it is not counted as running", n, s.Name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+			if res != nil {
+				res.Warnings = append(res.Warnings, msg)
+			}
 		}
 	}
-	return out
 }
 
-// candidates returns the services that could run during the observation of s although the file
-// does not make s depend on them: the others that were prepared, that do not need s and that s
-// does not list yet. With prepared only those that were prepared count.
-func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
-	listed := map[string]bool{}
-	for _, d := range s.DependsOn {
-		listed[d.Service] = true
+// startList returns the services started for the observation of s: those it needs and the ones
+// of a second observation, with what each of them needs, in dependency order.
+func (rs *runState) startList(s *compose.Service) []string {
+	need := map[string]bool{}
+	for _, n := range rs.closure(s) {
+		need[n] = true
+	}
+	for _, e := range rs.extra[s.Name] {
+		need[e] = true
+		if x := rs.service(e); x != nil {
+			for _, n := range rs.closure(x) {
+				need[n] = true
+			}
+		}
 	}
 	var out []string
 	for _, x := range rs.ordered {
-		if x.Name == s.Name || listed[x.Name] {
+		if need[x.Name] && x.Name != s.Name {
+			out = append(out, x.Name)
+		}
+	}
+	return out
+}
+
+func (rs *runState) service(name string) *compose.Service {
+	for _, x := range rs.ordered {
+		if x.Name == name {
+			return x
+		}
+	}
+	return nil
+}
+
+// runningDeps returns the services that s needs by the file and that are running, in dependency
+// order.
+func (rs *runState) runningDeps(s *compose.Service) []string {
+	var out []string
+	for _, n := range rs.closure(s) {
+		if rs.up(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// missingDeps returns the services that s needs by the file and that are not running.
+func (rs *runState) missingDeps(s *compose.Service) []string {
+	var out []string
+	for _, n := range rs.closure(s) {
+		if !rs.up(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// candidates returns the services that could run beside s for a second observation: the others
+// that do not need s, that did not run when its first observation ended (they would show nothing
+// new), that were not found unable to start and, with prepared, that were prepared.
+func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
+	was := map[string]bool{}
+	for _, n := range rs.firstUp[s.Name] {
+		was[n] = true
+	}
+	var out []string
+	for _, x := range rs.ordered {
+		if x.Name == s.Name || was[x.Name] || rs.failed[x.Name] != "" {
 			continue
 		}
 		if _, no := rs.skipped[x.Name]; no {
+			continue
+		}
+		if _, no := rs.late[x.Name]; no {
 			continue
 		}
 		if prepared {
@@ -646,16 +805,50 @@ func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
 	return out
 }
 
-// wantsRetry says whether the observation of s stopped with an error while none of its
-// dependencies ran and there are others to run beside it.
+// wantsRetry says whether the observation of s stopped with an error, the file makes it depend on
+// nothing, and others could run beside it for a second observation.
 func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
 	if rs.noWith || res == nil || !res.StoppedEarly || res.ExitCode == 0 || res.Children > 0 || rs.retried[s.Name] {
 		return false
 	}
-	if len(rs.runningDeps(s)) > 0 {
+	if len(s.DependsOn) > 0 {
 		return false
 	}
 	return len(rs.candidates(s, false)) > 0
+}
+
+// resetBinds makes a new copy of each read-write bind of s that no other service mounts, so that
+// the second observation starts from the files of the user and not from what the first one wrote.
+// For a bind that another service mounts too it returns a note: that copy is kept.
+func (rs *runState) resetBinds(a *App, p *compose.Project, dir string, s *compose.Service) []string {
+	var notes []string
+	for _, b := range a.binds(s, dir) {
+		if strings.HasSuffix(b, ":ro") {
+			continue
+		}
+		host, _, _ := strings.Cut(b, ":")
+		m := rs.binds[host]
+		if m == nil || m.path == "" || m.readOnly {
+			continue
+		}
+		shared := ""
+		for _, x := range p.Services {
+			if x.Name == s.Name {
+				continue
+			}
+			for _, xb := range a.binds(x, dir) {
+				if h, _, _ := strings.Cut(xb, ":"); h == host {
+					shared = x.Name
+				}
+			}
+		}
+		if shared != "" {
+			notes = append(notes, fmt.Sprintf("the bind %s is shared with %s: the second observation started from what the first one left there", host, shared))
+			continue
+		}
+		delete(rs.binds, host)
+	}
+	return notes
 }
 
 // cleanupTimeout bounds the removal of the network and of the containers at
@@ -683,6 +876,12 @@ type runState struct {
 	retry   []string
 	retried map[string]bool
 	hubArgs map[string]hubArgs
+	// extra holds, by service, the services started beside it for its second observation; they
+	// are not in the file as its dependencies. firstUp holds the services that ran when its first
+	// observation ended. crashed holds the started services found stopped after an observation.
+	extra   map[string][]string
+	firstUp map[string][]string
+	crashed map[string]bool
 	ordered []*compose.Service
 	skipped map[string]string
 	// starts holds, by service name, how to start a service that was prepared.
@@ -757,7 +956,7 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 		}
 		return notes, nil
 	}
-	for _, name := range rs.closure(s) {
+	for _, name := range rs.startList(s) {
 		if rs.running[name] != nil {
 			rs.served[name] = append(rs.served[name], s.Name)
 			for _, n := range rs.noted[name] {
