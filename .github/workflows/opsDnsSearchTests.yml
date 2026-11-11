@@ -15,6 +15,16 @@ jobs:
         ref:
           - feat/compose-dns-search-indep
           - check/dns-search-base
+          - check/dns-search-mut-tag
+          - check/dns-search-mut-scalar
+          - check/dns-search-mut-parsechk
+          - check/dns-search-mut-setres
+          - check/dns-search-mut-resolv
+          - check/dns-search-mut-resolvchk
+          - check/dns-search-mut-domainchk
+          - check/dns-search-mut-chars
+          - check/dns-search-mut-maxn
+          - check/dns-search-mut-maxline
     steps:
       - uses: actions/checkout@v4
         with:
