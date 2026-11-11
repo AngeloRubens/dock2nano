@@ -182,6 +182,29 @@ func TestWriteManifestPassesValidation(t *testing.T) {
 	}
 }
 
+func TestManifestBaseVolumeSzIsWrittenAndValid(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	s := svc("web", src)
+	s.Manifest.BaseVolumeSz = "1g"
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web"), Services: []plan.Service{s}}
+	if _, err := Write(p, Options{OpsHome: home, ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	b := []byte(read(t, filepath.Join(home, ".ops", "local_packages", "amd64", "web", "package.manifest")))
+	if !strings.Contains(string(b), "\"BaseVolumeSz\": \"1g\"") {
+		t.Fatalf("manifest = %s", b)
+	}
+	if err := ValidateManifestJSON(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManifestJSON([]byte(`{"BaseVolumeSz":"1g"}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManifestPassthroughIsWrittenAndValid(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
