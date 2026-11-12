@@ -968,6 +968,7 @@ type runState struct {
 	// the one that is observed a second time, which reuses it: no new build or pull.
 	firstImg map[string]builtImage
 	again    map[string]bool
+
 	ordered []*compose.Service
 	skipped map[string]string
 	// starts holds, by service name, how to start a service that was prepared.
