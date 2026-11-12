@@ -1146,7 +1146,6 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 				rs.failed[name] = why
 			} else {
 				rs.running[name] = st
-				delete(rs.failed, name)
 				rs.served[name] = append(rs.served[name], s.Name)
 				rs.order = append(rs.order, name)
 				// what Start noticed (a container that runs and listens on nothing)
