@@ -36,13 +36,10 @@ jobs:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (with the dns fix of nanovms/ops#1803 and dns_names)
+      - name: ops from source (nanovms/ops master, with the arp fix of PR 1805)
         run: |
-          git clone https://github.com/AngeloRubens/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout feat/compose-dns-search
-          # the arp fix (67187c4 of fix/bridged-ip-arp, based on a52795e like this branch): applies without conflicts
-          git -C /tmp/ops-src fetch origin fix/bridged-ip-arp
-          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick 67187c4
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout master
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
