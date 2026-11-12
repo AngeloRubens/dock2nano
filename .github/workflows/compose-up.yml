@@ -18,18 +18,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: nginx-golang-A, patch: nginx-golang-A, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
-          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
-          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
-          - {name: nginx-golang-plain-A, patch: nginx-golang-plain-A, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
-          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
-          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
-          - {name: nginx-flask-mongo-A, patch: nginx-flask-mongo-A, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
-          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
-          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
-          - {name: nginx-flask-mongo-plain-A, patch: nginx-flask-mongo-plain-A, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
-          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
-          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
+          - {name: nginx-golang-A, patch: nginx-golang-A, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
+          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
+          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
+          - {name: nginx-golang-plain-A, patch: nginx-golang-plain-A, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
+          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
+          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
+          - {name: nginx-flask-mongo-A, patch: nginx-flask-mongo-A, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
+          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
+          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
+          - {name: nginx-flask-mongo-plain-A, patch: nginx-flask-mongo-plain-A, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
+          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
+          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -121,6 +121,9 @@ jobs:
           # find) or the lookup, so try again from a clean state, up to three times, and fail the
           # step when all three fail: the probe step then still runs, but the job is red.
           up_ok=0
+          # a guest with a static address is not in the arp table until something talks to it, and
+          # ops finds the address of a guest there: talk to the addresses of this job from here
+          for ip in ${{ matrix.pings }}; do ( while :; do ping -c1 -W1 $ip >/dev/null 2>&1; sleep 0.3; done ) & done
           for attempt in 1 2 3; do
             if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
               echo "ops compose up: ok (attempt $attempt)"; up_ok=1; break
