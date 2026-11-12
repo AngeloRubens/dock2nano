@@ -14,23 +14,22 @@ jobs:
       matrix:
         ref:
           - feat/compose-dns-search-indep
-          - check/dns-search-base
-          - check/dns-search-mut-tag
-          - check/dns-search-mut-scalar
-          - check/dns-search-mut-parsechk
-          - check/dns-search-mut-setres
-          - check/dns-search-mut-dot
-          - check/dns-search-mut-typeerr
-          - check/dns-search-mut-typeret
-          - check/dns-search-mut-resolv
-          - check/dns-search-mut-resolvchk
-          - check/dns-search-mut-cfgmsg
-          - check/dns-search-mut-domainchk
-          - check/dns-search-mut-endhyphen
-          - check/dns-search-mut-chars
-          - check/dns-search-mut-maxn
-          - check/dns-search-mut-maxline
-          - check/dns-search-mut-max256
+          - check/dns-search-r3-master
+          - check/dns-search-r3-tag
+          - check/dns-search-r3-scalar
+          - check/dns-search-r3-parsechk
+          - check/dns-search-r3-setres
+          - check/dns-search-r3-dot
+          - check/dns-search-r3-typeret
+          - check/dns-search-r3-resolv
+          - check/dns-search-r3-resolvchk
+          - check/dns-search-r3-cfgmsg
+          - check/dns-search-r3-domainchk
+          - check/dns-search-r3-endhyphen
+          - check/dns-search-r3-chars
+          - check/dns-search-r3-maxn
+          - check/dns-search-r3-maxline
+          - check/dns-search-r3-max256
     steps:
       - uses: actions/checkout@v4
         with:
