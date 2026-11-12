@@ -16,6 +16,7 @@ jobs:
           - feat/compose-dns-search-indep
           - check/dns-search-r3-master
           - check/dns-search-r3-yamlerr
+          - check/dns-search-r3-adddnserr
           - check/dns-search-r3-tag
           - check/dns-search-r3-scalar
           - check/dns-search-r3-parsechk
@@ -65,7 +66,7 @@ jobs:
       - name: new tests by name
         id: named
         continue-on-error: true
-        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf|SearchDomains'
+        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf|SearchDomains|YamlError'
 
       - name: full suite of cmd lepton types
         id: full
