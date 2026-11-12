@@ -58,7 +58,11 @@ func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.
 		if held {
 			msg := fmt.Sprintf("the container stopped with status %d while the services it needs (%s) were not running; the stop may be that", obs.ExitCode, strings.Join(miss, ", "))
 			// said only when the hub would have been read for this stop
-			if !o.noHub && a.Hub != nil && hubArch(si.Image) != "" && obs.Children == 0 {
+			stand := hub.ProgramName(obs.Program)
+			if !built {
+				stand = hub.ImageName(image)
+			}
+			if !o.noHub && a.Hub != nil && hubArch(si.Image) != "" && obs.Children == 0 && hub.MatchRequired(a.HubRequired, stand, obs.Program) == nil {
 				msg += ", so the hub was not consulted for it"
 			}
 			obs.Warnings = append(obs.Warnings, msg)
