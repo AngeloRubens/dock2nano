@@ -18,18 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: nginx-golang-A, patch: nginx-golang-A, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
-          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
-          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
-          - {name: nginx-golang-plain-A, patch: nginx-golang-plain-A, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
-          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51", pings: "192.168.33.50 192.168.33.51"}
-          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
-          - {name: nginx-flask-mongo-A, patch: nginx-flask-mongo-A, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
-          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
-          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
-          - {name: nginx-flask-mongo-plain-A, patch: nginx-flask-mongo-plain-A, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
-          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52", pings: "192.168.33.50 192.168.33.51 192.168.33.52"}
-          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: "", pings: "192.168.33.2"}
+          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,10 +57,10 @@ jobs:
             git -C /tmp/ops-src fetch origin 67187c4fdcf795c97a9757f073c9c62beedc05d8
             git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick 67187c4fdcf795c97a9757f073c9c62beedc05d8
           fi
-          if [ "${{ matrix.opsdns }}" = yes ]; then
-            sed -i 's#c.Program = "dns"#c.Program = "dns"\n\tc.RunConfig.IPAddress = "192.168.33.2"\n\tc.RunConfig.Gateway = "192.168.33.1"\n\tc.RunConfig.NetMask = "255.255.255.0"#' /tmp/ops-src/cmd/compose.go
-            grep -n -A3 'c.Program = "dns"' /tmp/ops-src/cmd/compose.go
-          fi
+          # test only: the guest config of a package may say DNSIP_PLACEHOLDER (the address of the dns guest)
+          # and IPOF_<package> (the address ops found for it); ops fills them in before it builds the image
+          python3 ci/ops-testpatch.py
+          grep -n "testIPs\|DNSIP_PLACEHOLDER" /tmp/ops-src/cmd/compose.go
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
@@ -116,14 +112,11 @@ jobs:
         timeout-minutes: 15
         run: |
           cd /tmp/out
-          # ops waits 30 seconds for the address of each guest (ps and arp); when it does not get one
+          # ops waits 10 seconds (20 times 500 ms) for the address of each guest (ps and arp); when it does not get one
           # it exits with "ip timeout". The cause may be the guest (a dead nginx has no address to
           # find) or the lookup, so try again from a clean state, up to three times, and fail the
           # step when all three fail: the probe step then still runs, but the job is red.
           up_ok=0
-          # a guest with a static address is not in the arp table until something talks to it, and
-          # ops finds the address of a guest there: talk to the addresses of this job from here
-          for ip in ${{ matrix.pings }}; do ( while :; do ping -c1 -W1 $ip >/dev/null 2>&1; sleep 0.3; done ) & done
           for attempt in 1 2 3; do
             if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
               echo "ops compose up: ok (attempt $attempt)"; up_ok=1; break
@@ -184,7 +177,6 @@ jobs:
           for p in ${{ matrix.probe }}; do
             svc=${p%%:*}; rest=${p#*:}; port=${rest%%:*}; kind=${rest##*:}
             ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
-            if [ -z "$ip" ]; then ip=$(echo " ${{ matrix.ips }}" | grep -o " $svc=[0-9.]*" | cut -d= -f2); fi
             echo "=== $svc $ip:$port $kind"
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
