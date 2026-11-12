@@ -19,12 +19,18 @@ jobs:
           - check/dns-search-mut-scalar
           - check/dns-search-mut-parsechk
           - check/dns-search-mut-setres
+          - check/dns-search-mut-dot
+          - check/dns-search-mut-typeerr
+          - check/dns-search-mut-typeret
           - check/dns-search-mut-resolv
           - check/dns-search-mut-resolvchk
+          - check/dns-search-mut-cfgmsg
           - check/dns-search-mut-domainchk
+          - check/dns-search-mut-endhyphen
           - check/dns-search-mut-chars
           - check/dns-search-mut-maxn
           - check/dns-search-mut-maxline
+          - check/dns-search-mut-max256
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,7 +65,7 @@ jobs:
       - name: new tests by name
         id: named
         continue-on-error: true
-        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf'
+        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf|SearchDomains'
 
       - name: full suite of cmd lepton types
         id: full
