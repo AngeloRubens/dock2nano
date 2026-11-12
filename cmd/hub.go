@@ -50,6 +50,26 @@ func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.
 	if obs == nil {
 		return nil
 	}
+	// A stop with an error is not taken for a program that cannot run as one process when a
+	// service it needs was not running: the stop may be that.
+	miss := rs.missingDeps(s)
+	held := len(miss) > 0
+	if obs.StoppedEarly && obs.ExitCode != 0 {
+		if held {
+			msg := fmt.Sprintf("the container stopped with status %d while the services it needs (%s) were not running; the stop may be that", obs.ExitCode, strings.Join(miss, ", "))
+			// said only when the hub would have been read for this stop
+			stand := hub.ProgramName(obs.Program)
+			if !built {
+				stand = hub.ImageName(image)
+			}
+			if !o.noHub && a.Hub != nil && hubArch(si.Image) != "" && obs.Children == 0 && hub.MatchRequired(a.HubRequired, stand, obs.Program) == nil {
+				msg += ", so the hub was not consulted for it"
+			}
+			obs.Warnings = append(obs.Warnings, msg)
+		} else if up := rs.runningDeps(s); len(up) > 0 {
+			obs.Warnings = append(obs.Warnings, fmt.Sprintf("the container stopped with status %d although the services it needs (%s) were running; the stop may be a problem of a dependency (credentials, a schema, a name) or of the configuration, not of the program", obs.ExitCode, strings.Join(up, ", ")))
+		}
+	}
 	arch := hubArch(si.Image)
 	if arch == "" {
 		return nil
@@ -69,7 +89,7 @@ func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.
 	if row := hub.MatchRequired(a.HubRequired, stand, obs.Program); row != nil {
 		return a.hubWhole(ctx, o, rs, hc, row, si)
 	}
-	why := hubTrigger(obs)
+	why := hubTrigger(obs, held)
 	if why == "" {
 		return nil
 	}
@@ -88,10 +108,11 @@ func (hc hubCase) wantedFor(n string) string {
 }
 
 // hubTrigger says why the program did not start as one process, or "" when
-// it did.
-func hubTrigger(obs *observe.Result) string {
+// it did. A stop with an error counts only when held is false, that is when no service the
+// program needs was missing.
+func hubTrigger(obs *observe.Result, held bool) string {
 	switch {
-	case obs.StoppedEarly && obs.ExitCode != 0:
+	case obs.StoppedEarly && obs.ExitCode != 0 && !held:
 		return fmt.Sprintf("the container stopped with status %d before the end of the observation", obs.ExitCode)
 	case obs.Children > 0:
 		return fmt.Sprintf("the program started %d %s (fork or clone) and nanos runs one process", obs.Children, plural(obs.Children))

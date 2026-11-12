@@ -110,6 +110,8 @@ type fakeDocker struct {
 
 	// notRunning makes Running answer false for every container.
 	notRunning bool
+	// runningErr makes Running fail.
+	runningErr error
 
 	// waitCode is what the strace container exits with; tracedCode what the traced one exits with.
 	waitCode   int
@@ -208,6 +210,9 @@ func (f *fakeDocker) Remove(ctx context.Context, id string, force bool) error {
 }
 
 func (f *fakeDocker) Running(ctx context.Context, id string) (bool, error) {
+	if f.runningErr != nil {
+		return false, f.runningErr
+	}
 	return !f.notRunning, nil
 }
 
@@ -3056,5 +3061,16 @@ func TestObserveWithoutAnEntrypointMakesNoEarlyFiles(t *testing.T) {
 		if strings.Contains(w, "the entrypoint made") {
 			t.Errorf("warning %q", w)
 		}
+	}
+}
+
+func TestUpWithAnErrorSaysSoAndTakesTheContainerToBeRunning(t *testing.T) {
+	var logged []string
+	r := &Running{d: &fakeDocker{t: t, runningErr: errors.New("daemon gone")}, id: "c1", log: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }}
+	if !r.Up(context.Background()) {
+		t.Errorf("a container that cannot be asked about is taken to be running")
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "daemon gone") {
+		t.Errorf("logged %q", logged)
 	}
 }

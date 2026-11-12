@@ -472,19 +472,19 @@ func TestNoHubFlagIsParsed(t *testing.T) {
 }
 
 func TestHubTrigger(t *testing.T) {
-	if got := hubTrigger(&observe.Result{}); got != "" {
+	if got := hubTrigger(&observe.Result{}, false); got != "" {
 		t.Errorf("a program that started: %q", got)
 	}
-	if got := hubTrigger(&observe.Result{Children: 3}); !strings.Contains(got, "3 child processes") {
+	if got := hubTrigger(&observe.Result{Children: 3}, false); !strings.Contains(got, "3 child processes") {
 		t.Errorf("children: %q", got)
 	}
-	if got := hubTrigger(&observe.Result{Children: 1}); !strings.Contains(got, "1 child process ") {
+	if got := hubTrigger(&observe.Result{Children: 1}, false); !strings.Contains(got, "1 child process ") {
 		t.Errorf("one child: %q", got)
 	}
-	if got := hubTrigger(&observe.Result{StoppedEarly: true}); got != "" {
+	if got := hubTrigger(&observe.Result{StoppedEarly: true}, false); got != "" {
 		t.Errorf("a job that ended with status 0: %q", got)
 	}
-	if got := hubTrigger(&observe.Result{StoppedEarly: true, ExitCode: 137}); !strings.Contains(got, "status 137") {
+	if got := hubTrigger(&observe.Result{StoppedEarly: true, ExitCode: 137}, false); !strings.Contains(got, "status 137") {
 		t.Errorf("stopped: %q", got)
 	}
 }

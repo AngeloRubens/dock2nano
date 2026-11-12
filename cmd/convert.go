@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,7 +80,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, again: map[string]bool{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -116,6 +118,21 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 	}()
 	arch, archOwner := "", ""
+	checkArch := func(name string, si gen.ServiceInput) error {
+		if si.Image == nil || si.Image.Architecture == "" {
+			return nil
+		}
+		ia, err := packageArch(si.Image.Architecture, si.Image.Variant)
+		if err != nil {
+			return fmt.Errorf("service %s: %w", name, err)
+		}
+		if arch == "" {
+			arch, archOwner = ia, name
+		} else if ia != arch {
+			return fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, name, ia)
+		}
+		return nil
+	}
 	for _, s := range ordered {
 		if _, no := skipped[s.Name]; no {
 			continue
@@ -127,18 +144,147 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("service %s: %w", s.Name, err)
 		}
-		if si.Image != nil && si.Image.Architecture != "" {
-			ia, err := packageArch(si.Image.Architecture, si.Image.Variant)
-			if err != nil {
-				return 0, fmt.Errorf("service %s: %w", s.Name, err)
-			}
-			if arch == "" {
-				arch, archOwner = ia, s.Name
-			} else if ia != arch {
-				return 0, fmt.Errorf("the images of the services %s (%s) and %s (%s) have different architectures; one run converts one architecture", archOwner, arch, s.Name, ia)
-			}
+		if err := checkArch(s.Name, si); err != nil {
+			return 0, err
 		}
 		inputs[s.Name] = si
+	}
+
+	// A service that stopped with an error while none of the others ran with it, and that the file
+	// does not make depend on any, is observed once more with some of the others running. The file
+	// and the compose.yaml are not changed by it: when the second observation does not stop, the
+	// report suggests the depends_on to write.
+	for _, name := range rs.retry {
+		s := project.Service(name)
+		first := inputs[name]
+		ha := rs.hubArgs[name]
+		// a container of this service that was started for a dependent, or that has stopped since,
+		// is stopped: a second container of the same name would share its name on the network
+		stoppedOwn := rs.running[name] != nil
+		cands := rs.pickCandidates(rs.candidates(s, true))
+		if len(cands) == 0 {
+			// none of the others could run with it: the stop stands, and the hub is read as it
+			// is for a service that needs nobody
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = first
+			continue
+		}
+		status := first.Observed.ExitCode
+		if stoppedOwn && !rs.stopOne(a, name) {
+			// the old container may still hold the name of the service on the network
+			msg := fmt.Sprintf("it stopped with status %d; it is not observed again because its container, started for another service, could not be stopped and may still hold the name %s on the network", status, name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", name, msg)
+			first.Observed.Warnings = append(first.Observed.Warnings, msg)
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = first
+			continue
+		}
+		rs.extra[name] = cands
+		rs.retried[name] = true
+		rs.again[name] = true
+		fmt.Fprintf(a.Stderr, "%s: it stopped with status %d while %s did not run; observing it again with them running (--no-with turns this off)\n", name, status, strings.Join(cands, ", "))
+		binds := rs.resetBinds(a, project, dir, s)
+		before := rs.firstUp[name]
+		si, err := a.prepare(ctx, o, project, dir, s, rs)
+		if si.Observed != nil && si.Observed.Sysroot != "" {
+			sysroots = append(sysroots, si.Observed.Sysroot)
+		}
+		all := rs.extraList(s)
+		delete(rs.extra, name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			// the first observation stands
+			msg := fmt.Sprintf("it was observed once more with %s running, which failed (%v); this is the first observation, which stopped with status %d", strings.Join(cands, ", "), err, status)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", name, msg)
+			first.Observed.Warnings = append(first.Observed.Warnings, msg)
+			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+				return 0, fmt.Errorf("service %s: %w", name, err)
+			}
+			inputs[name] = first
+			continue
+		}
+		if first.Observed.Sysroot != "" {
+			a.RemoveAll(first.Observed.Sysroot)
+			sysroots = slices.DeleteFunc(sysroots, func(p string) bool { return p == first.Observed.Sysroot })
+		}
+		if err := checkArch(name, si); err != nil {
+			return 0, err
+		}
+		var ran, notRan []string
+		for _, c := range all {
+			if rs.up(c) {
+				// what was up already is no new evidence
+				if !slices.Contains(before, c) {
+					ran = append(ran, c)
+				}
+			} else {
+				why := rs.whyNotStarted(c)
+				if why == "" {
+					why = "it stopped while the observation ran"
+				}
+				notRan = append(notRan, fmt.Sprintf("%s (%s)", c, why))
+			}
+		}
+		// what else ran during the second observation: started for the others since the first one
+		var also []string
+		for _, n := range rs.upNames() {
+			if n != name && !slices.Contains(before, n) && !slices.Contains(all, n) && !slices.Contains(rs.closure(s), n) {
+				also = append(also, n)
+			}
+		}
+		if si.Observed != nil {
+			w := &si.Observed.Warnings
+			*w = append(*w, binds...)
+			if len(notRan) > 0 {
+				*w = append(*w, "these services were meant to run beside it for the second observation and did not: "+strings.Join(notRan, "; "))
+			}
+			if len(also) > 0 {
+				*w = append(*w, "also running during the second observation, started for the observation of other services: "+strings.Join(also, ", "))
+			}
+			// what the first observation had beside it
+			phrase := "observed alone"
+			if len(before) > 0 {
+				phrase = "observed with no new service beside it"
+			}
+			still := si.Observed.StoppedEarly && si.Observed.ExitCode != 0
+			switch {
+			case len(ran) == 0 && !still:
+				*w = append(*w, fmt.Sprintf("it stopped with status %d the first time and did not stop the second time, although none of the other services could run beside it; nothing is concluded from it", status))
+			case len(ran) == 0:
+				*w = append(*w, fmt.Sprintf("%s, it stopped with status %d; none of the other services could run beside it, so the second observation shows nothing new", phrase, status))
+			case still:
+				*w = append(*w, fmt.Sprintf("%s, it stopped with status %d; with %s running it stopped with status %d as well; nothing is concluded from it", phrase, status, strings.Join(ran, ", "), si.Observed.ExitCode))
+			default:
+				list := strings.Join(ran, ", ")
+				var msg string
+				if len(ran) == 1 {
+					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; if %s needs it, add it to depends_on of %s in docker-compose.yml (nothing was changed in the output for it)", phrase, status, list, o.seconds, name, name)
+				} else {
+					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; one or more of them may be needed: if so, add them to depends_on of %s in docker-compose.yml; the tool did not tell which one (nothing was changed in the output for it)", phrase, status, list, o.seconds, name)
+				}
+				si.HubItems = append(si.HubItems, plan.Item{Service: name, Kind: plan.Note, Key: "depends_on", Message: msg})
+			}
+		}
+		// what was observed before the second observation of this service did not have it
+		for other, osi := range inputs {
+			if other == name || osi.Observed == nil {
+				continue
+			}
+			if x := project.Service(other); x != nil && slices.Contains(rs.closure(x), name) {
+				if slices.Contains(rs.served[name], other) {
+					osi.Observed.Warnings = append(osi.Observed.Warnings, fmt.Sprintf("it was observed with the container of %s started from the file; %s was observed once more later, with other services running", name, name))
+				} else {
+					osi.Observed.Warnings = append(osi.Observed.Warnings, fmt.Sprintf("it was observed without %s (%s did not start); %s was observed once more later, with other services running", name, name, name))
+				}
+			}
+		}
+		inputs[name] = si
 	}
 
 	// The package of a service holds its files as they were at the end of its own observation. What
@@ -465,15 +611,21 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	var si gen.ServiceInput
 	image := s.Image
 	dfPath := ""
-	if s.Build != nil {
-		image = imageTag(p, dir, s)
-		var err error
-		dfPath, err = a.build(ctx, dir, s, image)
-		if err != nil {
+	if prev, ok := rs.firstImg[s.Name]; ok && rs.again[s.Name] {
+		// the second observation is of the image of the first one, not of a new build or pull
+		image, dfPath = prev.image, prev.dfPath
+	} else {
+		if s.Build != nil {
+			image = imageTag(p, dir, s)
+			var err error
+			dfPath, err = a.build(ctx, dir, s, image)
+			if err != nil {
+				return si, err
+			}
+		} else if err := a.fetch(ctx, o, image); err != nil {
 			return si, err
 		}
-	} else if err := a.fetch(ctx, o, image); err != nil {
-		return si, err
+		rs.firstImg[s.Name] = builtImage{image: image, dfPath: dfPath}
 	}
 	img, err := a.Docker.Inspect(ctx, image)
 	if err != nil {
@@ -499,7 +651,14 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.WorkingDir = s.WorkingDir
 	oo.User = s.User
 	var bindNotes []string
-	oo.Binds, bindNotes = rs.mountBinds(a, s.Name, a.binds(s, dir))
+	// the second observation does not say again what the first one said about the binds
+	ba := a
+	if rs.again[s.Name] {
+		q := *a
+		q.Stderr = io.Discard
+		ba = &q
+	}
+	oo.Binds, bindNotes = rs.mountBinds(ba, s.Name, ba.binds(s, dir))
 	oo.Binds = append(oo.Binds, hiddenVolumes(s)...)
 	oo.Seconds = o.seconds
 	// DOCK2NANO_KEEP_TRACE names a directory where the raw strace output of each service is kept
@@ -526,6 +685,9 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	}
 	oo.Network = rs.network
 	oo.NetworkAliases = []string{s.Name}
+	// what is up when the observation starts: it is no new evidence for a second one. A container
+	// that died before it is not in it.
+	rs.firstUp[s.Name] = rs.upNames()
 	fmt.Fprintf(a.Stderr, "%s: observing %s for %d seconds\n", s.Name, image, o.seconds)
 	res, err := a.Observe(ctx, oo)
 	si.Observed = res
@@ -536,10 +698,307 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 	}
+	rs.findCrashed(ctx, a, s, res)
+	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
+		rs.stopped[s.Name] = true
+	}
+	if res != nil {
+		if up := rs.runningDeps(s); len(up) > 0 {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("the services running during this observation: %s (its depends_on or --with)", strings.Join(up, ", ")))
+		}
+		var beside []string
+		for _, n := range rs.extraList(s) {
+			if rs.up(n) {
+				beside = append(beside, n)
+			}
+		}
+		if len(beside) > 0 {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("the services started beside it for this second observation: %s (the file does not make it depend on them)", strings.Join(beside, ", ")))
+		}
+	}
+	// The hub step of a service that waits for its second observation runs later, so the note
+	// that the list of the hub is an old copy goes to whichever service reads it first.
+	// A stop with an error while none of the dependencies ran says nothing about the program: the
+	// service is observed again, when the others are all prepared, and the hub waits for that.
+	if rs.wantsRetry(s, res) {
+		rs.retry = append(rs.retry, s.Name)
+		rs.hubArgs[s.Name] = hubArgs{image: image, built: s.Build != nil}
+		return si, nil
+	}
 	if err := a.hubStep(ctx, o, rs, s, image, s.Build != nil, &si); err != nil {
 		return si, err
 	}
 	return si, nil
+}
+
+// builtImage is the image that a service was observed from and the Dockerfile it was built with.
+type builtImage struct {
+	image  string
+	dfPath string
+}
+
+// hubArgs is what the hub step of a service whose observation is put off needs.
+type hubArgs struct {
+	image string
+	built bool
+}
+
+// retryMax is the most services that a second observation starts beside the one observed.
+const retryMax = 5
+
+// up says whether a service was started for an observation and was still running after the last
+// one.
+func (rs *runState) up(name string) bool {
+	return rs.running[name] != nil && !rs.crashed[name]
+}
+
+// upNames returns the services that are up, in file order.
+func (rs *runState) upNames() []string {
+	var out []string
+	for _, x := range rs.ordered {
+		if rs.up(x.Name) {
+			out = append(out, x.Name)
+		}
+	}
+	return out
+}
+
+// findCrashed marks the started services that stopped while s was observed, and says so in the
+// report of s. A stopper that cannot tell is taken to be running.
+func (rs *runState) findCrashed(ctx context.Context, a *App, s *compose.Service, res *observe.Result) {
+	for _, x := range rs.ordered {
+		n := x.Name
+		st := rs.running[n]
+		if st == nil || rs.crashed[n] {
+			continue
+		}
+		if u, ok := st.(interface{ Up(context.Context) bool }); ok && !u.Up(ctx) {
+			rs.crashed[n] = true
+			msg := fmt.Sprintf("the service %s stopped while %s was observed, so it is not counted as running", n, s.Name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+			if res != nil {
+				res.Warnings = append(res.Warnings, msg)
+			}
+		}
+	}
+}
+
+// startList returns the services started for the observation of s: those it needs and the ones
+// of a second observation, with what each of them needs, in dependency order.
+func (rs *runState) startList(s *compose.Service) []string {
+	need := map[string]bool{}
+	for _, n := range rs.closure(s) {
+		need[n] = true
+	}
+	for _, e := range rs.extra[s.Name] {
+		need[e] = true
+		if x := rs.service(e); x != nil {
+			for _, n := range rs.closure(x) {
+				need[n] = true
+			}
+		}
+	}
+	var out []string
+	for _, x := range rs.ordered {
+		if need[x.Name] && x.Name != s.Name {
+			out = append(out, x.Name)
+		}
+	}
+	return out
+}
+
+// extraList returns what is started for a second observation of s beside what the file makes it
+// need: the candidates and what they need, in dependency order.
+func (rs *runState) extraList(s *compose.Service) []string {
+	declared := map[string]bool{}
+	for _, n := range rs.closure(s) {
+		declared[n] = true
+	}
+	var out []string
+	for _, n := range rs.startList(s) {
+		if !declared[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// pickCandidates keeps the candidates that fit in retryMax started containers, counting what each
+// needs that does not run yet. A candidate that would make it more is left out.
+func (rs *runState) pickCandidates(cands []string) []string {
+	total := map[string]bool{}
+	var out []string
+	for _, c := range cands {
+		need := map[string]bool{}
+		names := []string{c}
+		if x := rs.service(c); x != nil {
+			names = append(names, rs.closure(x)...)
+		}
+		for _, n := range names {
+			if !rs.up(n) && !total[n] {
+				need[n] = true
+			}
+		}
+		if len(total)+len(need) > retryMax {
+			continue
+		}
+		for n := range need {
+			total[n] = true
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// whyNotStarted says why a service cannot be started for an observation, or "" when it can: it
+// failed to start before, it was not selected or is skipped, or it was not prepared.
+func (rs *runState) whyNotStarted(name string) string {
+	if why := rs.failed[name]; why != "" {
+		return why
+	}
+	if reason, no := rs.skipped[name]; no {
+		return reason
+	}
+	if _, ok := rs.starts[name]; !ok {
+		return "it was not prepared"
+	}
+	return ""
+}
+
+// stopOne stops the container started for an observation and forgets it, so that it can be
+// started again. It says false when the container could not be stopped.
+func (rs *runState) stopOne(a *App, name string) bool {
+	st := rs.running[name]
+	if st == nil {
+		return true
+	}
+	if err := st.Stop(context.Background()); err != nil {
+		// it is kept as it was: it is stopped again at the end, and it may still hold its name
+		fmt.Fprintf(a.Stderr, "%s: warning: stopping %s: %v; the old container may still hold the name %s on the network\n", ToolName, name, err, name)
+		return false
+	}
+	delete(rs.running, name)
+	delete(rs.crashed, name)
+	rs.order = slices.DeleteFunc(rs.order, func(n string) bool { return n == name })
+	return true
+}
+
+func (rs *runState) service(name string) *compose.Service {
+	for _, x := range rs.ordered {
+		if x.Name == name {
+			return x
+		}
+	}
+	return nil
+}
+
+// runningDeps returns the services that s needs by the file and that are running, in dependency
+// order.
+func (rs *runState) runningDeps(s *compose.Service) []string {
+	var out []string
+	for _, n := range rs.closure(s) {
+		if rs.up(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// missingDeps returns the services that s needs by the file and that are not running.
+func (rs *runState) missingDeps(s *compose.Service) []string {
+	var out []string
+	for _, n := range rs.closure(s) {
+		if !rs.up(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// candidates returns the services that could run beside s for a second observation: the others
+// that do not need s, that did not run when its first observation ended (they would show nothing
+// new), whose own observation did not stop with an error, that were not found unable to start and, with prepared, that were prepared.
+func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
+	was := map[string]bool{}
+	for _, n := range rs.firstUp[s.Name] {
+		was[n] = true
+	}
+	var out []string
+	for _, x := range rs.ordered {
+		if x.Name == s.Name || was[x.Name] || rs.failed[x.Name] != "" {
+			continue
+		}
+		if _, no := rs.skipped[x.Name]; no {
+			continue
+		}
+		if _, no := rs.late[x.Name]; no {
+			continue
+		}
+		// a service that stopped with an error when it was alone gives no evidence as a neighbour
+		if rs.stopped[x.Name] {
+			continue
+		}
+		if prepared {
+			if _, ok := rs.starts[x.Name]; !ok {
+				continue
+			}
+		}
+		if slices.Contains(rs.closure(x), s.Name) {
+			continue
+		}
+		out = append(out, x.Name)
+	}
+	return out
+}
+
+// wantsRetry says whether the observation of s stopped with an error, the file makes it depend on
+// nothing, and others could run beside it for a second observation.
+func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
+	if rs.noWith || res == nil || !res.StoppedEarly || res.ExitCode == 0 || res.Children > 0 || rs.retried[s.Name] {
+		return false
+	}
+	if len(s.DependsOn) > 0 {
+		return false
+	}
+	return len(rs.candidates(s, false)) > 0
+}
+
+// resetBinds makes a new copy of each read-write bind of s that no other service mounts, so that
+// the second observation starts from the files of the user and not from what the first one wrote.
+// For a bind that another service mounts too it returns a note: that copy is kept.
+func (rs *runState) resetBinds(a *App, p *compose.Project, dir string, s *compose.Service) []string {
+	var notes []string
+	// what binds says about a source it cannot use was said once, by the first observation
+	q := *a
+	q.Stderr = io.Discard
+	a = &q
+	for _, b := range a.binds(s, dir) {
+		if strings.HasSuffix(b, ":ro") {
+			continue
+		}
+		host, _, _ := strings.Cut(b, ":")
+		m := rs.binds[host]
+		if m == nil || m.path == "" || m.readOnly {
+			continue
+		}
+		shared := ""
+		for _, x := range p.Services {
+			if x.Name == s.Name {
+				continue
+			}
+			for _, xb := range a.binds(x, dir) {
+				if h, _, _ := strings.Cut(xb, ":"); h == host {
+					shared = x.Name
+				}
+			}
+		}
+		if shared != "" {
+			notes = append(notes, fmt.Sprintf("the bind %s is shared with %s: the second observation started from what the first one left there", host, shared))
+			continue
+		}
+		delete(rs.binds, host)
+	}
+	return notes
 }
 
 // cleanupTimeout bounds the removal of the network and of the containers at
@@ -561,6 +1020,25 @@ func networkName() (string, error) {
 // others.
 type runState struct {
 	network string
+	// noWith is --no-with; retry holds the services to observe again with the others running;
+	// retried the ones that were.
+	noWith  bool
+	retry   []string
+	retried map[string]bool
+	hubArgs map[string]hubArgs
+	// extra holds, by service, the services started beside it for its second observation; they
+	// are not in the file as its dependencies. firstUp holds the services that ran when its first
+	// observation ended. crashed holds the started services found stopped after an observation.
+	extra   map[string][]string
+	firstUp map[string][]string
+	crashed map[string]bool
+	// firstImg holds the image of each service as the first observation had it; again is set for
+	// the one that is observed a second time, which reuses it: no new build or pull.
+	firstImg map[string]builtImage
+	again    map[string]bool
+	// stopped holds the services whose observation ended with an error before its end.
+	stopped map[string]bool
+
 	ordered []*compose.Service
 	skipped map[string]string
 	// starts holds, by service name, how to start a service that was prepared.
@@ -627,7 +1105,26 @@ func (rs *runState) closure(s *compose.Service) []string {
 // the one of a context that has ended.
 func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Service) ([]string, error) {
 	var notes []string
-	for _, name := range rs.closure(s) {
+	if rs.noWith {
+		if need := rs.closure(s); len(need) > 0 {
+			msg := fmt.Sprintf("the services %s were not started for the observation of %s (--no-with)", strings.Join(need, ", "), s.Name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+			notes = append(notes, msg)
+		}
+		return notes, nil
+	}
+	for _, name := range rs.startList(s) {
+		if rs.running[name] != nil && rs.crashed[name] {
+			msg := fmt.Sprintf("the service %s stopped during an earlier observation; it is started again for the observation of %s", name, s.Name)
+			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+			notes = append(notes, msg)
+			if !rs.stopOne(a, name) {
+				msg := fmt.Sprintf("the old container of %s could not be stopped and may still hold its name on the network, so it is not started again for the observation of %s", name, s.Name)
+				fmt.Fprintf(a.Stderr, "%s: warning: %s\n", s.Name, msg)
+				notes = append(notes, msg)
+				continue
+			}
+		}
 		if rs.running[name] != nil {
 			rs.served[name] = append(rs.served[name], s.Name)
 			for _, n := range rs.noted[name] {
@@ -637,14 +1134,7 @@ func (rs *runState) startDependencies(ctx context.Context, a *App, s *compose.Se
 			}
 			continue
 		}
-		why := rs.failed[name]
-		if why == "" {
-			if reason, no := rs.skipped[name]; no {
-				why = reason
-			} else if _, ok := rs.starts[name]; !ok {
-				why = "it was not prepared"
-			}
-		}
+		why := rs.whyNotStarted(name)
 		if why == "" {
 			so := rs.starts[name]
 			so.Network = rs.network
