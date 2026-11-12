@@ -40,6 +40,10 @@ jobs:
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
           git -C /tmp/ops-src checkout master
+          # dns_search: the single commit of feat/compose-dns-search-indep on top of master, fetched at run time
+          git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
+          git -C /tmp/ops-src fetch fork feat/compose-dns-search-indep
+          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick FETCH_HEAD
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
