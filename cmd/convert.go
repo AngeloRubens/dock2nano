@@ -80,7 +80,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, again: map[string]bool{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -154,6 +154,23 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// does not make depend on any, is observed once more with some of the others running. The file
 	// and the compose.yaml are not changed by it: when the second observation does not stop, the
 	// report suggests the depends_on to write.
+	// hubKeep is the hub step for a service whose first observation stands. A package of the hub
+	// that replaces the directory of the observation (a build that must be used whole) is a new
+	// directory: it is tracked, so that it is removed with the others.
+	hubKeep := func(s *compose.Service, image string, built bool, first *gen.ServiceInput) error {
+		old := ""
+		if first.Observed != nil {
+			old = first.Observed.Sysroot
+		}
+		err := a.hubStep(ctx, o, rs, s, image, built, first)
+		if first.Observed != nil && first.Observed.Sysroot != old {
+			sysroots = slices.DeleteFunc(sysroots, func(p string) bool { return p == old })
+			if first.Observed.Sysroot != "" {
+				sysroots = append(sysroots, first.Observed.Sysroot)
+			}
+		}
+		return err
+	}
 	for _, name := range rs.retry {
 		s := project.Service(name)
 		first := inputs[name]
@@ -165,7 +182,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		if len(cands) == 0 {
 			// none of the others could run with it: the stop stands, and the hub is read as it
 			// is for a service that needs nobody
-			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+			if err := hubKeep(s, ha.image, ha.built, &first); err != nil {
 				return 0, fmt.Errorf("service %s: %w", name, err)
 			}
 			inputs[name] = first
@@ -177,7 +194,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			msg := fmt.Sprintf("it stopped with status %d; it is not observed again because its container, started for another service, could not be stopped and may still hold the name %s on the network", status, name)
 			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", name, msg)
 			first.Observed.Warnings = append(first.Observed.Warnings, msg)
-			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+			if err := hubKeep(s, ha.image, ha.built, &first); err != nil {
 				return 0, fmt.Errorf("service %s: %w", name, err)
 			}
 			inputs[name] = first
@@ -185,8 +202,11 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		rs.extra[name] = cands
 		rs.retried[name] = true
-		rs.again[name] = true
-		fmt.Fprintf(a.Stderr, "%s: it stopped with status %d while %s did not run; observing it again with them running (--no-with turns this off)\n", name, status, strings.Join(cands, ", "))
+		with := "them"
+		if len(cands) == 1 {
+			with = "it"
+		}
+		fmt.Fprintf(a.Stderr, "%s: it stopped with status %d while %s did not run; observing it again with %s running (--no-with turns this off)\n", name, status, strings.Join(cands, ", "), with)
 		binds := rs.resetBinds(a, project, dir, s)
 		before := rs.firstUp[name]
 		si, err := a.prepare(ctx, o, project, dir, s, rs)
@@ -203,7 +223,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			msg := fmt.Sprintf("it was observed once more with %s running, which failed (%v); this is the first observation, which stopped with status %d", strings.Join(cands, ", "), err, status)
 			fmt.Fprintf(a.Stderr, "%s: warning: %s\n", name, msg)
 			first.Observed.Warnings = append(first.Observed.Warnings, msg)
-			if err := a.hubStep(ctx, o, rs, s, ha.image, ha.built, &first); err != nil {
+			if err := hubKeep(s, ha.image, ha.built, &first); err != nil {
 				return 0, fmt.Errorf("service %s: %w", name, err)
 			}
 			inputs[name] = first
@@ -215,6 +235,10 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		if err := checkArch(name, si); err != nil {
 			return 0, err
+		}
+		file := project.File
+		if file == "" {
+			file = "the compose file"
 		}
 		var ran, notRan []string
 		for _, c := range all {
@@ -264,9 +288,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 				list := strings.Join(ran, ", ")
 				var msg string
 				if len(ran) == 1 {
-					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; if %s needs it, add it to depends_on of %s in docker-compose.yml (nothing was changed in the output for it)", phrase, status, list, o.seconds, name, name)
+					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; if %s needs it, add it to depends_on of %s in %s (nothing was changed in the output for it)", phrase, status, list, o.seconds, name, name, file)
 				} else {
-					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; one or more of them may be needed: if so, add them to depends_on of %s in docker-compose.yml; the tool did not tell which one (nothing was changed in the output for it)", phrase, status, list, o.seconds, name)
+					msg = fmt.Sprintf("%s, it stopped with status %d; with %s running it did not stop with an error in %d seconds; one or more of them may be needed: if so, add them to depends_on of %s in %s; the tool did not tell which one (nothing was changed in the output for it)", phrase, status, list, o.seconds, name, file)
 				}
 				si.HubItems = append(si.HubItems, plan.Item{Service: name, Kind: plan.Note, Key: "depends_on", Message: msg})
 			}
@@ -561,7 +585,8 @@ func applyWith(p *compose.Project, with []string, only map[string]bool) ([]strin
 }
 
 // dependencyOrder sorts the services by depends_on, keeping the file order
-// for ties.
+// for ties. internal/gen has the same sort (its unexported order function): the two are copies
+// of each other, so a change here goes there too.
 func dependencyOrder(p *compose.Project) ([]*compose.Service, error) {
 	for _, s := range p.Services {
 		for _, d := range s.DependsOn {
@@ -611,7 +636,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	var si gen.ServiceInput
 	image := s.Image
 	dfPath := ""
-	if prev, ok := rs.firstImg[s.Name]; ok && rs.again[s.Name] {
+	if prev, ok := rs.firstImg[s.Name]; ok && rs.retried[s.Name] {
 		// the second observation is of the image of the first one, not of a new build or pull
 		image, dfPath = prev.image, prev.dfPath
 	} else {
@@ -653,7 +678,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	var bindNotes []string
 	// the second observation does not say again what the first one said about the binds
 	ba := a
-	if rs.again[s.Name] {
+	if rs.retried[s.Name] {
 		q := *a
 		q.Stderr = io.Discard
 		ba = &q
@@ -664,8 +689,8 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	// DOCK2NANO_KEEP_TRACE names a directory where the raw strace output of each service is kept
 	// (one file per service, named from the service name made safe for a file name), to read what the
 	// observation saw.
-	if dir, ok := a.LookupEnv("DOCK2NANO_KEEP_TRACE"); ok && dir != "" {
-		oo.KeepTrace = filepath.Join(dir, tagComponent(s.Name)+".strace")
+	if traceDir, ok := a.LookupEnv("DOCK2NANO_KEEP_TRACE"); ok && traceDir != "" {
+		oo.KeepTrace = filepath.Join(traceDir, tagComponent(s.Name)+".strace")
 	}
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
@@ -1032,10 +1057,9 @@ type runState struct {
 	extra   map[string][]string
 	firstUp map[string][]string
 	crashed map[string]bool
-	// firstImg holds the image of each service as the first observation had it; again is set for
+	// firstImg holds the image of each service as the first observation had it; retried is set for
 	// the one that is observed a second time, which reuses it: no new build or pull.
 	firstImg map[string]builtImage
-	again    map[string]bool
 	// stopped holds the services whose observation ended with an error before its end.
 	stopped map[string]bool
 

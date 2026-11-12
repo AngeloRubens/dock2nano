@@ -1811,7 +1811,7 @@ func TestEarlyErrorWithNoDependencyRunningIsObservedAgainWithTheOthers(t *testin
 	// and the output stay as the file has them
 	sug := suggestion(h, "backend")
 	if len(sug) != 1 || sug[0].Kind != plan.Note || sug[0].Key != "depends_on" ||
-		!strings.Contains(sug[0].Message, "stopped with status 1; with db running it did not stop with an error in 30 seconds; if backend needs it, add it to depends_on of backend in docker-compose.yml") {
+		!strings.Contains(sug[0].Message, "stopped with status 1; with db running it did not stop with an error in 30 seconds; if backend needs it, add it to depends_on of backend in compose.yaml") {
 		t.Errorf("suggestion %+v", sug)
 	}
 	if got := h.genIn[0].Project.Service("backend").DependsOn; len(got) != 0 {
@@ -2304,7 +2304,7 @@ func TestSecondObservationIsBoundedAndNamesWhatRanBesideIt(t *testing.T) {
 	}
 	sug := suggestion(h, "backend")
 	if len(sug) != 1 || !strings.Contains(sug[0].Message, "s0, s1, s2, s3, s4") ||
-		!strings.Contains(sug[0].Message, "one or more of them may be needed: if so, add them to depends_on of backend in docker-compose.yml; the tool did not tell which one") {
+		!strings.Contains(sug[0].Message, "one or more of them may be needed: if so, add them to depends_on of backend in compose.yaml; the tool did not tell which one") {
 		t.Errorf("suggestion %+v", sug)
 	}
 }
@@ -2508,5 +2508,49 @@ func TestHeldWarningKeepsTheHubClauseOutWhenARequiredBuildWouldBeRead(t *testing
 	}
 	if hasWarning(h, "backend", "the hub was not consulted") {
 		t.Errorf("the hub is read for a required build: %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestAHubPackageUsedAfterAFailedSecondObservationIsRemoved(t *testing.T) {
+	h := newHarness(t)
+	stub := newHubApp(h, "b:1.0.0", "d")
+	rows, err := hub.ParseRequired([]byte("rows:\n  - images: [b]\n    programs: [app]\n    packages:\n      - eyberg/b\n    reason: a test row\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	stub.pkgs = []hub.Package{hubPkg("eyberg", "b", "1.0.0")}
+	h.app.RemoveAll = func(p string) error {
+		h.removed = append(h.removed, p)
+		return os.RemoveAll(p)
+	}
+	h.write("compose.yaml", "services:\n  backend:\n    image: b:1.0.0\n  db:\n    image: d\n")
+	backendRuns := 0
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		r := &observe.Result{Sysroot: "/sysroots/" + o.Image + strconv.Itoa(len(h.observed)), Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}}
+		if o.Image == "b:1.0.0" {
+			backendRuns++
+			if backendRuns == 2 {
+				return nil, errors.New("the second observation failed")
+			}
+			r.StoppedEarly, r.ExitCode = true, 1
+		}
+		return r, nil
+	}
+	h.mustRun(0, "convert")
+	if backendRuns != 2 {
+		t.Fatalf("backend was observed %d times, want 2 (the test does not reach the fallback)", backendRuns)
+	}
+	if countCalls(stub.calls, "whole eyberg/b 1.0.0") != 1 {
+		t.Fatalf("hub calls %v", stub.calls)
+	}
+	dest := h.genIn[0].Services["backend"].Observed.Sysroot
+	if !strings.Contains(dest, ToolName+"-hub-") {
+		t.Fatalf("the sysroot of backend is %q, not a directory of the hub", dest)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Errorf("the directory of the hub package was not removed: %s", dest)
 	}
 }

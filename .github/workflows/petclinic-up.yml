@@ -54,6 +54,7 @@ jobs:
       - name: ops from source
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
+          # pinned to a52795e, the ops these results were measured with (before the arp fix of PR 1805); compose-up.yml follows master
           git -C /tmp/ops-src checkout a52795e38ba33a006f0ba740fee0f18fec58fbbb
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops .

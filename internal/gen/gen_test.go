@@ -1245,10 +1245,13 @@ func TestLauncherNpmIgnoreScriptsExplainsTheExit(t *testing.T) {
 			t.Errorf("%s: %d launcher items", tc.name, len(got))
 			continue
 		}
-		for _, want := range []string{"sets ignore-scripts=true", "the node program as its command (node <file>), which nanos needs anyway", "likely reason", "6.14.13", "42994092518", "not the fix"} {
+		for _, want := range []string{"sets ignore-scripts=true", "the node program as its command (node <file>), which nanos needs anyway", "likely reason", "6.14.13", "not the fix"} {
 			if !strings.Contains(got[0].Message, want) {
 				t.Errorf("%s: message %q does not hold %q", tc.name, got[0].Message, want)
 			}
+		}
+		if strings.Contains(got[0].Message, "run 4") || strings.Contains(got[0].Message, "of the fork") {
+			t.Errorf("%s: the message names a private run: %q", tc.name, got[0].Message)
 		}
 		if strings.Contains(got[0].Message, "the image itself runs nothing") {
 			t.Errorf("%s: the message still claims the image runs nothing", tc.name)

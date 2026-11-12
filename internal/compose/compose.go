@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,8 @@ type Project struct {
 	Services []*Service // in file order
 	Networks []string   // names declared at top level
 	Volumes  []string   // names declared at top level
+	// File is the base name of the file that ParseFile read, empty for Parse.
+	File string
 	// Unknown lists top-level keys that are not modelled, such as configs.
 	Unknown []string
 	// secretFiles maps the name of a secret whose source is a file to that file.
@@ -144,6 +147,7 @@ func ParseFile(path string) (*Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	p.File = filepath.Base(path)
 	return p, nil
 }
 

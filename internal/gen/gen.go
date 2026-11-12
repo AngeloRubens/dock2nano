@@ -815,7 +815,7 @@ func (g *generator) launcherNote(s *compose.Service, obs *observe.Result) bool {
 		}
 	}
 	if name == "npm" && script != "" && !elsewhere && obs.StoppedEarly && obs.ExitCode == 0 && obs.Children == 0 && npmrcIgnoresScripts(obs.Sysroot, obs.WorkingDir) {
-		msg += ". Give the image the node program as its command (node <file>), which nanos needs anyway. The container also stopped with status 0 before the end of the observation and npm started no child process, and the .npmrc of the working directory sets ignore-scripts=true: npm 6 and older skip even npm start when it does, which is the likely reason (it was seen with npm 6.14.13, where the same image also exits with status 0 under plain Docker; run 42994092518 of the fork). The setting may be there on purpose, so it is not the fix"
+		msg += ". Give the image the node program as its command (node <file>), which nanos needs anyway. The container also stopped with status 0 before the end of the observation and npm started no child process, and the .npmrc of the working directory sets ignore-scripts=true: npm 6 and older skip even npm start when it does, which is the likely reason (it was seen with npm 6.14.13, where the same image also exits with status 0 under plain Docker). The setting may be there on purpose, so it is not the fix"
 	}
 	g.add(s.Name, plan.Unsupported, "launcher", msg)
 	return true

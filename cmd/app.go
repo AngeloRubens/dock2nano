@@ -97,7 +97,8 @@ Environment:
                      SERVICE.strace per service. The directory must exist. The files hold the
                      command lines, file paths and link targets the program used, not the values
                      of environment variables or the contents of files. A service observed more
-                     than once keeps only the last trace.
+                     than once keeps only the last trace, which may be the trace of a failed
+                     second observation.
 
 Exit status: 0 on success, 1 on an error, 2 with --strict and an unsupported
 item in the report.
