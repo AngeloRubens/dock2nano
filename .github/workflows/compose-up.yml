@@ -18,24 +18,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: nginx-golang-new-cur, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-new-cur, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-new-cur, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-new-nohub, patch: nginx-golang, dir: nginx-golang, flags: "--no-hub", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-new-nohub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names --no-hub", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-new-nohub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "--no-hub", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-new-prehub, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "757091f^1", patchref: "88de49b"}
-          - {name: nginx-golang-plain-new-prehub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "757091f^1", patchref: "88de49b"}
-          - {name: nginx-flask-mongo-new-prehub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "757091f^1", patchref: "88de49b"}
-          - {name: nginx-golang-old-cur, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-old-cur, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-old-cur, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-old-nohub, patch: nginx-golang, dir: nginx-golang, flags: "--no-hub", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-old-nohub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names --no-hub", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-old-nohub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "--no-hub", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-old-prehub, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: old, convref: "757091f^1", patchref: "88de49b"}
-          - {name: nginx-golang-plain-old-prehub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: old, convref: "757091f^1", patchref: "88de49b"}
-          - {name: nginx-flask-mongo-old-prehub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-golang-A, patch: nginx-golang-A, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
+          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
+          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
+          - {name: nginx-golang-plain-A, patch: nginx-golang-plain-A, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
+          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 proxy=192.168.33.51"}
+          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
+          - {name: nginx-flask-mongo-A, patch: nginx-flask-mongo-A, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
+          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
+          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
+          - {name: nginx-flask-mongo-plain-A, patch: nginx-flask-mongo-plain-A, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
+          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "no", ips: "backend=192.168.33.50 web=192.168.33.51 mongo=192.168.33.52"}
+          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD", opsdns: "yes", ips: ""}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,6 +60,10 @@ jobs:
             git -C /tmp/ops-src checkout 515b074effb993333dc88c1bbf8c6dccf25ee271
             git -C /tmp/ops-src fetch origin 67187c4fdcf795c97a9757f073c9c62beedc05d8
             git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick 67187c4fdcf795c97a9757f073c9c62beedc05d8
+          fi
+          if [ "${{ matrix.opsdns }}" = yes ]; then
+            sed -i 's#c.Program = "dns"#c.Program = "dns"\n\tc.RunConfig.IPAddress = "192.168.33.2"\n\tc.RunConfig.Gateway = "192.168.33.1"\n\tc.RunConfig.NetMask = "255.255.255.0"#' /tmp/ops-src/cmd/compose.go
+            grep -n -A3 'c.Program = "dns"' /tmp/ops-src/cmd/compose.go
           fi
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
@@ -183,6 +181,7 @@ jobs:
           for p in ${{ matrix.probe }}; do
             svc=${p%%:*}; rest=${p#*:}; port=${rest%%:*}; kind=${rest##*:}
             ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
+            if [ -z "$ip" ]; then ip=$(echo " ${{ matrix.ips }}" | grep -o " $svc=[0-9.]*" | cut -d= -f2); fi
             echo "=== $svc $ip:$port $kind"
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
