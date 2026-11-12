@@ -56,7 +56,12 @@ func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.
 	held := len(miss) > 0
 	if obs.StoppedEarly && obs.ExitCode != 0 {
 		if held {
-			obs.Warnings = append(obs.Warnings, fmt.Sprintf("the container stopped with status %d while the services it needs (%s) were not running; the stop may be that, so the hub was not consulted for it", obs.ExitCode, strings.Join(miss, ", ")))
+			msg := fmt.Sprintf("the container stopped with status %d while the services it needs (%s) were not running; the stop may be that", obs.ExitCode, strings.Join(miss, ", "))
+			// said only when the hub would have been read for this stop
+			if !o.noHub && a.Hub != nil && hubArch(si.Image) != "" && obs.Children == 0 {
+				msg += ", so the hub was not consulted for it"
+			}
+			obs.Warnings = append(obs.Warnings, msg)
 		} else if up := rs.runningDeps(s); len(up) > 0 {
 			obs.Warnings = append(obs.Warnings, fmt.Sprintf("the container stopped with status %d although the services it needs (%s) were running; the stop may be a problem of a dependency (credentials, a schema, a name) or of the configuration, not of the program", obs.ExitCode, strings.Join(up, ", ")))
 		}

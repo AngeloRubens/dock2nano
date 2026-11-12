@@ -76,7 +76,7 @@ Flags of convert:
                      depends_on nor those of --with. Without it, the services a service lists in
                      depends_on run during its observation (the report names them). A service that
                      lists no depends_on and stops with an error is observed once more with up to
-                     5 of the others running; if it then does not stop, the report suggests the
+                     5 of the others running (and what those need); if it then does not stop, the report suggests the
                      depends_on to add (nothing is changed in the output). With --no-with a stop
                      with an error of a service whose depends_on were not started does not read
                      the hub

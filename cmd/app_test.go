@@ -1753,7 +1753,7 @@ func failsUnless(h *harness, image, need string) {
 func suggestion(h *harness, svc string) []plan.Item {
 	var out []plan.Item
 	for _, it := range h.genIn[len(h.genIn)-1].Services[svc].HubItems {
-		if strings.HasPrefix(it.Key, "depends_on.") {
+		if it.Key == "depends_on" {
 			out = append(out, it)
 		}
 	}
@@ -1779,8 +1779,8 @@ func TestEarlyErrorWithNoDependencyRunningIsObservedAgainWithTheOthers(t *testin
 	// the second observation did not stop: the report suggests the depends_on, and the project
 	// and the output stay as the file has them
 	sug := suggestion(h, "backend")
-	if len(sug) != 1 || sug[0].Kind != plan.Approximated || sug[0].Key != "depends_on.db" ||
-		!strings.Contains(sug[0].Message, "stopped with status 1; with db running it did not; if it needs them, add depends_on: [db] to docker-compose.yml") {
+	if len(sug) != 1 || sug[0].Kind != plan.Note || sug[0].Key != "depends_on" ||
+		!strings.Contains(sug[0].Message, "stopped with status 1; with db running it did not stop with an error in 30 seconds; if backend needs it, add it to depends_on of backend in docker-compose.yml") {
 		t.Errorf("suggestion %+v", sug)
 	}
 	if got := h.genIn[0].Project.Service("backend").DependsOn; len(got) != 0 {
@@ -1998,27 +1998,195 @@ func countCalls(calls []string, what string) int {
 	return n
 }
 
-func TestAServiceRunningBesideAnotherSecondObservationIsNotObservedAgain(t *testing.T) {
+func TestAContainerStartedForADependentIsStoppedAndTheServiceObservedAgain(t *testing.T) {
 	h := newHarness(t)
-	h.write("compose.yaml", "services:\n  backend:\n    image: b\n  db:\n    image: d\n")
-	h.haveAll("b", "d")
-	stoppedWith(h, map[string]int{"b": 1, "d": 1})
+	h.write("compose.yaml", "services:\n  api:\n    image: a\n  web:\n    image: w\n    depends_on: [api]\n  db:\n    image: d\n")
+	h.haveAll("a", "w", "d")
+	stoppedWith(h, map[string]int{"a": 1})
 	h.mustRun(0, "convert")
 	n := 0
 	for _, i := range h.names() {
-		if i == "d" {
+		if i == "a" {
 			n++
 		}
 	}
-	if n != 1 {
-		t.Errorf("db was observed %d times while its container ran: %v", n, h.names())
+	if n != 2 {
+		t.Fatalf("api was observed %d times: %v", n, h.names())
 	}
-	if !hasWarning(h, "db", "not observed again") {
-		t.Errorf("warnings %q", h.genIn[0].Services["db"].Observed.Warnings)
+	// its own container, started for web, is stopped before the second observation
+	last := -1
+	stop := -1
+	for i, e := range h.events {
+		if e == "observe a" {
+			last = i
+		}
+		if e == "stop a" && stop < 0 {
+			stop = i
+		}
+	}
+	if stop < 0 || stop > last {
+		t.Errorf("the container of api was not stopped before its second observation: %v", h.events)
+	}
+	if hasWarning(h, "api", "second observation of another service") {
+		t.Errorf("a false warning: %q", h.genIn[0].Services["api"].Observed.Warnings)
+	}
+	if !hasWarning(h, "web", "it was observed with the container of api started from the file; api was observed once more later") {
+		t.Errorf("web: %q", h.genIn[0].Services["web"].Observed.Warnings)
 	}
 }
 
-func TestWhenNoCandidateCanBeStartedTheLastServiceReadsTheHubOnce(t *testing.T) {
+// failsUnlessAll makes the observation of each of the images stop early with status 1 until the
+// container of need was started.
+func failsUnlessAll(h *harness, need string, images ...string) {
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		r := &observe.Result{Sysroot: "/sysroots/" + o.Image + strconv.Itoa(len(h.observed)), Program: "/usr/bin/app", Argv: []string{"/usr/bin/app"}}
+		up := false
+		for _, e := range h.events {
+			up = up || e == "start "+need
+		}
+		if slices.Contains(images, o.Image) && !up {
+			r.StoppedEarly, r.ExitCode = true, 1
+		}
+		return r, nil
+	}
+}
+
+// the shape of nginx-nodejs-redis: two services that need redis and do not say so
+func TestTwoServicesThatNeedAnotherOneThatTheFileDoesNotSayAreBothObservedWithIt(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  redis:\n    image: r\n  web1:\n    image: w1\n  web2:\n    image: w2\n")
+	h.haveAll("r", "w1", "w2")
+	failsUnlessAll(h, "r", "w1", "w2")
+	h.mustRun(0, "convert")
+	if got := h.names(); !reflect.DeepEqual(got, []string{"r", "w1", "w2", "w1", "w2"}) {
+		t.Fatalf("observed %v", got)
+	}
+	// one container of redis serves both, and the other web service was not started beside the first
+	if len(h.started) != 1 || h.started[0].Image != "r" {
+		t.Errorf("started %v", h.started)
+	}
+	for _, svc := range []string{"web1", "web2"} {
+		sug := suggestion(h, svc)
+		if len(sug) != 1 || !strings.Contains(sug[0].Message, "with redis running it did not stop") {
+			t.Errorf("%s: suggestion %+v", svc, sug)
+		}
+		if si := h.genIn[0].Services[svc].Observed; si.StoppedEarly {
+			t.Errorf("%s: the observation kept is the one that stopped", svc)
+		}
+	}
+}
+
+func TestADependencyThatStoppedIsStartedAgainForTheNextService(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  db:\n    image: d\n  a:\n    image: a\n    depends_on: [db]\n  b:\n    image: b\n    depends_on: [db]\n")
+	h.haveAll("d", "a", "b")
+	h.crashed = map[string]bool{"d": true}
+	h.mustRun(0, "convert")
+	n := 0
+	for _, e := range h.events {
+		if e == "start d" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("db was started %d times: %v", n, h.events)
+	}
+	if !hasWarning(h, "b", "the service db stopped during an earlier observation; it is started again for the observation of b") {
+		t.Errorf("warnings %q", h.genIn[0].Services["b"].Observed.Warnings)
+	}
+}
+
+func TestAStartedServiceThatStopsDuringAnObservationOfAnotherIsFound(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  db:\n    image: d\n  a:\n    image: a\n    depends_on: [db]\n  c:\n    image: c\n")
+	h.haveAll("d", "a", "c")
+	h.onObserve = func(o observe.Options) error {
+		if o.Image == "c" {
+			h.crashed = map[string]bool{"d": true}
+		}
+		return nil
+	}
+	h.mustRun(0, "convert")
+	if !hasWarning(h, "c", "the service db stopped while c was observed") {
+		t.Errorf("warnings %q", h.genIn[0].Services["c"].Observed.Warnings)
+	}
+}
+
+func TestRunningNamesKeepsAContainerThatDied(t *testing.T) {
+	h := newHarness(t)
+	rs := &runState{ordered: []*compose.Service{{Name: "db"}, {Name: "web"}}, running: map[string]Stopper{"db": &fakeStopper{h: h, name: "d"}}, crashed: map[string]bool{"db": true}}
+	if got := rs.runningNames(); !reflect.DeepEqual(got, []string{"db"}) {
+		t.Errorf("runningNames %v", got)
+	}
+	if rs.up("db") {
+		t.Errorf("a container that died is up")
+	}
+}
+
+func TestACandidateIsCountedWithWhatItNeeds(t *testing.T) {
+	var ordered []*compose.Service
+	var deps []compose.Dependency
+	for _, n := range []string{"m1", "m2", "m3", "m4", "m5"} {
+		ordered = append(ordered, &compose.Service{Name: n})
+		deps = append(deps, compose.Dependency{Service: n})
+	}
+	ordered = append(ordered, &compose.Service{Name: "c1", DependsOn: deps}, &compose.Service{Name: "backend"})
+	rs := &runState{ordered: ordered, running: map[string]Stopper{}, crashed: map[string]bool{}}
+	// c1 and the five it needs are six containers: more than retryMax
+	if got := rs.pickCandidates([]string{"c1"}); len(got) != 0 {
+		t.Errorf("picked %v", got)
+	}
+	if got := rs.pickCandidates([]string{"m1", "c1"}); !reflect.DeepEqual(got, []string{"m1"}) {
+		t.Errorf("picked %v", got)
+	}
+}
+
+func TestHeldWarningDoesNotPromiseWhatNoHubWouldDo(t *testing.T) {
+	h := newHarness(t)
+	newHubApp(h, "b", "d")
+	h.write("compose.yaml", "services:\n  backend:\n    image: b\n    depends_on: [db]\n  db:\n    image: d\n")
+	h.startErr["d"] = errors.New("exited at once")
+	stoppedWith(h, map[string]int{"b": 1})
+	h.mustRun(0, "convert", "--no-hub")
+	if !hasWarning(h, "backend", "status 1 while the services it needs (db) were not running; the stop may be that") {
+		t.Fatalf("warnings %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+	if hasWarning(h, "backend", "the hub was not consulted") {
+		t.Errorf("the hub is off and the warning says it was not consulted for this: %q", h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestSecondObservationReusesTheImageOfTheFirst(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  backend:\n    build: ./b\n  db:\n    image: d\n")
+	h.write("b/Dockerfile", "FROM scratch\n")
+	h.haveAll("d")
+	h.app.Observe = func(ctx context.Context, o observe.Options) (*observe.Result, error) {
+		h.observed = append(h.observed, o)
+		h.events = append(h.events, "observe "+o.Image)
+		r := &observe.Result{Sysroot: "/sysroots/" + strconv.Itoa(len(h.observed)), Program: "/usr/bin/app"}
+		if strings.HasSuffix(o.Image, "/backend:latest") && !slices.Contains(h.events, "start d") {
+			r.StoppedEarly, r.ExitCode = true, 1
+		}
+		return r, nil
+	}
+	h.mustRun(0, "convert")
+	n := 0
+	for _, i := range h.names() {
+		if strings.HasSuffix(i, "/backend:latest") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("backend was observed %d times", n)
+	}
+	if len(h.dock.builds) != 1 {
+		t.Errorf("the image was built %d times", len(h.dock.builds))
+	}
+}
+func TestServicesThatAllStopAloneGiveEachOtherNoEvidenceAndReadTheHub(t *testing.T) {
 	h := newHarness(t)
 	stub := newHubApp(h, "b", "c", "d")
 	h.write("compose.yaml", "services:\n  backend:\n    image: b\n  cache:\n    image: c\n  db:\n    image: d\n")
@@ -2027,11 +2195,11 @@ func TestWhenNoCandidateCanBeStartedTheLastServiceReadsTheHubOnce(t *testing.T) 
 	}
 	stoppedWith(h, map[string]int{"b": 1, "c": 1, "d": 1})
 	h.mustRun(0, "convert")
-	// backend and cache are observed twice, db once: none of the others is left to run beside it
-	if got := h.names(); !reflect.DeepEqual(got, []string{"b", "c", "d", "b", "c"}) {
+	// each one stopped alone, so none of the others is evidence for another: each is observed once
+	if got := h.names(); !reflect.DeepEqual(got, []string{"b", "c", "d"}) {
 		t.Fatalf("observed %v", got)
 	}
-	// every service reads the hub once, the third without a second observation
+	// and every service reads the hub once
 	if n := countCalls(stub.calls, "manifest"); n != 3 {
 		t.Errorf("the hub was read %d times: %v", n, stub.calls)
 	}
@@ -2103,7 +2271,8 @@ func TestSecondObservationIsBoundedAndNamesWhatRanBesideIt(t *testing.T) {
 		t.Errorf("started %d services, want %d: %v", len(h.started), retryMax, h.started)
 	}
 	sug := suggestion(h, "backend")
-	if len(sug) != 1 || !strings.Contains(sug[0].Message, "s0, s1, s2, s3, s4") {
+	if len(sug) != 1 || !strings.Contains(sug[0].Message, "s0, s1, s2, s3, s4") ||
+		!strings.Contains(sug[0].Message, "one or more of them may be needed: if so, add them to depends_on of backend in docker-compose.yml; the tool did not tell which one") {
 		t.Errorf("suggestion %+v", sug)
 	}
 }
@@ -2116,7 +2285,7 @@ func TestDependentsObservedBeforeTheSecondObservationSayIt(t *testing.T) {
 	h.startErr["b"] = errors.New("exited at once")
 	stoppedWith(h, map[string]int{"b": 1})
 	h.mustRun(0, "convert")
-	if !hasWarning(h, "web", "it needs backend, which was observed once more after this service was observed") {
+	if !hasWarning(h, "web", "it was observed without backend (backend did not start); backend was observed once more later") {
 		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
 	}
 }

@@ -60,6 +60,8 @@ type StartOptions struct {
 type Running struct {
 	d  Docker
 	id string
+	// log receives a warning when the container cannot be asked about.
+	log func(format string, args ...any)
 	// Notes are things to tell the user about how the container came up, for instance that it was
 	// running at the deadline but listened on no port.
 	Notes []string
@@ -78,7 +80,13 @@ func (r *Running) Up(ctx context.Context) bool {
 		return false
 	}
 	up, err := r.d.Running(ctx, r.id)
-	return err != nil || up
+	if err != nil {
+		if r.log != nil {
+			r.log("warning: asking whether the container runs: %v; it is taken to be running\n", err)
+		}
+		return true
+	}
+	return up
 }
 
 // Stop stops and removes the container, with a context of its own so that it also works after
@@ -166,7 +174,7 @@ func Start(ctx context.Context, d Docker, o StartOptions) (*Running, error) {
 	if err != nil {
 		return nil, fmt.Errorf("observe: start: creating the container: %w", err)
 	}
-	started := &Running{d: d, id: id}
+	started := &Running{d: d, id: id, log: o.Log}
 	fail := func(err error) (*Running, error) {
 		if serr := started.Stop(ctx); serr != nil {
 			err = errors.Join(err, serr)
