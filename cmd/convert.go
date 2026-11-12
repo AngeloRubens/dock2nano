@@ -79,7 +79,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, again: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, again: map[string]bool{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -653,6 +653,9 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, notes...)
 	}
 	rs.findCrashed(ctx, a, s, res)
+	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
+		rs.stopped[s.Name] = true
+	}
 	if res != nil {
 		if up := rs.runningDeps(s); len(up) > 0 {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("the services running during this observation: %s (its depends_on or --with)", strings.Join(up, ", ")))
@@ -853,7 +856,7 @@ func (rs *runState) missingDeps(s *compose.Service) []string {
 
 // candidates returns the services that could run beside s for a second observation: the others
 // that do not need s, that did not run when its first observation ended (they would show nothing
-// new), that did not stop with an error alone themselves, that were not found unable to start and, with prepared, that were prepared.
+// new), whose own observation did not stop with an error, that were not found unable to start and, with prepared, that were prepared.
 func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
 	was := map[string]bool{}
 	for _, n := range rs.firstUp[s.Name] {
@@ -871,7 +874,7 @@ func (rs *runState) candidates(s *compose.Service, prepared bool) []string {
 			continue
 		}
 		// a service that stopped with an error when it was alone gives no evidence as a neighbour
-		if slices.Contains(rs.retry, x.Name) {
+		if rs.stopped[x.Name] {
 			continue
 		}
 		if prepared {
@@ -968,6 +971,8 @@ type runState struct {
 	// the one that is observed a second time, which reuses it: no new build or pull.
 	firstImg map[string]builtImage
 	again    map[string]bool
+	// stopped holds the services whose observation ended with an error before its end.
+	stopped map[string]bool
 
 	ordered []*compose.Service
 	skipped map[string]string
