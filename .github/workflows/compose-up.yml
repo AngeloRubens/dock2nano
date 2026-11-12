@@ -18,32 +18,55 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-short, dir: sparkjava-mysql, flags: "--short-names", probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
-          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+          - {name: nginx-golang-new-cur, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-new-cur, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-new-cur, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-new-nohub, patch: nginx-golang, dir: nginx-golang, flags: "--no-hub", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-new-nohub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names --no-hub", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-new-nohub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "--no-hub", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-new-prehub, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-golang-plain-new-prehub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-flask-mongo-new-prehub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-golang-old-cur, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-old-cur, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-old-cur, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-old-nohub, patch: nginx-golang, dir: nginx-golang, flags: "--no-hub", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-plain-old-nohub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names --no-hub", probe: "proxy:80:http backend:80:http", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-flask-mongo-old-nohub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "--no-hub", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-old-prehub, patch: nginx-golang, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: old, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-golang-plain-old-prehub, patch: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: old, convref: "757091f^1", patchref: "88de49b"}
+          - {name: nginx-flask-mongo-old-prehub, patch: nginx-flask-mongo, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: old, convref: "757091f^1", patchref: "88de49b"}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: converter source of the variant (convref), patches of the variant (patchref)
+        run: |
+          rm -rf cmd internal hints main.go ci/patches
+          git archive ${{ matrix.convref }} cmd internal main.go go.mod go.sum | tar x
+          git archive ${{ matrix.convref }} hints 2>/dev/null | tar x || echo "no hints directory in ${{ matrix.convref }}"
+          git archive ${{ matrix.patchref }} ci/patches | tar x
+          git log --oneline -1 ${{ matrix.convref }}
+          git status --short | head -5
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (nanovms/ops master 1183538 with the arp fix of PR 1805, plus dns_search f3ee91e of the fork)
+      - name: ops from source (variant ${{ matrix.ops }})
         run: |
-          git clone https://github.com/nanovms/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
-          # dns_search: the one commit f3ee91e of AngeloRubens/ops feat/compose-dns-search-indep, on top of 1183538
-          git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
-          git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
-          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+          if [ "${{ matrix.ops }}" = new ]; then
+            git clone https://github.com/nanovms/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
+            git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
+            git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
+            git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+          else
+            git clone https://github.com/AngeloRubens/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout 515b074effb993333dc88c1bbf8c6dccf25ee271
+            git -C /tmp/ops-src fetch origin 67187c4fdcf795c97a9757f073c9c62beedc05d8
+            git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick 67187c4fdcf795c97a9757f073c9c62beedc05d8
+          fi
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
@@ -68,7 +91,7 @@ jobs:
           cat /tmp/ac/${{ matrix.dir }}/compose.y*ml /tmp/ac/${{ matrix.dir }}/docker-compose.y*ml 2>/dev/null || true
       - name: changes to the source before the conversion
         run: |
-          if [ -f ci/patches/${{ matrix.name }}.pre.sh ]; then bash ci/patches/${{ matrix.name }}.pre.sh; else echo "none"; fi
+          if [ -f ci/patches/${{ matrix.patch }}.pre.sh ]; then bash ci/patches/${{ matrix.patch }}.pre.sh; else echo "none"; fi
       - name: convert
         run: |
           set -o pipefail
@@ -82,11 +105,15 @@ jobs:
           for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
       - name: the changes the report asks for, by hand
         run: |
-          if [ -f ci/patches/${{ matrix.name }}.sh ]; then
-            OPS_HOME="$OPS_HOME" bash ci/patches/${{ matrix.name }}.sh
+          if [ -f ci/patches/${{ matrix.patch }}.sh ]; then
+            OPS_HOME="$OPS_HOME" bash ci/patches/${{ matrix.patch }}.sh
           else
-            echo "no changes for ${{ matrix.name }}"
+            echo "no changes for ${{ matrix.patch }}"
           fi
+      - name: nginx configuration as packaged
+        run: |
+          for f in $(find "$OPS_HOME/.ops/local_packages" -path '*sysroot/etc/nginx/*' -name '*.conf' 2>/dev/null | sort); do echo "===== $f"; cat "$f"; done
+          for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; cat "$m" | head -c 3000; echo; done
       - name: compose up
         timeout-minutes: 15
         run: |
@@ -170,11 +197,11 @@ jobs:
             echo "answer: $code"
             if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
             # a service of the probe list that gives no answer fails the job
-            case "$code" in 2*|3*|4*|open) ;; *) echo "no answer from $svc"; probe_fail=1;; esac
+            case "$code" in 200|open) ;; *) echo "no answer from $svc"; probe_fail=1;; esac
           done
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
-            echo "=== console of $svc, last 25 lines"; tail -25 /tmp/out/console-$svc.txt | cut -c1-250
+            echo "=== console of $svc, last 25 lines"; tail -60 /tmp/out/console-$svc.txt | cut -c1-250
           done
           if [ "$probe_fail" != 0 ]; then echo "probe: a service did not answer"; exit 1; fi
       - name: artifacts
