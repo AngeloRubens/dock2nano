@@ -17,18 +17,19 @@ jobs:
           - check/ops-1803-masterplain
           - check/ops-1803-master
           - check/ops-1803-noaddrerr
-          - check/ops-1803-lastsleep
-          - check/ops-1803-tries19
-          - check/ops-1803-noescape-host
-          - check/ops-1803-noescape-ip
+          - check/ops-1803-hostmsg
           - check/ops-1803-nostatus
           - check/ops-1803-notimeout
           - check/ops-1803-ownclient
-          - check/ops-1803-timeout1h
-          - check/ops-1803-nilresp
           - check/ops-1803-newreqerr
+          - check/ops-1803-nilresp
+          - check/ops-1803-escape-ip
+          - check/ops-1803-escape-host
+          - check/ops-1803-lastsleep
+          - check/ops-1803-tries19
+          - check/ops-1803-timeout1h
+          - check/ops-1803-poll400
           - check/ops-1803-upnoreg
-          - check/ops-1803-hostmsg
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,7 +64,7 @@ jobs:
       - name: new tests by name
         id: named
         continue-on-error: true
-        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'RegisterService|AddDNS'
+        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'RegisterService|AddDNS|WaitForIP'
 
       - name: full suite of cmd lepton types
         id: full
