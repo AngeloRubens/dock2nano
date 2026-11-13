@@ -1067,8 +1067,10 @@ func nameTokens(value string) []string {
 }
 
 // startOrderNote says, for a service that names another one in an environment variable and starts
-// before it, that ops compose starts the packages in the order of compose.yaml and waits only for
-// an address: nothing says the other one is there when this one starts. A compose file that
+// before it, that ops compose starts the packages in the order of compose.yaml; it reported "ip
+// timeout" when the guest had no address (nanovms/ops#1813), and nothing says the other one is
+// there when this one starts. Listing the other one first does not help for a name looked up at
+// start (see nameAtStartNote). A compose file that
 // declares depends_on has the order already, so it is not said for it. Only the names of the
 // variables are given, never the values.
 func (g *generator) startOrderNote() {
@@ -1093,7 +1095,7 @@ func (g *generator) startOrderNote() {
 				}
 			}
 			if len(vars) > 0 {
-				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml starts %s before %s and the compose file does not say that %s depends on %s: ops compose starts the packages in that order and waits only for an address, so %s may start before %s is there; list %s first in compose.yaml if it does not connect", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, other.Name))
+				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml starts %s before %s and the compose file does not say that %s depends on %s: ops compose starts the packages in that order and reported \"ip timeout\" when the guest had no address (nanovms/ops#1813), so %s may start before %s is there; list %s first in compose.yaml if it does not connect, which does not help for a name looked up when the program starts (see nanovms/ops#1813)", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, other.Name))
 			}
 		}
 	}
@@ -1135,7 +1137,10 @@ func hostWords(line string) []string {
 // has no address yet at that time, with the converted package and with the hub nginx 1.28.3;
 // starting the other service first (the order of compose.yaml) did not help; the same proxy_pass
 // with a literal IP answered 200; the address is assigned by DHCP and changes per run, so the
-// converter cannot write it. In ops compose the dns answers <pkg>.service; with --short-names
+// converter cannot write it. That the bare name does not resolve, that the dns answers
+// <pkg>.service and that --short-names adds the search line were measured in
+// https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611 (sparkjava-mysql with and
+// without dns_search: dig db returned nothing, db.service returned an address). In ops compose the dns answers <pkg>.service; with --short-names
 // <pkg> also resolves through the search line of resolv.conf; a bare compose name does not
 // resolve. Only the files in ConfigurationFiles are read: the files under /etc that the
 // trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
@@ -1214,9 +1219,9 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 				w, c := hits[k].word, hits[k].c
 				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
 				if c.ok {
-					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\"; observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the guest has no address yet at that time, starting %s first, the order of compose.yaml does not help, and the same proxy_pass with a literal IP answered 200; the address comes from DHCP and changes per run, so it cannot be written here (nanovms/ops#1813)", head, c.service))
+					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\"; observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the guest had no address yet at that time; starting %s first (the order of compose.yaml) did not help; the same proxy_pass of nginx with a literal IP answered 200; the address comes from DHCP and changes per run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)", head, c.service))
 				} else {
-					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (with --short-names, %s also resolves through the search line of resolv.conf); write it in that form. Even then, a name looked up when the program starts can fail: see the start order note", head, pkgOf[c.service], pkgOf[c.service]))
+					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (with --short-names, %s also resolves through the search line of resolv.conf); write it in that form. Even in that form, a name looked up when the program starts failed under ops compose because the guest had no address yet (nanovms/ops#1813)", head, pkgOf[c.service], pkgOf[c.service]))
 				}
 			}
 		}

@@ -2176,6 +2176,8 @@ func TestStartOrderNoteForAServiceThatNamesALaterOne(t *testing.T) {
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}, {Name: "URL", Value: "mysql://db:3306/x", Set: true}, {Name: "OTHER", Value: "dbx", Set: true}}
 	p := mustGen(t, newInput(&fake{}, web, db))
 	want1(t, p, "web", plan.Note, "start order", "web names db in DB_HOST, URL, but compose.yaml starts web before db")
+	want1(t, p, "web", plan.Note, "start order", "reported \"ip timeout\" when the guest had no address (nanovms/ops#1813)")
+	want1(t, p, "web", plan.Note, "start order", "does not help for a name looked up when the program starts")
 	wantNone(t, p, "db", plan.Note, "start order")
 }
 
@@ -2209,14 +2211,13 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
 	wantNone(t, p, "backend", plan.Note, "name at start")
-	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "order of compose.yaml does not help") {
-		t.Errorf("no timing text: %q", m)
-	}
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	if !strings.Contains(m, "nanovms/ops#1813") {
-		t.Errorf("no issue reference: %q", m)
+	for _, w := range []string{"(the order of compose.yaml) did not help", "nanovms/ops#1813", "no address yet", "literal IP", "DHCP", "the converter cannot write it in compose.yaml"} {
+		if !strings.Contains(m, w) {
+			t.Errorf("message lacks %q: %q", w, m)
+		}
 	}
-	for _, bad := range []string{"does not use the search line", "needs the address of the dns"} {
+	for _, bad := range []string{"does not use the search line", "needs the address of the dns", "does not help"} {
 		if strings.Contains(m, bad) {
 			t.Errorf("unverified claim %q: %q", bad, m)
 		}
@@ -2226,14 +2227,14 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
-	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "backend.service") || strings.Contains(m, "order of compose.yaml") {
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "backend.service") || strings.Contains(m, "order of compose.yaml") || !strings.Contains(m, "failed under ops compose because the guest had no address yet (nanovms/ops#1813)") || strings.Contains(m, "start order note") {
 		t.Errorf("message: %q", m)
 	}
 }
 
 func TestNameAtStartBareNameWithShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
-	want1(t, p, "proxy", plan.Note, "name at start", "order of compose.yaml does not help")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the order of compose.yaml) did not help")
 }
 
 func TestNameAtStartPackageNameDiffersFromServiceName(t *testing.T) {
@@ -2283,7 +2284,7 @@ func TestNameAtStartComposeNameWithShortNames(t *testing.T) {
 	want1(t, p, "proxy", plan.Note, "name at start", "search line of resolv.conf")
 	want1(t, p, "proxy", plan.Note, "name at start", "my-app.service")
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
-	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; strings.Contains(m, "order of compose.yaml does not help") {
+	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; strings.Contains(m, "order of compose.yaml") {
 		t.Errorf("a compose name that does not resolve is given the timing text: %q", m)
 	}
 }
