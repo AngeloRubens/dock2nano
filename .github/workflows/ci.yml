@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -14,7 +17,12 @@ jobs:
         with:
           go-version-file: go.mod
       - name: format
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+        run: test -z "$(gofmt -l .)" || { gofmt -d .; exit 1; }
+      - name: modules
+        run: |
+          go mod tidy
+          git add -N go.sum
+          git diff --exit-code go.mod go.sum
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...

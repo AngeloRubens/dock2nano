@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
+	"os"
 
 	"github.com/AngeloRubens/dock2nano/cmd"
 )
 
 func main() {
-	fmt.Println(cmd.ToolName)
+	os.Exit(cmd.Run(os.Args[1:]))
 }
