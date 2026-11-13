@@ -1130,13 +1130,14 @@ func hostWords(line string) []string {
 
 // nameAtStartNote says, for a service whose configuration files contain a word that may be the
 // name of another converted service, that the name may not resolve or may not be resolved at
-// start. What was seen: with the plain compose file nginx exited with "host not found in
-// upstream" for the host of an upstream, even when the other service was started first, so the
-// order of compose.yaml does not help for names looked up at start. In ops compose the dns
-// answers <pkg>.service; with --short-names <pkg> also resolves through the search line of
-// resolv.conf; a bare compose name does not resolve. A resolver of the program needs the address
-// of the dns and the .service form: nginx does not read the search line of resolv.conf for its
-// resolver directive. Only the files in ConfigurationFiles are read: the files under /etc that the
+// start. What was measured, with ops compose (nanovms/ops#1813): a program that resolves a host
+// name when it starts (nginx upstream) exited with "host not found in upstream" because the guest
+// has no address yet at that time, with the converted package and with the hub nginx 1.28.3;
+// starting the other service first (the order of compose.yaml) did not help; the same proxy_pass
+// with a literal IP answered 200; the address is assigned by DHCP and changes per run, so the
+// converter cannot write it. In ops compose the dns answers <pkg>.service; with --short-names
+// <pkg> also resolves through the search line of resolv.conf; a bare compose name does not
+// resolve. Only the files in ConfigurationFiles are read: the files under /etc that the
 // trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
 // extensions .conf .cnf .ini .yaml .yml .toml .properties, matched in lower case only
 // (haproxy.cfg under /etc is read, one outside /etc is not); names on the command line or in
@@ -1213,7 +1214,7 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 				w, c := hits[k].word, hits[k].c
 				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
 				if c.ok {
-					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", head, c.service, pkgOf[c.service]))
+					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\"; observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the guest has no address yet at that time, starting %s first, the order of compose.yaml does not help, and the same proxy_pass with a literal IP answered 200; the address comes from DHCP and changes per run, so it cannot be written here (nanovms/ops#1813)", head, c.service))
 				} else {
 					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (with --short-names, %s also resolves through the search line of resolv.conf); write it in that form. Even then, a name looked up when the program starts can fail: see the start order note", head, pkgOf[c.service], pkgOf[c.service]))
 				}

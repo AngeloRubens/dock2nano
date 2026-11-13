@@ -2212,6 +2212,15 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; !strings.Contains(m, "order of compose.yaml does not help") {
 		t.Errorf("no timing text: %q", m)
 	}
+	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
+	if !strings.Contains(m, "nanovms/ops#1813") {
+		t.Errorf("no issue reference: %q", m)
+	}
+	for _, bad := range []string{"does not use the search line", "needs the address of the dns"} {
+		if strings.Contains(m, bad) {
+			t.Errorf("unverified claim %q: %q", bad, m)
+		}
+	}
 }
 
 func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
