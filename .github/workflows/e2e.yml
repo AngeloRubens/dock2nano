@@ -37,7 +37,14 @@ jobs:
           sudo install /tmp/ops /usr/local/bin/ops
           ops version
       - name: kernel and boot image
-        run: ops update 2>&1 | tail -5
+        run: |
+          echo "built: $(sha256sum /tmp/ops | cut -c1-16) installed before update: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
+          ops update 2>&1 | tail -5
+          echo "installed after update: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
+          # ops update can replace the ops binary with the release one: put the built one back
+          sudo install /tmp/ops /usr/local/bin/ops
+          echo "installed after reinstall: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
+          ops version
       - name: convert
         run: |
           set -o pipefail

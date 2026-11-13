@@ -57,7 +57,13 @@ jobs:
           cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
         run: |
+          echo "built: $(sha256sum /tmp/ops | cut -c1-16) installed before update: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
           ops update 2>&1 | tail -3
+          echo "installed after update: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
+          # ops update can replace the ops binary with the release one: put the built one back
+          sudo install /tmp/ops /usr/local/bin/ops
+          echo "installed after reinstall: $(sha256sum /usr/local/bin/ops | cut -c1-16)"
+          ops version
           mkdir -p /tmp/nightly
           curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
           rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
