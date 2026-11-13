@@ -26,6 +26,10 @@ on:
         description: 'extra mysqld arguments (space separated)'
         required: false
         default: ''
+      ops_patch:
+        description: 'ops fork branch whose commit is cherry-picked on the pinned master (empty: none)'
+        required: false
+        default: ''
       jvmflags:
         description: 'extra JVM options for the petclinic package (space separated); -Xint because the compiled code crashes the JVM on nanos'
         required: false
@@ -55,9 +59,15 @@ jobs:
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source
+        env:
+          OPS_PATCH: ${{ github.event.inputs.ops_patch }}
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
           git -C /tmp/ops-src checkout "$OPS_REF"
+          if [ -n "$OPS_PATCH" ]; then
+            git -C /tmp/ops-src fetch https://github.com/AngeloRubens/ops "$OPS_PATCH"
+            git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick FETCH_HEAD
+          fi
           cd /tmp/ops-src && git log --oneline | head -1
           go build -o /tmp/ops .
           sudo install /tmp/ops /usr/local/bin/ops
