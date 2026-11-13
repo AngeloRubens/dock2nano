@@ -1,0 +1,45 @@
+name: hubnginx
+# Test only: the nginx package of the ops hub next to the one the converter packages.
+on:
+  push:
+    branches: ['check/nginx-bisect']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  look:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[hubnginx]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OPS_HOME: /home/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: ops from source
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
+          go -C /tmp/ops-src build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: the hub package
+        run: |
+          ops pkg get eyberg/nginx:1.28.3 2>&1 | tail -3
+          d=$(dirname "$(find "$OPS_HOME/.ops/packages" -name package.manifest | grep -i nginx | head -1)")
+          echo "package dir: $d"
+          cat "$d/package.manifest"
+          echo "--- files"; (cd "$d" && find . -type f | head -80)
+          echo "--- sysroot etc"; find "$d" -path '*sysroot/etc*' -type f | head -40
+          for c in $(find "$d" -name 'nginx.conf' | head -3); do echo "===== $c"; cat "$c"; done
+          for c in $(find "$d" -path '*conf.d*' -name '*.conf' | head -3); do echo "===== $c"; cat "$c"; done
+          b=$(find "$d" -type f -name nginx -perm -u+x | head -1); echo "binary: $b"
+          file "$b"; ls -l "$b"; ldd "$b" 2>&1 | head -20
+          strings "$b" | grep -m3 "nginx/[0-9]"
+          strings "$b" | grep -m3 -i "configure arguments"
+          echo "--- scripts or wrappers in the package"; (cd "$d" && find . -type f \( -name '*.sh' -o -name '*wait*' -o -name '*start*' \) | head)
+      - name: the nginx of the docker image
+        run: |
+          docker pull -q nginx
+          docker run --rm nginx nginx -V 2>&1 | head -8
+          docker run --rm nginx sh -c 'ldd /usr/sbin/nginx | head -20; ls -l /usr/sbin/nginx'
