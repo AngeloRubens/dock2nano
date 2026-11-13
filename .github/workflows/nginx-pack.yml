@@ -1,0 +1,114 @@
+name: nginx-pack
+# Builds what the job nginx-golang of compose-up builds, without "ops compose up", and uploads it
+# so that the compose can be run by hand.
+on:
+  push:
+    branches: [check/nginx-pack]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPS_HOME: /home/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source (as compose-up)
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
+          git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
+          git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
+          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+          cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
+          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+          mkdir -p /tmp/pack && cp /tmp/ops /tmp/pack/ops
+      - name: nanos kernel (as compose-up)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops pkg get eyberg/ops-dns:0.0.1
+      - name: the compose file
+        run: |
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          git -C /tmp/ac log --oneline | head -1
+      - name: convert
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/out/traces
+          export DOCK2NANO_KEEP_TRACE=/tmp/out/traces
+          cd /tmp/ac/nginx-golang
+          f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
+          cd "$GITHUB_WORKSPACE"
+          go run . convert -f /tmp/ac/nginx-golang/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 2>&1 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+      - name: the changes the report asks for, by hand
+        run: PROJECT=nginx-golang; OPS_HOME="$OPS_HOME" bash ci/patches/nginx-golang.sh
+      - name: collect
+        run: |
+          set -x
+          P=/tmp/pack
+          mkdir -p $P/out $P/ops-home/.ops
+          cp -a /tmp/out/. $P/out/
+          rm -rf $P/out/traces
+          cp -a "$OPS_HOME/.ops/local_packages" $P/ops-home/.ops/
+          [ -d "$OPS_HOME/.ops/packages" ] && cp -a "$OPS_HOME/.ops/packages" $P/ops-home/.ops/ || true
+          rel_name=$(cat "$OPS_HOME/.ops/latest.txt")
+          echo "$rel_name" > $P/latest-release.txt
+          mkdir -p "$P/nanos-release"
+          { echo "release dir: $OPS_HOME/.ops/$rel_name"; ls -la "$OPS_HOME/.ops/$rel_name"; } > $P/nanos-release/listing.txt
+          for f in kernel.img boot.img; do
+            s=$(stat -c %s "$OPS_HOME/.ops/$rel_name/$f")
+            if [ "$s" -lt 62914560 ]; then mkdir -p $P/ops-home/.ops/$rel_name; cp -a "$OPS_HOME/.ops/$rel_name/$f" $P/ops-home/.ops/$rel_name/; else echo "$f $s bytes, not included" >> $P/nanos-release/listing.txt; fi
+          cp -a "$OPS_HOME/.ops/latest.txt" $P/ops-home/.ops/ || true
+          done 2>/dev/null || true
+          ops version > $P/ops-version.txt 2>&1 || true
+          find "$OPS_HOME/.ops" -maxdepth 3 -printf '%p %s\n' > $P/ops-home-listing.txt
+          if [ -e /dev/kvm ]; then kvm="yes: $(ls -l /dev/kvm)"; else kvm="no"; fi
+          # qemu flags ops uses: read from the source
+          grep -rn "accel\|enable-kvm\|-cpu\|-machine" /tmp/ops-src/qemu/*.go | grep -v _test > $P/qemu-flags-from-source.txt || true
+          cat > $P/README.txt <<EOT
+          nginx-pack: what the job nginx-golang of compose-up.yml builds, without ops compose up.
+          runner: ubuntu-24.04, /dev/kvm present: $kvm
+          run id: $GITHUB_RUN_ID, commit: $GITHUB_SHA
+          ops: nanovms/ops 11835380d63576a0a7d3021cc176bf3cd4c60935 + cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91 (fork AngeloRubens/ops), binary ./ops, built before any ops update ("ops update" replaces it)
+          ops version output: see ops-version.txt
+          nanos release dir name: $rel_name (see latest-release.txt). ops update fetched it; the job then replaced kernel.img and boot.img with the nightly from
+            https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz (the nightly reads uid and gid from the manifest).
+            kernel.img and boot.img of that dir are included in ops-home/.ops/$rel_name/ when under 60 MB; listing in nanos-release/listing.txt.
+          package ops-dns: "ops pkg get eyberg/ops-dns:0.0.1" (copied in ops-home/.ops/packages if present).
+          converted packages: ops-home/.ops/local_packages/amd64/* (patched by ci/patches/nginx-golang.sh: proxy_pass http://backend.service:80)
+          conversion: out/compose.yaml and out/report.txt (flags: none beyond "--pull --seconds 90")
+
+          The job runs, with env OPS_HOME=/home/runner (so packages sit in /home/runner/.ops):
+            cd /tmp/out
+            sudo env OPS_HOME="\$OPS_HOME" PATH="\$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug
+            (up to 3 attempts; between them: sudo env OPS_HOME="\$OPS_HOME" ops compose down; sleep 5)
+          no other env vars are set for it. Probe afterwards: proxy:80 and backend:80 http, address from "assigned 192.168.33.x" in "ops instance logs <svc>".
+          qemu flags: ops chooses them; excerpt from the source in qemu-flags-from-source.txt.
+          compose.yaml paths point to /home/runner/.ops/...: check them against your OPS_HOME.
+
+          sha256 of everything: SHA256SUMS
+          EOT
+          sed -i 's/^          //' $P/README.txt
+          (cd $P && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          du -sh $P; du -sh $P/* $P/ops-home/.ops/*
+          grep -n "/home/runner\|path\|image" $P/out/compose.yaml | head -20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nginx-pack
+          path: /tmp/pack
