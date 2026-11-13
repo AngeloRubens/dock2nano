@@ -1068,11 +1068,11 @@ func nameTokens(value string) []string {
 
 // startOrderNote says, for a service that names another one in an environment variable and is
 // listed before it in compose.yaml, that the first declares no depends_on on the other, so nothing
-// makes the first wait for the other. ops compose spawns the packages in the order of the file (the loop
-// in Compose.UP, cmd/compose.go of ops). Listing the other one first did not help for an nginx
-// upstream looked up at start (nanovms/ops#1813). A compose file that declares depends_on has the
-// order already, so it is not said for it. Only the names of the variables are given, never the
-// values.
+// makes the first wait for the other. ops compose spawns the packages in the order of the file
+// (the loop in Compose.UP, cmd/compose.go of ops). Listing the other one first did not help for an
+// nginx upstream looked up at start (run 43278064908, nanovms/ops#1813). A service that declares
+// depends_on on the other is not reported (order() lists the other first). Only the names of the
+// variables are given, never the values.
 func (g *generator) startOrderNote() {
 	for i, svc := range g.plan.Services {
 		declared := map[string]bool{}
@@ -1133,10 +1133,12 @@ func hostWords(line string) []string {
 // nameAtStartNote says, for a service whose configuration files contain a word that may be the
 // name of another converted service, that the name may not resolve or may not be resolved at
 // start. What was measured, with ops compose (nanovms/ops#1813): an nginx upstream looked up at
-// start failed with "host not found in upstream"; the guest had no address yet when it exited,
+// start failed with "host not found in upstream"; the guest had no address yet when nginx exited,
 // with the converted package and with the hub nginx 1.28.3; starting the other service first
-// (the order of compose.yaml) did not help; the same proxy_pass with a literal IP answered 200;
-// the address of the upstream changed from run to run, so the converter cannot write it. What
+// (the order of compose.yaml) did not help (run 43278064908); the hub nginx 1.28.3 with a literal
+// IP in proxy_pass answered 200 (run 43393644875; with the converted package a literal IP was not
+// shown to work, run 43280764097); the address of the upstream changed from run to run (run
+// 43393644875), so the converter cannot write it. What
 // was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
 // (sparkjava-mysql, with and without dns_search): with dns_search the backend answered 200,
 // without it did not; dig db gave SERVFAIL and db.service gave NOERROR; the resolv.conf itself
@@ -1240,10 +1242,10 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			}
 		}
 		if anyOK {
-			parts = append(parts, "Observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the proxy's guest had no address yet at that time; starting the other service first (the order of compose.yaml) did not help; nginx with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
+			parts = append(parts, "Observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
 		}
-		if anyNotOK {
-			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when it exited (nanovms/ops#1813)")
+		if anyNotOK && !anyOK {
+			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)")
 		}
 		if len(parts) > 0 {
 			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, ". "))

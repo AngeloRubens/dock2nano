@@ -2226,12 +2226,12 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
 	wantNone(t, p, "backend", plan.Note, "name at start")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the upstream's literal IP in proxy_pass", "the upstream's address changed from run to run", "the proxy's guest had no address yet", "the converter cannot write it in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
+	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200", "when nginx exited", "the upstream's address changed from run to run", "the proxy's guest had no address yet", "the converter cannot write it in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
 	}
-	for _, bad := range []string{"does not use the search line", "needs the address of the dns", "does not help", "DHCP", "because the guest", "starting backend first", "a name looked up"} {
+	for _, bad := range []string{"does not use the search line", "needs the address of the dns", "does not help", "DHCP", "at that time", "because the guest", "starting backend first", "a name looked up"} {
 		if strings.Contains(m, bad) {
 			t.Errorf("unverified claim %q: %q", bad, m)
 		}
@@ -2242,7 +2242,7 @@ func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"backend.service", "write it as backend.service, the name the dns answers. With --short-names, backend alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)", "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when it exited (nanovms/ops#1813)"} {
+	for _, w := range []string{"backend.service", "write it as backend.service, the name the dns answers. With --short-names, backend alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)", "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
@@ -2267,8 +2267,26 @@ func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
 	in.Project.Services = append(in.Project.Services, svc("other"))
 	p := mustGen(t, in)
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	if strings.Count(m, "contains the word") < 3 || strings.Count(m, "Observed with ops compose") != 1 || strings.Count(m, "Even in the .service form") != 1 || strings.Count(m, "nanovms/ops#1813") != 2 {
+	if strings.Count(m, "contains the word") != 4 || strings.Count(m, "Observed with ops compose") != 1 || strings.Contains(m, "Even in the .service form") || strings.Count(m, "nanovms/ops#1813") != 1 || strings.Count(m, "no address yet") != 1 {
 		t.Errorf("evidence is not given once: %q", m)
+	}
+}
+
+func TestNameAtStartOnlyNonResolvingNamesGiveTheEvenSentenceOnce(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "server Backend:80;\nserver Other:81;"}, false, "proxy", "backend")
+	in.Services["other"] = ServiceInput{Observed: observed("other")}
+	in.Project.Services = append(in.Project.Services, svc("other"))
+	m := itemsOf(mustGen(t, in), "proxy", plan.Note, "name at start")[0].Message
+	if strings.Count(m, "contains the word") != 2 || strings.Count(m, "Even in the .service form") != 1 || strings.Contains(m, "Observed with ops compose") || strings.Count(m, "nanovms/ops#1813") != 1 {
+		t.Errorf("message: %q", m)
+	}
+}
+
+func TestNameAtStartTwoFilesGiveOneEvidence(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/a.conf": "server backend.service:80;", "/etc/b.conf": "server backend.service:81;"}, false, "proxy", "backend")
+	m := itemsOf(mustGen(t, in), "proxy", plan.Note, "name at start")[0].Message
+	if strings.Count(m, "contains the word") != 2 || strings.Count(m, "Observed with ops compose") != 1 {
+		t.Errorf("message: %q", m)
 	}
 }
 
