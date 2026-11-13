@@ -2188,7 +2188,7 @@ func TestStartOrderNoteWhenDependsOnIsOnAnotherService(t *testing.T) {
 	web, db, cache := svc("web"), svc("db"), svc("cache")
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
 	web.DependsOn = []compose.Dependency{{Service: "cache"}}
-	p := mustGen(t, newInput(&fake{}, web, db, cache))
+	p := mustGen(t, newInput(&fake{}, cache, web, db))
 	want1(t, p, "web", plan.Note, "start order", "web declares no depends_on on db")
 	if m := itemsOf(p, "web", plan.Note, "start order")[0].Message; strings.Contains(m, "the compose file declares no depends_on") {
 		t.Errorf("web does declare a depends_on: %q", m)
