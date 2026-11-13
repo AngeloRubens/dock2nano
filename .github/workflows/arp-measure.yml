@@ -1,0 +1,140 @@
+name: arp-measure
+# Measures how ops finds the address of a guest on a bridge: when the guest console says
+# "assigned", when arp -a and ip neigh show the mac of the guest, and what ops answers.
+# Its purpose is met: it measured the arp fix (PR 1805), which is now merged in nanovms/ops master;
+# it is kept as it was, with the nanovms/ops side moved from the old pin to master (OPS_REF).
+# Runs on a push to check/arp-measure and by hand.
+on:
+  push:
+    branches: ['check/arp-measure', 'chore/ops-master-pin']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  # the nanovms/ops commit these jobs build (master)
+  OPS_REF: 11835380d63576a0a7d3021cc176bf3cd4c60935
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: fix/bridged-ip-arp
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          unformatted=$(gofmt -l provider/onprem/)
+          if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d provider/onprem/; exit 1; fi
+      - name: vet (the struct tag of stat-htlb-pgalloc is wrong on master too, and is the only finding allowed)
+        run: |
+          go vet ./provider/onprem/... 2>&1 | tee /tmp/vet.txt || true
+          if grep -v 'stat-htlb-pgalloc\|^#\|^go: ' /tmp/vet.txt | grep -q .; then echo "vet found something else:"; grep -v 'stat-htlb-pgalloc\|^#\|^go: ' /tmp/vet.txt; exit 1; fi
+      - run: go test ./provider/onprem/... -count 1 -v
+      - run: go build -o ops -v
+  mutation:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [zeros-dropped, case-kept, substring-match]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: fix/bridged-ip-arp
+      - uses: actions/checkout@v4
+        with:
+          path: self
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: python3 self/ci/mutate_arp.py ${{ matrix.name }}
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6]
+        ops: [master, fix]
+    env:
+      OPS_HOME: /home/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: which tools the machine has
+        run: |
+          cat /etc/os-release | head -2; uname -r
+          for b in arp ip ping arping dnsmasq qemu-system-x86_64; do printf '%s: ' $b; command -v $b || echo "missing"; done
+          ls -l /dev/kvm || true
+      - name: qemu and dnsmasq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source (master)
+        run: |
+          if [ "${{ matrix.ops }}" = fix ]; then
+            git clone https://github.com/AngeloRubens/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout fix/bridged-ip-arp
+          else
+            git clone https://github.com/nanovms/ops /tmp/ops-src
+            git -C /tmp/ops-src checkout "$OPS_REF"
+          fi
+          git -C /tmp/ops-src log --oneline | head -1
+          cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+          ops update 2>&1 | tail -2
+          # ops update replaces the binary: the one built from source goes back
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops pkg get eyberg/ops-dns:0.0.1 2>&1 | tail -1
+      - name: a package to start
+        run: |
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          mkdir -p /tmp/out
+          go run . convert -f /tmp/ac/nginx-golang/compose.yaml --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 30 --service backend 2>&1 | tail -5
+          cat /tmp/out/compose.yaml
+      - name: compose up, with the host watched
+        run: |
+          set +e
+          cd /tmp/out
+          t0=$(date +%s.%N)
+          monitor() {
+            set +e
+            last=""
+            while true; do
+              t=$(date +%s.%N)
+              rel=$(awk -v a="$t" -v b="$t0" 'BEGIN{printf "%.1f", a-b}')
+              macs=$(ps -eo args | grep '[q]emu-system' | grep -o ' -name [^ ]*\|,mac=[0-9a-f:]*' | tr '\n' ' ')
+              arpout=$( (arp -a 2>&1 || echo "arp failed: $?") | grep -a "192.168.33\|failed\|not found" | tr '\n' '|')
+              neigh=$(ip neigh show dev ops0 2>&1 | tr '\n' '|')
+              cons=$(for f in /tmp/*.log; do [ -f "$f" ] && printf '%s:%s ' "$(basename $f .log)" "$(grep -a -o 'assigned 192\.168\.33\.[0-9]*' $f | tail -1 | awk '{print $2}')"; done 2>/dev/null)
+              upl=$(grep -a -v '^no ip found\|couldn.t find mac\|mac is an empty\|Manifest:\|&{root' /tmp/out/up.log 2>/dev/null | tail -1 | cut -c1-80)
+              line="macs[$macs] arp[$arpout] neigh[$neigh] console[$cons] up[$upl]"
+              if [ "$line" != "$last" ]; then echo "$rel $line"; last="$line"; fi
+              sleep 0.5
+            done
+          }
+          monitor > /tmp/out/monitor.log 2>&1 &
+          mon=$!
+          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1 || echo "ops compose up failed: $?"
+          sleep 45
+          kill $mon || true
+          echo "== up.log without the polling lines"
+          grep -a -v '^no ip found\|Manifest:\|&{root' /tmp/out/up.log | cut -c1-160 | tail -20
+          echo "== counts in up.log"
+          for k in 'no ip found' "couldn't find mac" 'mac is an empty' 'found ip of' 'ip timeout'; do printf '%s: ' "$k"; grep -a -c "$k" /tmp/out/up.log; done
+          echo "== monitor"
+          cut -c1-400 /tmp/out/monitor.log | head -80
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arp-measure-${{ matrix.ops }}-${{ matrix.run }}
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
