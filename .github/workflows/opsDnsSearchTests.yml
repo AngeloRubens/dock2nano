@@ -19,7 +19,7 @@ jobs:
           - check/ops-1803-noaddrerr
           - check/ops-1803-lastsleep
           - check/ops-1803-tries19
-          - check/ops-1803-noescape
+          - check/ops-1803-noescape-host
           - check/ops-1803-noescape-ip
           - check/ops-1803-nostatus
           - check/ops-1803-notimeout
