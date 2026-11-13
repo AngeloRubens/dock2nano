@@ -76,7 +76,7 @@ jobs:
             if [ "$s" -lt 62914560 ]; then mkdir -p $P/ops-home/.ops/$rel_name; cp -a "$OPS_HOME/.ops/$rel_name/$f" $P/ops-home/.ops/$rel_name/; else echo "$f $s bytes, not included" >> $P/nanos-release/listing.txt; fi
           cp -a "$OPS_HOME/.ops/latest.txt" $P/ops-home/.ops/ || true
           done 2>/dev/null || true
-          ops version > $P/ops-version.txt 2>&1 || true
+          { ops version; echo "built from nanovms/ops commit:"; git -C /tmp/ops-src rev-parse HEAD; } > $P/ops-version.txt 2>&1 || true
           find "$OPS_HOME/.ops" -maxdepth 3 -printf '%p %s\n' > $P/ops-home-listing.txt
           if [ -e /dev/kvm ]; then kvm="yes: $(ls -l /dev/kvm)"; else kvm="no"; fi
           # qemu flags ops uses: read from the source
@@ -112,3 +112,4 @@ jobs:
         with:
           name: nginx-pack
           path: /tmp/pack
+          include-hidden-files: true
