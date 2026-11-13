@@ -1066,12 +1066,10 @@ func nameTokens(value string) []string {
 	})
 }
 
-// startOrderNote says, for a service that names another one in an environment variable and is
-// listed before it in compose.yaml, that the first declares no depends_on on the other, so nothing
-// makes the first wait for the other. ops compose spawns the packages in the order of the file
-// (the loop in Compose.UP, cmd/compose.go of ops). Listing the other one first did not help for an
-// nginx upstream looked up at start (run 43278064908, nanovms/ops#1813). A service that declares
-// depends_on on the other is not reported (order() lists the other first). Only the names of the
+// startOrderNote says, for a service that names another one in an environment variable and starts
+// before it, that ops compose starts the packages in the order of compose.yaml and waits only for
+// an address: nothing says the other one is there when this one starts. A compose file that
+// declares depends_on has the order already, so it is not said for it. Only the names of the
 // variables are given, never the values.
 func (g *generator) startOrderNote() {
 	for i, svc := range g.plan.Services {
@@ -1095,7 +1093,7 @@ func (g *generator) startOrderNote() {
 				}
 			}
 			if len(vars) > 0 {
-				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml lists %s before %s and %s declares no depends_on on %s, so nothing makes %s wait for %s; for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813)", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name))
+				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml starts %s before %s and the compose file does not say that %s depends on %s: ops compose starts the packages in that order and waits only for an address, so %s may start before %s is there; list %s first in compose.yaml if it does not connect", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, other.Name))
 			}
 		}
 	}
@@ -1132,20 +1130,13 @@ func hostWords(line string) []string {
 
 // nameAtStartNote says, for a service whose configuration files contain a word that may be the
 // name of another converted service, that the name may not resolve or may not be resolved at
-// start. What was measured, with ops compose (nanovms/ops#1813): an nginx upstream looked up at
-// start failed with "host not found in upstream"; the guest had no address yet when nginx exited,
-// with the converted package and with the hub nginx 1.28.3; starting the other service first
-// (the order of compose.yaml) did not help (run 43278064908); the hub nginx 1.28.3 with a literal
-// IP in proxy_pass answered 200 (run 43393644875; with the converted package a literal IP was not
-// shown to work, run 43280764097); the address of the upstream differed between the two jobs
-// of run 43393644875 (.13 and .77) and in run 43278064908 (.109), so the converter cannot write
-// it. What
-// was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
-// (sparkjava-mysql, with and without dns_search): with dns_search the backend answered 200,
-// without it did not; dig db gave SERVFAIL and db.service gave NOERROR; the resolv.conf itself
-// was not printed. The search line works only with an ops that reads dns_search (nanovms/ops#1815,
-// open, not in master). The evidence text is given once per note, after the words.
-// Only the files in ConfigurationFiles are read: the files under /etc that the
+// start. What was seen: with the plain compose file nginx exited with "host not found in
+// upstream" for the host of an upstream, even when the other service was started first, so the
+// order of compose.yaml does not help for names looked up at start. In ops compose the dns
+// answers <pkg>.service; with --short-names <pkg> also resolves through the search line of
+// resolv.conf; a bare compose name does not resolve. A resolver of the program needs the address
+// of the dns and the .service form: nginx does not read the search line of resolv.conf for its
+// resolver directive. Only the files in ConfigurationFiles are read: the files under /etc that the
 // trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
 // extensions .conf .cnf .ini .yaml .yml .toml .properties, matched in lower case only
 // (haproxy.cfg under /etc is read, one outside /etc is not); names on the command line or in
@@ -1157,7 +1148,6 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 	type cand struct {
 		service string
 		ok      bool // resolves under ops compose in the mode of this run
-		bare    bool // the bare package name, which resolves only through the search line
 	}
 	for _, svc := range g.plan.Services {
 		si := g.in.Services[svc.Name]
@@ -1165,29 +1155,26 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			continue
 		}
 		cands := map[string]cand{}
-		add := func(word, service string, ok, bare bool) {
+		add := func(word, service string, ok bool) {
 			word = strings.ToLower(word)
 			// two services can give the same word; the form that resolves wins, so the note
 			// does not tell to rewrite a name that is right
 			if old, dup := cands[word]; dup && (old.ok || !ok) {
 				return
 			}
-			cands[word] = cand{service, ok, bare}
+			cands[word] = cand{service, ok}
 		}
 		for _, other := range g.plan.Services {
 			if other.Name == svc.Name {
 				continue
 			}
 			pkg := pkgOf[other.Name]
-			add(other.Name, other.Name, false, false)
-			add(other.Name+".service", other.Name, false, false)
-			// with --short-names the bare package name counts as resolving, through the search
-			// line, which needs an ops that reads dns_search (nanovms/ops#1815)
-			add(pkg, other.Name, g.in.ShortNames, true)
-			add(pkg+".service", other.Name, true, false)
+			add(other.Name, other.Name, false)
+			add(other.Name+".service", other.Name, false)
+			add(pkg, other.Name, g.in.ShortNames)
+			add(pkg+".service", other.Name, true)
 		}
 		var parts []string
-		var anyOK, anyNotOK bool
 		for _, f := range si.Observed.ConfigurationFiles {
 			switch {
 			case f == "/etc/hosts", f == "/etc/resolv.conf", f == "/etc/passwd", f == "/etc/group", f == "/etc/nsswitch.conf", f == "/etc/host.conf":
@@ -1226,27 +1213,11 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 				w, c := hits[k].word, hits[k].c
 				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
 				if c.ok {
-					anyOK = true
-					m := head + `, a program that looks it up when it starts can exit with "host not found"`
-					if c.bare {
-						m += " (the bare name resolves through the search line, with an ops that reads dns_search, nanovms/ops#1815)"
-					}
-					parts = append(parts, m)
+					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\" even when %s is started first, so the order of compose.yaml does not help; a resolver of the program needs the address of the dns and the %s.service form (the resolver of nginx does not use the search line of resolv.conf)", head, c.service, pkgOf[c.service]))
 				} else {
-					anyNotOK = true
-					mode := "With --short-names"
-					if g.in.ShortNames {
-						mode = "With --short-names (used in this run)"
-					}
-					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose: write it as %s.service, the name the dns answers. %s, %s alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)", head, pkgOf[c.service], mode, pkgOf[c.service]))
+					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (with --short-names, %s also resolves through the search line of resolv.conf); write it in that form. Even then, a name looked up when the program starts can fail: see the start order note", head, pkgOf[c.service], pkgOf[c.service]))
 				}
 			}
-		}
-		if anyOK {
-			parts = append(parts, "Observed with ops compose (nginx upstream in the .service form, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
-		}
-		if anyNotOK && !anyOK {
-			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)")
 		}
 		if len(parts) > 0 {
 			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, ". "))
@@ -1298,7 +1269,7 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	}
 	var msg string
 	if g.in.ShortNames {
-		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it, nanovms/ops#1815): " + strings.Join(pairs, ", ") + "."
+		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
 	} else {
 		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
 	}
