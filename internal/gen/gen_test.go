@@ -2176,12 +2176,23 @@ func TestStartOrderNoteForAServiceThatNamesALaterOne(t *testing.T) {
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}, {Name: "URL", Value: "mysql://db:3306/x", Set: true}, {Name: "OTHER", Value: "dbx", Set: true}}
 	p := mustGen(t, newInput(&fake{}, web, db))
 	want1(t, p, "web", plan.Note, "start order", "web names db in DB_HOST, URL, but compose.yaml lists web before db")
-	want1(t, p, "web", plan.Note, "start order", "compose.yaml lists web before db and the compose file declares no depends_on, so nothing makes web wait for db")
+	want1(t, p, "web", plan.Note, "start order", "compose.yaml lists web before db and web declares no depends_on on db, so nothing makes web wait for db")
 	want1(t, p, "web", plan.Note, "start order", "for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813)")
 	if m := itemsOf(p, "web", plan.Note, "start order")[0].Message; strings.Contains(m, "ip timeout") || strings.Contains(m, "if it does not connect") || strings.Count(m, "nanovms/ops#1813") != 1 {
 		t.Errorf("start order message: %q", m)
 	}
 	wantNone(t, p, "db", plan.Note, "start order")
+}
+
+func TestStartOrderNoteWhenDependsOnIsOnAnotherService(t *testing.T) {
+	web, db, cache := svc("web"), svc("db"), svc("cache")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
+	web.DependsOn = []compose.Dependency{{Service: "cache"}}
+	p := mustGen(t, newInput(&fake{}, web, db, cache))
+	want1(t, p, "web", plan.Note, "start order", "web declares no depends_on on db")
+	if m := itemsOf(p, "web", plan.Note, "start order")[0].Message; strings.Contains(m, "the compose file declares no depends_on") {
+		t.Errorf("web does declare a depends_on: %q", m)
+	}
 }
 
 func TestStartOrderNoteIsNotMadeWhenTheOrderIsRight(t *testing.T) {
@@ -2215,12 +2226,12 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
 	wantNone(t, p, "backend", plan.Note, "name at start")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the upstream's literal IP in proxy_pass", "the address of the guest changed from run to run", "the converter cannot write it in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
+	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the upstream's literal IP in proxy_pass", "the upstream's address changed from run to run", "the proxy's guest had no address yet", "the converter cannot write it in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
 	}
-	for _, bad := range []string{"does not use the search line", "needs the address of the dns", "does not help", "DHCP", "starting backend first", "a name looked up"} {
+	for _, bad := range []string{"does not use the search line", "needs the address of the dns", "does not help", "DHCP", "because the guest", "starting backend first", "a name looked up"} {
 		if strings.Contains(m, bad) {
 			t.Errorf("unverified claim %q: %q", bad, m)
 		}
@@ -2231,7 +2242,7 @@ func TestNameAtStartBareNameInDefaultMode(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"backend.service", "with --short-names, backend also resolves through the search line (with an ops that reads dns_search, nanovms/ops#1815)", "Even in that form, an nginx upstream looked up at start failed under ops compose because the guest had no address yet (nanovms/ops#1813)"} {
+	for _, w := range []string{"backend.service", "write it as backend.service, the name the dns answers. With --short-names, backend alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)", "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when it exited (nanovms/ops#1813)"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
@@ -2247,6 +2258,18 @@ func TestNameAtStartBareNameWithShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "(the order of compose.yaml) did not help")
 	want1(t, p, "proxy", plan.Note, "name at start", "literal IP")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves through the search line, with an ops that reads dns_search, nanovms/ops#1815)")
+}
+
+func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "server backend.service:80;\nserver other.service:81;\nserver Backend:82;\nserver Other:83;"}, false, "proxy", "backend")
+	in.Services["other"] = ServiceInput{Observed: observed("other")}
+	in.Project.Services = append(in.Project.Services, svc("other"))
+	p := mustGen(t, in)
+	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
+	if strings.Count(m, "contains the word") < 3 || strings.Count(m, "Observed with ops compose") != 1 || strings.Count(m, "Even in the .service form") != 1 || strings.Count(m, "nanovms/ops#1813") != 2 {
+		t.Errorf("evidence is not given once: %q", m)
+	}
 }
 
 func TestNameAtStartPackageNameDiffersFromServiceName(t *testing.T) {
@@ -2293,7 +2316,7 @@ func TestNameAtStartPathDoesNotHideTheRealName(t *testing.T) {
 
 func TestNameAtStartComposeNameWithShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server my_app:80;"}, true, "proxy", "My_App"))
-	want1(t, p, "proxy", plan.Note, "name at start", "with --short-names, used in this run, my-app also resolves through the search line (with an ops that reads dns_search, nanovms/ops#1815)")
+	want1(t, p, "proxy", plan.Note, "name at start", "With --short-names (used in this run), my-app alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)")
 	want1(t, p, "proxy", plan.Note, "name at start", "my-app.service")
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
 	if m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message; strings.Contains(m, "order of compose.yaml") || strings.Contains(m, "literal IP") || strings.Contains(m, "DHCP") {
