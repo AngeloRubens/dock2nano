@@ -2267,7 +2267,7 @@ func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
 	in.Project.Services = append(in.Project.Services, svc("other"))
 	p := mustGen(t, in)
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	if strings.Count(m, "contains the word") != 4 || strings.Count(m, "Observed with ops compose") != 1 || strings.Contains(m, "Even in the .service form") || strings.Count(m, "nanovms/ops#1813") != 1 || strings.Count(m, "no address yet") != 1 {
+	if strings.Count(m, "contains the word") != 4 || strings.Count(m, "Observed with ops compose (nginx upstream in the .service form, converted package and hub nginx 1.28.3)") != 1 || strings.Contains(m, "Even in the .service form") || strings.Count(m, "nanovms/ops#1813") != 1 || strings.Count(m, "no address yet") != 1 {
 		t.Errorf("evidence is not given once: %q", m)
 	}
 }
@@ -2407,4 +2407,5 @@ func TestNetworkNoteWithShortNamesSaysPackageName(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "", plan.Note, "service names", "by its package name")
 	want1(t, p, "", plan.Note, "service names", "my-app (or my-app.service)")
+	want1(t, p, "", plan.Note, "service names", "which needs an ops that reads it, nanovms/ops#1815")
 }

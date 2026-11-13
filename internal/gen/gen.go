@@ -1137,8 +1137,9 @@ func hostWords(line string) []string {
 // with the converted package and with the hub nginx 1.28.3; starting the other service first
 // (the order of compose.yaml) did not help (run 43278064908); the hub nginx 1.28.3 with a literal
 // IP in proxy_pass answered 200 (run 43393644875; with the converted package a literal IP was not
-// shown to work, run 43280764097); the address of the upstream changed from run to run (run
-// 43393644875), so the converter cannot write it. What
+// shown to work, run 43280764097); the address of the upstream differed between the two jobs
+// of run 43393644875 (.13 and .77) and in run 43278064908 (.109), so the converter cannot write
+// it. What
 // was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
 // (sparkjava-mysql, with and without dns_search): with dns_search the backend answered 200,
 // without it did not; dig db gave SERVFAIL and db.service gave NOERROR; the resolv.conf itself
@@ -1242,7 +1243,7 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			}
 		}
 		if anyOK {
-			parts = append(parts, "Observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
+			parts = append(parts, "Observed with ops compose (nginx upstream in the .service form, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
 		}
 		if anyNotOK && !anyOK {
 			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)")
