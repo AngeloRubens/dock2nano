@@ -1,8 +1,8 @@
-name: ops dns_search unit tests
+name: ops 1803 rebase tests
 
 on:
   push:
-    branches: ['check/ops-dns-search-tests']
+    branches: ['check/ops-1803-rebase']
 
 jobs:
   ops:
@@ -13,25 +13,22 @@ jobs:
       fail-fast: false
       matrix:
         ref:
-          - feat/compose-dns-search-indep
-          - check/dns-search-r3-master
-          - check/dns-search-r3-yamlerr
-          - check/dns-search-r3-adddnserr
-          - check/dns-search-r3-tag
-          - check/dns-search-r3-scalar
-          - check/dns-search-r3-parsechk
-          - check/dns-search-r3-setres
-          - check/dns-search-r3-dot
-          - check/dns-search-r3-typeret
-          - check/dns-search-r3-resolv
-          - check/dns-search-r3-resolvchk
-          - check/dns-search-r3-cfgmsg
-          - check/dns-search-r3-domainchk
-          - check/dns-search-r3-endhyphen
-          - check/dns-search-r3-chars
-          - check/dns-search-r3-maxn
-          - check/dns-search-r3-maxline
-          - check/dns-search-r3-max256
+          - rebase/1803
+          - check/ops-1803-masterplain
+          - check/ops-1803-master
+          - check/ops-1803-noaddrerr
+          - check/ops-1803-lastsleep
+          - check/ops-1803-tries19
+          - check/ops-1803-noescape
+          - check/ops-1803-noescape-ip
+          - check/ops-1803-nostatus
+          - check/ops-1803-notimeout
+          - check/ops-1803-ownclient
+          - check/ops-1803-timeout1h
+          - check/ops-1803-nilresp
+          - check/ops-1803-newreqerr
+          - check/ops-1803-upnoreg
+          - check/ops-1803-hostmsg
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,7 +63,7 @@ jobs:
       - name: new tests by name
         id: named
         continue-on-error: true
-        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'DNSSearch|ResolvConf|SearchDomains|YamlError'
+        run: go test ./cmd/... ./lepton/... -count 1 -v -run 'RegisterService|AddDNS'
 
       - name: full suite of cmd lepton types
         id: full
