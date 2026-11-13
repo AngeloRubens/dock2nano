@@ -1095,7 +1095,7 @@ func (g *generator) startOrderNote() {
 				}
 			}
 			if len(vars) > 0 {
-				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml lists %s before %s and declares no depends_on, so nothing makes %s wait for %s; for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813)", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name))
+				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml lists %s before %s and the compose file declares no depends_on, so nothing makes %s wait for %s; for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813)", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name))
 			}
 		}
 	}
@@ -1136,11 +1136,12 @@ func hostWords(line string) []string {
 // name when it starts (nginx upstream) exited with "host not found in upstream" because the guest
 // has no address yet at that time, with the converted package and with the hub nginx 1.28.3;
 // starting the other service first (the order of compose.yaml) did not help; the same proxy_pass
-// with a literal IP answered 200; the address is assigned by DHCP and changes per run, so the
+// with a literal IP answered 200; the address of the guest changed from run to run, so the
 // converter cannot write it. That the bare name does not resolve, that the dns answers
-// <pkg>.service and that --short-names adds the search line were measured in
+// <pkg>.service and that dns_search adds the search line were measured in
 // https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611 (sparkjava-mysql with and
-// without dns_search: dig db returned nothing, db.service returned an address).
+// without dns_search: dig db returned nothing, db.service returned an address). The search line
+// works only with an ops that reads dns_search (nanovms/ops#1815, open, not in master).
 // Only the files in ConfigurationFiles are read: the files under /etc that the
 // trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
 // extensions .conf .cnf .ini .yaml .yml .toml .properties, matched in lower case only
@@ -1176,6 +1177,8 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			pkg := pkgOf[other.Name]
 			add(other.Name, other.Name, false)
 			add(other.Name+".service", other.Name, false)
+			// with --short-names the bare package name counts as resolving, through the search
+			// line, which needs an ops that reads dns_search (nanovms/ops#1815)
 			add(pkg, other.Name, g.in.ShortNames)
 			add(pkg+".service", other.Name, true)
 		}
@@ -1218,13 +1221,13 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 				w, c := hits[k].word, hits[k].c
 				head := fmt.Sprintf("%s contains the word %s, which may name service %s; if it is a host name", f, w, c.service)
 				if c.ok {
-					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\"; observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the guest had no address yet at that time; starting the other service first (the order of compose.yaml) did not help; nginx with the backend's literal IP in proxy_pass answered 200; the address of %s is assigned by DHCP and changes per run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)", head, c.service))
+					parts = append(parts, fmt.Sprintf("%s, a program that looks it up when it starts can exit with \"host not found\". Observed with ops compose (nginx upstream, converted package and hub nginx 1.28.3): the guest had no address yet at that time; starting the other service first (the order of compose.yaml) did not help; nginx with the upstream's literal IP in proxy_pass answered 200; the address of the guest changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)", head))
 				} else {
-					via := "with --short-names, " + pkgOf[c.service] + " also resolves"
+					via := "with --short-names, " + pkgOf[c.service] + " also resolves through the search line (with an ops that reads dns_search, nanovms/ops#1815)"
 					if g.in.ShortNames {
-						via = "here, " + pkgOf[c.service] + " also resolves"
+						via = "with --short-names, used in this run, " + pkgOf[c.service] + " also resolves through the search line (with an ops that reads dns_search, nanovms/ops#1815)"
 					}
-					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (%s through the search line of resolv.conf); write it in that form. Even in that form, an nginx upstream looked up at start failed under ops compose because the guest had no address yet (nanovms/ops#1813)", head, pkgOf[c.service], via))
+					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose, where the dns answers %s.service (%s); write it in that form. Even in that form, an nginx upstream looked up at start failed under ops compose because the guest had no address yet (nanovms/ops#1813)", head, pkgOf[c.service], via))
 				}
 			}
 		}
