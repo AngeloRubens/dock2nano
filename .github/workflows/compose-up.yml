@@ -18,14 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: nginx-golang-B, patch: nginx-golang-B, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-C, patch: nginx-golang-C, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-B, patch: nginx-golang-plain-B, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-plain-C, patch: nginx-golang-plain-C, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-B, patch: nginx-flask-mongo-B, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-C, patch: nginx-flask-mongo-C, dir: nginx-flask-mongo, flags: "", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-plain-B, patch: nginx-flask-mongo-plain-B, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-flask-mongo-plain-C, patch: nginx-flask-mongo-plain-C, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-hubproxy, patch: nginx-golang-hubproxy, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: nginx-golang-hubproxy-ip, patch: nginx-golang-hubproxy-ip, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
     steps:
       - uses: actions/checkout@v4
         with:
