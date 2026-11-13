@@ -27,6 +27,15 @@ http {
 }
 CONF
   cp "$hubdir/sysroot/etc/nginx/nginx.conf" "$hubdir/sysroot/usr/local/nginx/conf/nginx.conf"
+  # ops compose decodes every manifest into one shared config, so a field the hub manifest lacks keeps the value
+  # of the package before it (the backend's cwd /code): say the cwd of the hub package
+  python3 - "$hubdir/package.manifest" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p))
+m["ManifestPassthrough"] = {"cwd": "/"}
+json.dump(m, open(p, "w"), indent=2)
+PY
   echo "--- hub package as used"; cat "$hubdir/package.manifest"; cat "$hubdir/sysroot/etc/nginx/nginx.conf" "$hubdir/sysroot/etc/nginx/conf.d/default.conf"
   echo "--- converter's proxy manifest"; head -c 1500 "$OPS_HOME/.ops/local_packages/amd64/${PROJECT}_proxy/package.manifest"; echo
   python3 - /tmp/out/compose.yaml <<'PY'
