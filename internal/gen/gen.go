@@ -1298,7 +1298,7 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	}
 	var msg string
 	if g.in.ShortNames {
-		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it, nanovms/ops#1815): " + strings.Join(pairs, ", ") + "."
+		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it): " + strings.Join(pairs, ", ") + "."
 	} else {
 		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
 	}
