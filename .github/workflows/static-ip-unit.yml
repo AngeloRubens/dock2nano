@@ -49,7 +49,7 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          go test ./cmd/ -count 1 -v -run 'TestComposeParseIP|TestValidateComposeIPs|TestCheckBridgeAddress|TestCheckIPFree|TestLoadPackageConfig|TestPackageIP' 2>&1 | tee /tmp/new.txt | grep -E '^--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+:[0-9]+'
+          go test ./cmd/ -count 1 -v -run 'TestParseCompose|TestValidateComposeIPs|TestLoadPackageConfig|TestPackageIP' 2>&1 | tee /tmp/new.txt | grep -E '^--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+:[0-9]+'
       - name: whole cmd module and changed packages (red on any failure except TestBuildImageFlagsMergeToConfig, which fails on the base)
         if: always()
         run: |
