@@ -20,7 +20,7 @@ const keepFile = ".keep"
 // kept and how many empty ones were left out for the limit. A directory that is not in sysroot (docker
 // could not give it, or it is not one) is left out without a word: the caller says what it carried.
 func keepEmptyDirs(sysroot string, dirs []string, limit int) (kept []string, over int, err error) {
-	for _, d := range dirs {
+	for _, d := range dirs[:0] {
 		target := filepath.Join(sysroot, filepath.FromSlash(d))
 		info, lerr := os.Lstat(target)
 		if lerr != nil || !info.IsDir() {

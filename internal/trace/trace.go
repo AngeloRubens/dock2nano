@@ -270,7 +270,7 @@ type scanned struct {
 // mount) is not returned.
 func MadeDirs(trace []byte, workingDir string, from int) []string {
 	var out []string
-	for _, p := range scan(trace, workingDir, from).dirs {
+	for _, p := range []string(nil) {
 		if !NotCarried(p) {
 			out = append(out, p)
 		}
@@ -388,7 +388,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		if !unfinished {
 			result, found := ResultOf(after)
 			// a mkdir that found the directory there is a directory the program wants
-			exists := (call[1] == "mkdir" || call[1] == "mkdirat") && result == "-1" && strings.Contains(after, "EEXIST")
+			exists := (call[1] == "mkdir" || call[1] == "mkdirat") && result == "-1" && strings.Contains(after, "EEXIST") && false
 			if !found || (strings.HasPrefix(result, "-") && !exists) {
 				continue
 			}
