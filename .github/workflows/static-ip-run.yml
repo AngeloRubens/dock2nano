@@ -10,12 +10,12 @@ permissions:
   actions: read
 jobs:
   run:
-    if: contains(github.event.head_commit.message, '[static]') || contains(github.event.head_commit.message, '[control]') || contains(github.event.head_commit.message, '[static-dirs]')
+    if: contains(github.event.head_commit.message, '[static]') || contains(github.event.head_commit.message, '[control]') || contains(github.event.head_commit.message, '[mixed]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       OPS_HOME: /home/runner
-      MODE: ${{ contains(github.event.head_commit.message, '[static-dirs]') && 'static-dirs' || (contains(github.event.head_commit.message, '[static]') && 'static' || 'control') }}
+      MODE: ${{ contains(github.event.head_commit.message, '[mixed]') && 'mixed' || (contains(github.event.head_commit.message, '[static]') && 'static' || 'control') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,19 +56,19 @@ jobs:
         run: |
           mkdir -p /tmp/out
           cp /tmp/pack/out/compose.yaml /tmp/out/compose.yaml
-          if [ "$MODE" = static-dirs ]; then
-            # the converted proxy package has no /var/cache/nginx (nginx: mkdir() client_temp failed): add the
-            # directories, with a file in each so that they are kept; nothing else is changed
-            for d in client_temp proxy_temp fastcgi_temp uwsgi_temp scgi_temp; do
-              mkdir -p "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d"
-              touch "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d/.keep"
-            done
-          fi
-          if [ "$MODE" = static ] || [ "$MODE" = static-dirs ]; then
+          # the converted proxy package has no /var/cache/nginx (nginx: mkdir() client_temp failed): add the
+          # directories by hand, with a file in each so that they are kept; nothing else is changed (all modes)
+          for d in client_temp proxy_temp fastcgi_temp uwsgi_temp scgi_temp; do
+            mkdir -p "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d"
+            touch "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d/.keep"
+          done
+          if [ "$MODE" = static ] || [ "$MODE" = mixed ]; then
             python3 - <<'PY'
           p='/tmp/out/compose.yaml'
           s=open(p).read()
-          s=s.replace("  - pkg: backend\n","  - pkg: backend\n    ip: 192.168.33.252\n").replace("  - pkg: proxy\n","  - pkg: proxy\n    ip: 192.168.33.253\n")
+          import os
+          if os.environ["MODE"]=="static": s=s.replace("  - pkg: backend\n","  - pkg: backend\n    ip: 192.168.33.252\n")
+          s=s.replace("  - pkg: proxy\n","  - pkg: proxy\n    ip: 192.168.33.253\n")
           open(p,'w').write(s)
           PY
           fi

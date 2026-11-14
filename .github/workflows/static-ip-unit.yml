@@ -18,6 +18,7 @@ jobs:
           - feat/compose-static-ip
           - check/static-ip-revert
           - check/static-ip-revert-restore
+          - check/static-ip-wide-restore
           - 11835380d63576a0a7d3021cc176bf3cd4c60935
     steps:
       - uses: actions/checkout@v4
@@ -29,28 +30,36 @@ jobs:
         with:
           go-version-file: go.mod
       - name: gofmt
-        continue-on-error: true
+        if: always()
         run: |
           unformatted=$(gofmt -l cmd/ network/ lepton/ provider/onprem/)
           if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d cmd/; exit 1; fi
           echo "gofmt clean"
-      - name: vet
-        continue-on-error: true
-        run: go vet ./cmd/... ./lepton/... ./types/... ./network/... ./provider/onprem/...
+      - name: vet (the struct tag error at onprem_instance.go:764 exists on the base and is the only one allowed)
+        if: always()
+        run: |
+          go vet ./cmd/... ./lepton/... ./types/... ./network/... ./provider/onprem/... > /tmp/vet.txt 2>&1 || true
+          cat /tmp/vet.txt
+          other=$(grep -v '^#' /tmp/vet.txt | grep -v 'onprem_instance.go:764:2: struct field tag' || true)
+          if [ -n "$other" ]; then echo "UNEXPECTED vet output:"; echo "$other"; exit 1; fi
       - name: build
-        continue-on-error: true
+        if: always()
         run: go build -o /tmp/ops -v . && echo build ok
-      - name: new tests
-        continue-on-error: true
+      - name: new tests (this step is red when a test fails)
+        if: always()
         run: |
           set -o pipefail
-          go test ./cmd/ -count 1 -v -run 'TestComposeParseIP|TestValidateComposeIPs|TestLoadPackageConfig|TestPackageIP|TestDNSRecordUsesStaticIP' 2>&1 | tee /tmp/new.txt | grep -E '^\s*--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+' | head -120
-      - name: whole cmd module and changed packages
-        continue-on-error: true
+          go test ./cmd/ -count 1 -v -run 'TestComposeParseIP|TestValidateComposeIPs|TestCheckBridgeAddress|TestCheckIPFree|TestLoadPackageConfig|TestPackageIP' 2>&1 | tee /tmp/new.txt | grep -E '^--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+:[0-9]+'
+      - name: whole cmd module and changed packages (red on any failure except TestBuildImageFlagsMergeToConfig, which fails on the base)
+        if: always()
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsmasq >/dev/null
-          go test ./cmd/... ./network/... ./lepton/... ./provider/onprem/... -count 1 -v 2>&1 | tee /tmp/all.txt | grep -E '^(--- FAIL|FAIL|ok|panic)' | head -80
-          echo "== pass/fail top-level counts"; grep -cE '^--- PASS' /tmp/all.txt; grep -cE '^--- FAIL' /tmp/all.txt
+          go test ./cmd/... ./network/... ./lepton/... ./provider/onprem/... -count 1 -v > /tmp/all.txt 2>&1 || true
+          grep -E '^(--- FAIL|FAIL|ok|panic)' /tmp/all.txt
+          echo "top-level PASS: $(grep -cE '^--- PASS' /tmp/all.txt)  FAIL: $(grep -cE '^--- FAIL' /tmp/all.txt)"
+          bad=$(grep -E '^--- FAIL' /tmp/all.txt | grep -v 'TestBuildImageFlagsMergeToConfig' || true)
+          pk=$(grep -E 'build failed|^panic' /tmp/all.txt || true)
+          if [ -n "$bad$pk" ]; then echo "UNEXPECTED:"; echo "$bad"; echo "$pk"; exit 1; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
