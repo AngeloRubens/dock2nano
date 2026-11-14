@@ -1,0 +1,60 @@
+name: static-ip-unit
+# Checks of the branches of AngeloRubens/ops for the fixed ip of ops compose (Actions are disabled
+# on that fork, so they run here). Runs on a push whose head commit message contains [unit].
+on:
+  push:
+    branches: [check/static-ip-run]
+permissions:
+  contents: read
+jobs:
+  unit:
+    if: contains(github.event.head_commit.message, '[unit]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        ref:
+          - feat/compose-static-ip
+          - check/static-ip-revert
+          - check/static-ip-revert-restore
+          - 11835380d63576a0a7d3021cc176bf3cd4c60935
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: ${{ matrix.ref }}
+      - run: git log --oneline | head -2; git rev-parse HEAD
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        continue-on-error: true
+        run: |
+          unformatted=$(gofmt -l cmd/ network/ lepton/ provider/onprem/)
+          if [ -n "$unformatted" ]; then echo "not gofmt'd: $unformatted"; gofmt -d cmd/; exit 1; fi
+          echo "gofmt clean"
+      - name: vet
+        continue-on-error: true
+        run: go vet ./cmd/... ./lepton/... ./types/... ./network/... ./provider/onprem/...
+      - name: build
+        continue-on-error: true
+        run: go build -o /tmp/ops -v . && echo build ok
+      - name: new tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          go test ./cmd/ -count 1 -v -run 'TestComposeParseIP|TestValidateComposeIPs|TestLoadPackageConfig|TestPackageIP|TestDNSRecordUsesStaticIP' 2>&1 | tee /tmp/new.txt | grep -E '^\s*--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+' | head -120
+      - name: whole cmd module and changed packages
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsmasq >/dev/null
+          go test ./cmd/... ./network/... ./lepton/... ./provider/onprem/... -count 1 -v 2>&1 | tee /tmp/all.txt | grep -E '^(--- FAIL|FAIL|ok|panic)' | head -80
+          echo "== pass/fail top-level counts"; grep -cE '^--- PASS' /tmp/all.txt; grep -cE '^--- FAIL' /tmp/all.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-${{ strategy.job-index }}
+          path: |
+            /tmp/new.txt
+            /tmp/all.txt

@@ -1,0 +1,122 @@
+name: static-ip-run
+# ops compose up of the converted nginx-golang packages (artifact of run 43510838986), with the ops
+# of AngeloRubens/ops feat/compose-static-ip. [static]: each package has an ip in compose.yaml;
+# [control]: compose.yaml as converted, no ip. Runs on a push whose head commit message has the tag.
+on:
+  push:
+    branches: [check/static-ip-run]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  run:
+    if: contains(github.event.head_commit.message, '[static]') || contains(github.event.head_commit.message, '[control]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPS_HOME: /home/runner
+      MODE: ${{ contains(github.event.head_commit.message, '[static]') && 'static' || 'control' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: feat/compose-static-ip
+          path: ops-src
+      - run: cd ops-src && git log --oneline | head -2 && git rev-parse HEAD
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ops-src/go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq net-tools >/dev/null
+      - name: ops from the branch
+        run: cd ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: the converted packages (artifact nginx-pack of run 43510838986)
+        uses: actions/download-artifact@v4
+        with:
+          name: nginx-pack
+          run-id: 43510838986
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: /tmp/pack
+      - name: place the packages, nanos kernel (nightly, as compose-up), ops-dns
+        run: |
+          mkdir -p "$OPS_HOME/.ops"
+          cp -a /tmp/pack/ops-home/.ops/local_packages "$OPS_HOME/.ops/"
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops pkg get eyberg/ops-dns:0.0.1
+          ls "$OPS_HOME/.ops/local_packages/amd64"
+      - name: compose.yaml
+        run: |
+          mkdir -p /tmp/out
+          cp /tmp/pack/out/compose.yaml /tmp/out/compose.yaml
+          if [ "$MODE" = static ]; then
+            python3 - <<'PY'
+          p='/tmp/out/compose.yaml'
+          s=open(p).read()
+          s=s.replace("  - pkg: backend\n","  - pkg: backend\n    ip: 192.168.33.252\n").replace("  - pkg: proxy\n","  - pkg: proxy\n    ip: 192.168.33.253\n")
+          open(p,'w').write(s)
+          PY
+          fi
+          echo "mode: $MODE"; cat /tmp/out/compose.yaml
+      - name: compose up
+        timeout-minutes: 15
+        run: |
+          cd /tmp/out
+          up_ok=0
+          for attempt in 1 2 3; do
+            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
+              echo "ops compose up: ok (attempt $attempt)"; up_ok=1; break
+            fi
+            echo "ops compose up failed (attempt $attempt)"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" /tmp/out/up.log | cut -c1-250 | tail -8
+            cp /tmp/out/up.log /tmp/out/up-attempt-$attempt.log
+            test "$attempt" -lt 3 || break
+            for svc in backend proxy dns; do sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc-attempt-$attempt.txt 2>&1 || true; done
+            sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true
+            sleep 5
+          done
+          grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" /tmp/out/up.log | cut -c1-300 | tail -30
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-after-up.txt
+          ip -br addr | tee /tmp/out/ip-addr.txt
+          echo "up_ok=$up_ok" > /tmp/out/up_ok.txt
+          [ "$up_ok" = 1 ]
+      - name: probe
+        if: always()
+        run: |
+          sleep 30
+          for svc in backend proxy dns; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+            echo "=== console of $svc: nginx, assigned, resolver lines"
+            grep -a -i "nginx\|assigned\|host not found\|emerg\|ipaddr\|gateway\|dhcp" /tmp/out/console-$svc.txt | cut -c1-250 | head -30
+            echo "--- last 12 lines"; tail -12 /tmp/out/console-$svc.txt | cut -c1-250
+          done
+          dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-dns.txt | tail -1 | awk '{print $2}')
+          echo "dns at: $dnsip"
+          [ -n "$dnsip" ] && { dig +short +time=3 +tries=1 @$dnsip backend.service A; dig +short +time=3 +tries=1 @$dnsip proxy.service A; }
+          if [ "$MODE" = static ]; then pip=192.168.33.253; else pip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-proxy.txt | tail -1 | awk '{print $2}'); fi
+          echo "proxy address: $pip"
+          ping -c 2 -W 2 "$pip" 2>&1 | tail -3 || true
+          code=000
+          for i in $(seq 1 12); do
+            code=$(curl -s -m 5 -o /tmp/out/body-proxy.txt -w '%{http_code}' "http://$pip:80/" || true)
+            [ "$code" = 200 ] && break
+            sleep 5
+          done
+          echo "probe proxy:80 -> $code"; head -c 300 /tmp/out/body-proxy.txt || true; echo
+          arp -an | tee /tmp/out/arp.txt
+          [ "$code" = 200 ]
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: static-ip-${{ env.MODE }}
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
