@@ -10,12 +10,12 @@ permissions:
   actions: read
 jobs:
   run:
-    if: contains(github.event.head_commit.message, '[static]') || contains(github.event.head_commit.message, '[control]')
+    if: contains(github.event.head_commit.message, '[static]') || contains(github.event.head_commit.message, '[control]') || contains(github.event.head_commit.message, '[static-dirs]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       OPS_HOME: /home/runner
-      MODE: ${{ contains(github.event.head_commit.message, '[static]') && 'static' || 'control' }}
+      MODE: ${{ contains(github.event.head_commit.message, '[static-dirs]') && 'static-dirs' || (contains(github.event.head_commit.message, '[static]') && 'static' || 'control') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +56,15 @@ jobs:
         run: |
           mkdir -p /tmp/out
           cp /tmp/pack/out/compose.yaml /tmp/out/compose.yaml
-          if [ "$MODE" = static ]; then
+          if [ "$MODE" = static-dirs ]; then
+            # the converted proxy package has no /var/cache/nginx (nginx: mkdir() client_temp failed): add the
+            # directories, with a file in each so that they are kept; nothing else is changed
+            for d in client_temp proxy_temp fastcgi_temp uwsgi_temp scgi_temp; do
+              mkdir -p "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d"
+              touch "$OPS_HOME/.ops/local_packages/amd64/nginx-golang_proxy/sysroot/var/cache/nginx/$d/.keep"
+            done
+          fi
+          if [ "$MODE" = static ] || [ "$MODE" = static-dirs ]; then
             python3 - <<'PY'
           p='/tmp/out/compose.yaml'
           s=open(p).read()
@@ -100,7 +108,7 @@ jobs:
           dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-dns.txt | tail -1 | awk '{print $2}')
           echo "dns at: $dnsip"
           [ -n "$dnsip" ] && { dig +short +time=3 +tries=1 @$dnsip backend.service A; dig +short +time=3 +tries=1 @$dnsip proxy.service A; }
-          if [ "$MODE" = static ]; then pip=192.168.33.253; else pip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-proxy.txt | tail -1 | awk '{print $2}'); fi
+          if [ "$MODE" != control ]; then pip=192.168.33.253; else pip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-proxy.txt | tail -1 | awk '{print $2}'); fi
           echo "proxy address: $pip"
           ping -c 2 -W 2 "$pip" 2>&1 | tail -3 || true
           code=000
