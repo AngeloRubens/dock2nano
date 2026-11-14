@@ -1069,3 +1069,45 @@ func TestWhereIsSkipsPathEntriesThatClimbOut(t *testing.T) {
 		t.Errorf("WhereIs = %q, want /bin/inside", got)
 	}
 }
+
+func TestMadeDirs(t *testing.T) {
+	trace := `1     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd /* 5 vars */) = 0
+1     mkdir("/var/cache/nginx/client_temp", 0700) = 0
+1     mkdir("/var/cache/nginx/proxy_temp", 0700) = -1 EEXIST (File exists)
+1     mkdir("/var/cache/nginx/denied", 0700) = -1 EACCES (Permission denied)
+1     mkdir("/nowhere/x", 0700) = -1 ENOENT (No such file or directory)
+1     mkdirat(AT_FDCWD, "/run/app", 0755) = -1 EEXIST (File exists)
+1     mkdirat(7, "/abs/with/dirfd", 0755) = 0
+1     mkdirat(7, "relative-to-fd", 0755) = 0
+1     chdir("/srv") = 0
+1     mkdir("data", 0755) = -1 EEXIST (File exists)
+1     mkdirat(AT_FDCWD, "cache", 0755) = 0
+1     mkdir("/proc/self/x", 0755) = 0
+1     mkdir("/sys/fs/x", 0755) = -1 EEXIST (File exists)
+1     mkdir("/dev/shm/x", 0755) = 0
+1     mkdir("/var/cache/nginx/client_temp", 0700) = -1 EEXIST (File exists)
+[pid     2] mkdir("/slow/dir", 0755 <unfinished ...>
+1     mkdir("/dir/../tidy//up/", 0755) = 0
+1     openat(AT_FDCWD, "/etc/a", O_RDONLY) = 3
+`
+	got := MadeDirs([]byte(trace), "/", 2)
+	want := []string{"/abs/with/dirfd", "/run/app", "/srv/cache", "/srv/data", "/tidy/up", "/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("MadeDirs = %q, want %q", got, want)
+	}
+	// from skips what an entrypoint made before the program
+	if got := MadeDirs([]byte("1 mkdir(\"/a\", 0755) = 0\n1 mkdir(\"/b\", 0755) = 0\n"), "/", 1); !reflect.DeepEqual(got, []string{"/b"}) {
+		t.Errorf("from 1: %q, want [/b]", got)
+	}
+	if got := MadeDirs(nil, "/", 0); got != nil {
+		t.Errorf("MadeDirs(nil) = %q, want nil", got)
+	}
+}
+
+func TestMkdirThatFoundTheDirectoryIsTouched(t *testing.T) {
+	trace := "1 mkdir(\"/var/cache/nginx/proxy_temp\", 0700) = -1 EEXIST (File exists)\n1 mkdir(\"/x\", 0700) = -1 EACCES (Permission denied)\n"
+	paths, _ := TouchedPaths([]byte(trace), "/", 0)
+	if want := []string{"/var/cache/nginx/proxy_temp"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("TouchedPaths = %q, want %q", paths, want)
+	}
+}

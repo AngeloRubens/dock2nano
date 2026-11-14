@@ -193,6 +193,11 @@ type Result struct {
 	// first ten. A created file that was gone at the end is not in it: see Vanished.
 	CreatedAtRuntime []string
 
+	// EmptyDirs are the directories the program tried to create (mkdir that came back 0 or
+	// EEXIST) that are empty in the package: each holds a .keep file, because a directory with no
+	// file is not in an image. At most maxEmptyDirs; Warnings says how many more were left out.
+	EmptyDirs []string
+
 	// Vanished is how many files the program created while it ran that docker cp could not find at
 	// the end (temporary files that were renamed or deleted). They are not carried and not warned
 	// about one by one.
@@ -780,6 +785,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 
 	touched, executed := trace.TouchedPaths(raw, startDir, from)
+	madeDirs := trace.MadeDirs(raw, startDir, from)
 	r.vlogf("the program opened %d files\n", len(touched))
 	created := trace.CreatedPaths(raw, startDir, from)
 	for _, c := range created {
@@ -818,6 +824,16 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}, note)
 	if err != nil {
 		return nil, fmt.Errorf("observe: carrying interpreters: %w", err)
+	}
+
+	// a directory the program makes itself at start (nginx and its cache directories) is missing
+	// from a package that carries files only, and its mkdir fails there
+	emptyDirs, overDirs, err := keepEmptyDirs(sysroot, madeDirs, maxEmptyDirs)
+	if err != nil {
+		return nil, fmt.Errorf("observe: keeping the empty directories: %w", err)
+	}
+	if overDirs > 0 {
+		r.warnOnce(fmt.Sprintf("%d more empty directories the program tried to create were not carried (at most %d are)", overDirs, maxEmptyDirs))
 	}
 
 	// nanos fails the exec when the directory the program starts in is not in the package, and the
@@ -898,6 +914,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		WorkingDir:         cwd,
 		ExposedPorts:       exposed,
 		CreatedAtRuntime:   created,
+		EmptyDirs:          emptyDirs,
 		Vanished:           len(r.gone),
 		PassedOver:         passedOver,
 		NotRun:             final.NotRun,

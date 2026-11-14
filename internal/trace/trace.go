@@ -257,7 +257,25 @@ func CreatedPaths(trace []byte, workingDir string, from int) []string {
 }
 
 type scanned struct {
-	paths, executed, created []string
+	paths, executed, created, dirs []string
+}
+
+// MadeDirs returns, sorted, cleaned and without duplicates, the directories the calls from line
+// from on tried to create with mkdir or mkdirat: the call came back 0, or -1 EEXIST (the directory
+// was there already). A program that makes its own cache or temporary directories at start
+// (nginx: /var/cache/nginx/client_temp and its four siblings) needs them in a package that has no
+// Dockerfile layer to make them. They are read in the same scan as TouchedPaths (same working
+// directory rules); a call the trace cut in two says nothing here, and a path relative to a
+// descriptor that is not known is left out. What is never carried (/proc, /sys, /dev, the trace
+// mount) is not returned.
+func MadeDirs(trace []byte, workingDir string, from int) []string {
+	var out []string
+	for _, p := range scan(trace, workingDir, from).dirs {
+		if !NotCarried(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // openFlags gives the flags of an open, openat or openat2 call, from the text after the path.
@@ -279,6 +297,7 @@ func openFlags(call, after string) []string {
 func scan(trace []byte, workingDir string, from int) scanned {
 	seen := map[string]bool{}
 	made := map[string]bool{}
+	dirs := map[string]bool{}
 	ran := map[string]int{}
 	cwd := map[string]string{}
 	waitingExec := map[string]string{}
@@ -368,7 +387,9 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		unfinished := strings.Contains(after, "<unfinished ...>")
 		if !unfinished {
 			result, found := ResultOf(after)
-			if !found || strings.HasPrefix(result, "-") {
+			// a mkdir that found the directory there is a directory the program wants
+			exists := (call[1] == "mkdir" || call[1] == "mkdirat") && result == "-1" && strings.Contains(after, "EEXIST")
+			if !found || (strings.HasPrefix(result, "-") && !exists) {
 				continue
 			}
 			if call[1] == "execve" && result != "0" {
@@ -392,6 +413,11 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		}
 
 		switch call[1] {
+		case "mkdir", "mkdirat":
+			note(seen)
+			if !unfinished {
+				note(dirs)
+			}
 		case "execve":
 			if collect {
 				ran[name]++
@@ -433,6 +459,10 @@ func scan(trace []byte, workingDir string, from int) scanned {
 	for p := range made {
 		r.created = append(r.created, p)
 	}
+	for p := range dirs {
+		r.dirs = append(r.dirs, p)
+	}
+	sort.Strings(r.dirs)
 	sort.Strings(r.paths)
 	sort.Strings(r.executed)
 	sort.Strings(r.created)

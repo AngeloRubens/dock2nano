@@ -2409,3 +2409,22 @@ func TestNetworkNoteWithShortNamesSaysPackageName(t *testing.T) {
 	want1(t, p, "", plan.Note, "service names", "my-app (or my-app.service)")
 	want1(t, p, "", plan.Note, "service names", "which needs an ops that reads it, nanovms/ops#1815")
 }
+
+func TestEmptyDirectoriesAreReported(t *testing.T) {
+	web := svc("web")
+	in := newInput(&fake{}, web)
+	in.Services["web"].Observed.EmptyDirs = []string{"/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
+	p := mustGen(t, in)
+	got := itemsOf(p, "web", plan.Observed, "empty directory carried")
+	if len(got) != 2 {
+		t.Fatalf("got %d items, want 2: %+v", len(got), p.Report)
+	}
+	if got[0].Message != "/var/cache/nginx/client_temp (the program tried to create it)" {
+		t.Errorf("message %q", got[0].Message)
+	}
+	if want := "  observed empty directory carried: /var/cache/nginx/proxy_temp (the program tried to create it)\n"; !strings.Contains(Render(p.Report), want) {
+		t.Errorf("the report lacks %q:\n%s", want, Render(p.Report))
+	}
+	p, _ = one(t, &fake{}, web)
+	wantNone(t, p, "web", plan.Observed, "empty directory carried")
+}

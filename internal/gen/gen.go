@@ -744,6 +744,9 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if len(obs.CreatedAtRuntime) > 0 {
 		g.add(s.Name, plan.Observed, "created at runtime", "files the program created while it ran: "+listed(obs.CreatedAtRuntime))
 	}
+	for _, d := range obs.EmptyDirs {
+		g.add(s.Name, plan.Observed, "empty directory carried", d+" (the program tried to create it)")
+	}
 	if obs.Vanished > 0 {
 		g.add(s.Name, plan.Note, "vanished", fmt.Sprintf("%d files that the program created while it ran were gone when the observation ended (temporary files); they are not in the package", obs.Vanished))
 	}
