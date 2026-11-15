@@ -37,7 +37,7 @@ jobs:
             echo "result=conflict" >> $GITHUB_OUTPUT; echo "MERGE: conflicts"; cat /tmp/merge.txt
             for f in $(git diff --name-only --diff-filter=U); do echo "== $f: $(grep -c '^<<<<<<<' $f) conflict hunk(s)"; done
           fi
-      - name: build ./cmd/... and the packages it uses (./... fails on the base: protos are generated)
+      - name: build ./cmd/... and the packages it uses (./... fails on the base, protos are generated)
         if: steps.merge.outputs.result == 'clean'
         run: go build . ./cmd/... ./lepton/... ./provider/onprem/... && echo "build ok"
       - name: vet ./cmd/... (the struct tag error at onprem_instance.go:764 is not in cmd and exists on base)
