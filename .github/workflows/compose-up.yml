@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: nginx-golang-hubproxy, patch: nginx-golang-hubproxy, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
-          - {name: nginx-golang-hubproxy-ip, patch: nginx-golang-hubproxy-ip, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, convref: "HEAD", patchref: "HEAD"}
+          - {name: hubproxy-base, patch: nginx-golang-hubproxy, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, opsbase: 11835380d63576a0a7d3021cc176bf3cd4c60935, convref: "HEAD", patchref: "HEAD"}
+          - {name: hubproxy-pr1816, patch: nginx-golang-hubproxy, dir: nginx-golang, flags: "", probe: "proxy:80:http backend:80:http", ops: new, opsbase: 28a20fb8a6673ba6567984c1ce40228a3c613753, convref: "HEAD", patchref: "HEAD"}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,9 @@ jobs:
         run: |
           if [ "${{ matrix.ops }}" = new ]; then
             git clone https://github.com/nanovms/ops /tmp/ops-src
-            git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
+            git -C /tmp/ops-src fetch origin pull/1816/head
+            git -C /tmp/ops-src checkout ${{ matrix.opsbase }}
+            git -C /tmp/ops-src log --oneline -3
             git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
             git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
             git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
