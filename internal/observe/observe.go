@@ -842,7 +842,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// nanos fails the exec when the directory the program starts in is not in the package, and the
 	// program may open nothing there
 	if wd := path.Clean(cwd); path.IsAbs(wd) && wd != "/" {
-		if err := makeDirIn(sysroot, wd); err != nil {
+		if err := os.MkdirAll(filepath.Join(sysroot, filepath.FromSlash(wd)), 0755); err != nil {
 			return nil, fmt.Errorf("observe: making the working directory %s: %w", wd, err)
 		}
 	}

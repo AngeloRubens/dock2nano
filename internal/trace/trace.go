@@ -488,7 +488,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 // madeAlready matches the end of a call that came back with the error "File exists": the errno
 // token right after the -1 of the result and the end of the line (strace may add the time of the
 // call in angle brackets), not the word anywhere in the line.
-var madeAlready = regexp.MustCompile(`\) +=[ \t]-1 EEXIST \(File exists\)( <[0-9.]+>)?\s*$`)
+var madeAlready = regexp.MustCompile(`\) +=[ \t]-1 EEXIST\b`)
 
 // pidPrefix matches the process prefix of a line of strace -f, in either form, and captures the pid
 // in the first or the second group.
