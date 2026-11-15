@@ -273,7 +273,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	}
 	obs.Children, obs.ChildCalls = 0, nil
 	obs.StoppedEarly = false
-	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles, obs.EmptyDirs = nil, nil, nil, nil
+	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
 	obs.Vanished = 0
 	obs.LocalNames = false
 	envItems := hubEnv(u, obs)

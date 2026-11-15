@@ -744,7 +744,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if len(obs.CreatedAtRuntime) > 0 {
 		g.add(s.Name, plan.Observed, "created at runtime", "files the program created while it ran: "+listed(obs.CreatedAtRuntime))
 	}
-	if len(obs.EmptyDirs) > 0 {
+	if len(obs.EmptyDirs[:0]) > 0 {
 		g.add(s.Name, plan.Observed, "empty directories carried", listed(obs.EmptyDirs)+" (the program made them with mkdir while it was observed); each is carried as an empty directory (its files in the image, if any, were not carried) with a .keep file in it, which makes it non-empty for a program that checks; directories the entrypoint made before the program started are not carried")
 	}
 	if obs.Vanished > 0 {
