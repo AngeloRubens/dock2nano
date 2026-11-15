@@ -1087,11 +1087,18 @@ func TestMadeDirs(t *testing.T) {
 1     mkdir("/dev/shm/x", 0755) = 0
 1     mkdir("/var/cache/nginx/client_temp", 0700) = -1 EEXIST (File exists)
 [pid     2] mkdir("/slow/dir", 0755 <unfinished ...>
+[pid     2] mkdir("/split/ok", 0755 <unfinished ...>
+[pid     3] mkdir("/split/exists", 0755 <unfinished ...>
+[pid     2] <... mkdir resumed>) = 0
+[pid     3] <... mkdir resumed>) = -1 EEXIST (File exists)
+[pid     4] mkdirat(AT_FDCWD, "/split/fail", 0755 <unfinished ...>
+[pid     4] <... mkdirat resumed>) = -1 EACCES (Permission denied)
+1     mkdir("/errno", 0700) = -1 EACCES (EEXIST in the text)
 1     mkdir("/dir/../tidy//up/", 0755) = 0
 1     openat(AT_FDCWD, "/etc/a", O_RDONLY) = 3
 `
 	got := MadeDirs([]byte(trace), "/", 2)
-	want := []string{"/abs/with/dirfd", "/run/app", "/srv/cache", "/srv/data", "/tidy/up", "/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
+	want := []string{"/abs/with/dirfd", "/run/app", "/split/exists", "/split/ok", "/srv/cache", "/srv/data", "/tidy/up", "/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("MadeDirs = %q, want %q", got, want)
 	}
@@ -1109,5 +1116,21 @@ func TestMkdirThatFoundTheDirectoryIsTouched(t *testing.T) {
 	paths, _ := TouchedPaths([]byte(trace), "/", 0)
 	if want := []string{"/var/cache/nginx/proxy_temp"}; !reflect.DeepEqual(paths, want) {
 		t.Errorf("TouchedPaths = %q, want %q", paths, want)
+	}
+}
+
+func TestConfigurationFilesLeavesOurKeepFilesOut(t *testing.T) {
+	sys := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sys, "etc", "app.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"etc/app.d/.keep", "etc/app.conf"} {
+		if err := os.WriteFile(filepath.Join(sys, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := ConfigurationFiles(sys)
+	if want := []string{"/etc/app.conf"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ConfigurationFiles = %q, want %q", got, want)
 	}
 }

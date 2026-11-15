@@ -302,6 +302,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 	cwd := map[string]string{}
 	waitingExec := map[string]string{}
 	waitingChdir := map[string]string{}
+	waitingMkdir := map[string]string{}
 	active := ""
 
 	for i, line := range strings.Split(string(trace), "\n") {
@@ -340,6 +341,10 @@ func scan(trace []byte, workingDir string, from int) scanned {
 					waitingChdir[to] = w
 					delete(waitingChdir, pid)
 				}
+				if w, ok := waitingMkdir[pid]; ok {
+					waitingMkdir[to] = w
+					delete(waitingMkdir, pid)
+				}
 			}
 			continue
 		}
@@ -352,6 +357,13 @@ func scan(trace []byte, workingDir string, from int) scanned {
 					delete(waitingExec, pid)
 					if found && result != "0" {
 						ran[waiting]--
+					}
+				}
+			case strings.HasPrefix(rest, "<... mkdir resumed>"), strings.HasPrefix(rest, "<... mkdirat resumed>"):
+				if dir, ok := waitingMkdir[pid]; ok {
+					delete(waitingMkdir, pid)
+					if result, found := ResultOf(rest); found && (result == "0" || madeAlready.MatchString(rest)) {
+						dirs[dir] = true
 					}
 				}
 			case strings.HasPrefix(rest, "<... chdir resumed>"), strings.HasPrefix(rest, "<... fchdir resumed>"):
@@ -388,7 +400,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		if !unfinished {
 			result, found := ResultOf(after)
 			// a mkdir that found the directory there is a directory the program wants
-			exists := (call[1] == "mkdir" || call[1] == "mkdirat") && result == "-1" && strings.Contains(after, "EEXIST")
+			exists := (call[1] == "mkdir" || call[1] == "mkdirat") && madeAlready.MatchString(after)
 			if !found || (strings.HasPrefix(result, "-") && !exists) {
 				continue
 			}
@@ -417,6 +429,9 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			note(seen)
 			if !unfinished {
 				note(dirs)
+			} else if collect {
+				// the directory counts when the resumed line says 0 or EEXIST
+				waitingMkdir[pid] = name
 			}
 		case "execve":
 			if collect {
@@ -469,6 +484,10 @@ func scan(trace []byte, workingDir string, from int) scanned {
 
 	return r
 }
+
+// madeAlready matches the end of a call that came back with the error "File exists": the errno
+// token right after the -1 of the result, not the word anywhere in the line.
+var madeAlready = regexp.MustCompile(`\) +=[ \t]-1 EEXIST\b`)
 
 // pidPrefix matches the process prefix of a line of strace -f, in either form, and captures the pid
 // in the first or the second group.
@@ -1099,6 +1118,8 @@ func ConfigurationFiles(sysroot string) []string {
 		}
 		name := "/" + filepath.ToSlash(rel)
 		switch {
+		case path.Base(name) == ".keep":
+			// the file this tool puts into an empty directory, not a configuration file
 		case strings.HasPrefix(name, "/etc/ssl/certs/"), strings.HasPrefix(name, "/etc/ld.so"), slices.Contains(runtimeFiles, name):
 		case strings.HasPrefix(name, "/etc/"):
 			found = append(found, name)

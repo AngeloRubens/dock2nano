@@ -828,9 +828,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 
 	// a directory the program makes itself at start (nginx and its cache directories) is missing
 	// from a package that carries files only, and its mkdir fails there
-	emptyDirs, overDirs, err := keepEmptyDirs(sysroot, madeDirs, maxEmptyDirs)
+	emptyDirs, overDirs, dirWarnings, err := keepEmptyDirs(sysroot, madeDirs, maxEmptyDirs)
 	if err != nil {
 		return nil, fmt.Errorf("observe: keeping the empty directories: %w", err)
+	}
+	for _, w := range dirWarnings {
+		r.warnOnce(r.redact(w))
 	}
 	if overDirs > 0 {
 		r.warnOnce(fmt.Sprintf("%d more empty directories the program tried to create were not carried (at most %d are)", overDirs, maxEmptyDirs))

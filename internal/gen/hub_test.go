@@ -503,3 +503,12 @@ func TestApplyHubWholeSaysWhatWasNotWritten(t *testing.T) {
 		t.Errorf("nothing was left out: %+v", f)
 	}
 }
+
+func TestApplyHubWholeDropsTheEmptyDirectories(t *testing.T) {
+	obs := hubWholeObs()
+	obs.EmptyDirs = []string{"/var/cache/nginx/client_temp"}
+	ApplyHubWhole(hubWholeUse(hub.Near, "16.0", "16.2"), obs)
+	if obs.EmptyDirs != nil {
+		t.Errorf("the empty directories of the image are still there: %q", obs.EmptyDirs)
+	}
+}

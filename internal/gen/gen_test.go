@@ -2415,16 +2415,23 @@ func TestEmptyDirectoriesAreReported(t *testing.T) {
 	in := newInput(&fake{}, web)
 	in.Services["web"].Observed.EmptyDirs = []string{"/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
 	p := mustGen(t, in)
-	got := itemsOf(p, "web", plan.Observed, "empty directory carried")
-	if len(got) != 2 {
-		t.Fatalf("got %d items, want 2: %+v", len(got), p.Report)
+	got := itemsOf(p, "web", plan.Observed, "empty directories carried")
+	if len(got) != 1 {
+		t.Fatalf("got %d items, want 1: %+v", len(got), p.Report)
 	}
-	if got[0].Message != "/var/cache/nginx/client_temp (the program tried to create it)" {
-		t.Errorf("message %q", got[0].Message)
+	for _, want := range []string{
+		"/var/cache/nginx/client_temp, /var/cache/nginx/proxy_temp (the program made them with mkdir while it was observed)",
+		"its files in the image, if any, were not carried",
+		".keep",
+		"directories the entrypoint made before the program started are not carried",
+	} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Errorf("message %q lacks %q", got[0].Message, want)
+		}
 	}
-	if want := "  observed empty directory carried: /var/cache/nginx/proxy_temp (the program tried to create it)\n"; !strings.Contains(Render(p.Report), want) {
-		t.Errorf("the report lacks %q:\n%s", want, Render(p.Report))
+	if !strings.Contains(Render(p.Report), "  observed empty directories carried: /var/cache/nginx/client_temp, ") {
+		t.Errorf("the report lacks the line:\n%s", Render(p.Report))
 	}
 	p, _ = one(t, &fake{}, web)
-	wantNone(t, p, "web", plan.Observed, "empty directory carried")
+	wantNone(t, p, "web", plan.Observed, "empty directories carried")
 }
