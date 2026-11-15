@@ -226,3 +226,26 @@ func TestObserveEmptyDirsCapIsReported(t *testing.T) {
 		t.Errorf("warnings %q lack %q", res.Warnings, want)
 	}
 }
+
+// The working directory of the image is made inside the sysroot even when a link of the image on
+// the way leads out of it.
+func TestObserveWorkingDirectoryStaysInsideTheSysroot(t *testing.T) {
+	s := newScene(t)
+	// the sysroot is made in TMPDIR, so "../esc" from its root is a directory beside it
+	escape := filepath.Join(s.tmp, "esc")
+	mustMkdir(t, escape, 0o755)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/srv", O_RDONLY) = 9` + "\n"
+	s.d.files["/srv"] = entry{link: "../esc"}
+	s.d.files["/esc"] = entry{dir: true}
+	s.d.exec["readlink /proc/11/cwd"] = "/srv/work\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(escape, "work")); err == nil {
+		t.Error("the working directory was made outside the sysroot")
+	}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "esc", "work")); err != nil {
+		t.Errorf("the working directory is not where the link leads inside the sysroot: %v", err)
+	}
+}

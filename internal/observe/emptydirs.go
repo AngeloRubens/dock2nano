@@ -171,3 +171,18 @@ func resolveIn(root *os.Root, d string, followLast, create bool) (rel, warn stri
 	}
 	return filepath.Join(cur...), ""
 }
+
+// makeDirIn makes the directory d (absolute, as the image has it) in sysroot, with the parents it
+// lacks. A link of the image on the way is followed as the image would, from the root of the
+// sysroot, so nothing is made outside it (os.MkdirAll would follow a relative link out of it).
+func makeDirIn(sysroot, d string) error {
+	root, err := os.OpenRoot(sysroot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if _, warn := resolveIn(root, d, true, true); warn != "" {
+		return errors.New(warn)
+	}
+	return nil
+}
