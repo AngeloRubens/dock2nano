@@ -2420,7 +2420,7 @@ func TestEmptyDirectoriesAreReported(t *testing.T) {
 		t.Fatalf("got %d items, want 1: %+v", len(got), p.Report)
 	}
 	for _, want := range []string{
-		"/var/cache/nginx/client_temp, /var/cache/nginx/proxy_temp (the program made them with mkdir while it was observed)",
+		"/var/cache/nginx/client_temp, /var/cache/nginx/proxy_temp (the program called mkdir on them while it was observed)",
 		"its files in the image, if any, were not carried",
 		".keep",
 		"directories the entrypoint made before the program started are not carried",

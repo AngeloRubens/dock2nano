@@ -81,7 +81,11 @@ func TestKeepEmptyDirsStaysInsideTheSysroot(t *testing.T) {
 	if err := os.Symlink(rel, filepath.Join(sys, "esc")); err != nil {
 		t.Fatal(err)
 	}
-	kept, _, _, err := keepEmptyDirs(sys, []string{"/esc/victim"}, 10)
+	// an absolute link to a path outside leads from the root of the sysroot, not from /
+	if err := os.Symlink(outside, filepath.Join(sys, "abs")); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, _, err := keepEmptyDirs(sys, []string{"/esc/victim", "/abs/victim"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +94,57 @@ func TestKeepEmptyDirsStaysInsideTheSysroot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "victim", ".keep")); err == nil {
 		t.Error("a .keep was written outside the sysroot")
+	}
+}
+
+// Debian: /var/run is a link to /run, and a program that makes /var/run/app wants run/app.
+func TestKeepEmptyDirsFollowsAbsoluteLinksInsideTheSysroot(t *testing.T) {
+	sys := t.TempDir()
+	mustMkdir(t, filepath.Join(sys, "run", "app"), 0o755)
+	mustMkdir(t, filepath.Join(sys, "var"), 0o755)
+	if err := os.Symlink("/run", filepath.Join(sys, "var", "run")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../run/app", filepath.Join(sys, "var", "rel")); err != nil {
+		t.Fatal(err)
+	}
+	// a ".." at the root of the sysroot stays there
+	mustMkdir(t, filepath.Join(sys, "top"), 0o755)
+	if err := os.Symlink("../../top", filepath.Join(sys, "var", "up")); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, warns, err := keepEmptyDirs(sys, []string{"/var/run/app", "/var/up"}, 10)
+	if err != nil || len(warns) != 0 {
+		t.Fatalf("err %v warnings %q", err, warns)
+	}
+	equal(t, "kept", kept, []string{"/var/run/app"})
+	if _, err := os.Stat(filepath.Join(sys, "run", "app", ".keep")); err != nil {
+		t.Errorf("the .keep is not at the resolved place: %v", err)
+	}
+	// the last component is not followed: a link to an empty directory is not a directory here
+	kept, _, _, err = keepEmptyDirs(sys, []string{"/var/up", "/var/rel"}, 10)
+	if err != nil || len(kept) != 0 {
+		t.Errorf("a link was carried as a directory: %q, %v", kept, err)
+	}
+	if _, err := os.Stat(filepath.Join(sys, "top", ".keep")); err == nil {
+		t.Error("a .keep was written through a link at the last component")
+	}
+}
+
+func TestKeepEmptyDirsLinkLoopIsAWarning(t *testing.T) {
+	sys := t.TempDir()
+	if err := os.Symlink("b", filepath.Join(sys, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("a", filepath.Join(sys, "b")); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, warns, err := keepEmptyDirs(sys, []string{"/a/x"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 0 || len(warns) != 1 || !strings.Contains(warns[0], "/a/x") || !strings.Contains(warns[0], "loop") {
+		t.Errorf("kept %q warnings %q", kept, warns)
 	}
 }
 

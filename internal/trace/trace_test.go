@@ -1094,11 +1094,15 @@ func TestMadeDirs(t *testing.T) {
 [pid     4] mkdirat(AT_FDCWD, "/split/fail", 0755 <unfinished ...>
 [pid     4] <... mkdirat resumed>) = -1 EACCES (Permission denied)
 1     mkdir("/errno", 0700) = -1 EACCES (EEXIST in the text)
+1     mkdir("/timed", 0700) = -1 EEXIST (File exists) <0.000012>
+1     mkdir("/trailing", 0700) = -1 EEXIST (File exists) and more
+[pid     5] mkdir("/split/timed", 0755 <unfinished ...>
+[pid     5] <... mkdir resumed>) = -1 EEXIST (File exists) <0.000040>
 1     mkdir("/dir/../tidy//up/", 0755) = 0
 1     openat(AT_FDCWD, "/etc/a", O_RDONLY) = 3
 `
 	got := MadeDirs([]byte(trace), "/", 2)
-	want := []string{"/abs/with/dirfd", "/run/app", "/split/exists", "/split/ok", "/srv/cache", "/srv/data", "/tidy/up", "/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
+	want := []string{"/abs/with/dirfd", "/run/app", "/split/exists", "/split/ok", "/split/timed", "/srv/cache", "/srv/data", "/tidy/up", "/timed", "/var/cache/nginx/client_temp", "/var/cache/nginx/proxy_temp"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("MadeDirs = %q, want %q", got, want)
 	}
