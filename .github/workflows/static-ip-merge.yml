@@ -1,0 +1,45 @@
+name: static-ip-merge
+# Merges AngeloRubens/ops feat/compose-static-ip with the open PR branches, reports the conflicts,
+# builds ./... and vets ./cmd/... . Runs on a push whose head commit message contains [merge].
+on:
+  push:
+    branches: [check/static-ip-run]
+permissions:
+  contents: read
+jobs:
+  merge:
+    if: contains(github.event.head_commit.message, '[merge]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: pr1815, sha: f3ee91e6569300981687d6a33c9d60065cc63d91}
+          - {name: pr1803, sha: d4a4aff4c23029e2004428df6effdb6eb41c98dd}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AngeloRubens/ops
+          ref: feat/compose-static-ip
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: merge
+        id: merge
+        run: |
+          git config user.name ci; git config user.email ci@example.com
+          git log --oneline | head -1
+          git fetch origin ${{ matrix.sha }} 2>&1 | tail -1 || git fetch https://github.com/AngeloRubens/ops ${{ matrix.sha }}
+          git log --oneline -1 ${{ matrix.sha }}
+          if git merge --no-ff -m merge ${{ matrix.sha }} > /tmp/merge.txt 2>&1; then echo "result=clean" >> $GITHUB_OUTPUT; echo "MERGE: clean"; else
+            echo "result=conflict" >> $GITHUB_OUTPUT; echo "MERGE: conflicts"; cat /tmp/merge.txt
+            for f in $(git diff --name-only --diff-filter=U); do echo "== $f: $(grep -c '^<<<<<<<' $f) conflict hunk(s)"; done
+          fi
+      - name: build ./...
+        if: steps.merge.outputs.result == 'clean'
+        run: go build ./... && echo "build ok"
+      - name: vet ./cmd/... (the struct tag error at onprem_instance.go:764 is not in cmd and exists on base)
+        if: steps.merge.outputs.result == 'clean'
+        run: go vet ./cmd/... && echo "vet ok"

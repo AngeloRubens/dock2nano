@@ -19,6 +19,8 @@ jobs:
           - check/static-ip-revert
           - check/static-ip-revert-restore
           - check/static-ip-wide-restore
+          - check/static-ip-ping-variant
+          - check/static-ip-bridge-ping-first
           - 11835380d63576a0a7d3021cc176bf3cd4c60935
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +51,7 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          go test ./cmd/ -count 1 -v -run 'TestParseCompose|TestValidateComposeIPs|TestLoadPackageConfig|TestPackageIP' 2>&1 | tee /tmp/new.txt | grep -E '^--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+:[0-9]+'
+          go test ./cmd/ -count 1 -v -run 'TestComposeParseIP|TestValidateComposeIPs|TestLoadPackageConfig|TestPackageIP|TestCheckPingWorks|TestPingWith' 2>&1 | tee /tmp/new.txt | grep -E '^--- (PASS|FAIL)|^(ok|FAIL|PASS)|build failed|\.go:[0-9]+:[0-9]+'
       - name: whole cmd module and changed packages (red on any failure except TestBuildImageFlagsMergeToConfig, which fails on the base)
         if: always()
         run: |
