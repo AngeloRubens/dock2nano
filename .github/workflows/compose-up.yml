@@ -46,7 +46,11 @@ jobs:
             git -C /tmp/ops-src log --oneline -3
             git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
             git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
-            git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+            if ! git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91; then
+              python3 ci/resolve1816.py /tmp/ops-src/cmd/compose.go
+              git -C /tmp/ops-src add cmd/compose.go
+              git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com -c core.editor=true cherry-pick --continue
+            fi
           else
             git clone https://github.com/AngeloRubens/ops /tmp/ops-src
             git -C /tmp/ops-src checkout 515b074effb993333dc88c1bbf8c6dccf25ee271
