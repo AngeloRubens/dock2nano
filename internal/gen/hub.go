@@ -151,9 +151,24 @@ func hubNotApplied(u HubUse) []plan.Item {
 		items = append(items, u.item(plan.Note, "hub ports", "the hub recipe lists the ports "+strings.Join(ports, ", ")+"; they are not applied: the ports of the package are those of your compose file"))
 	}
 	if keys := sortedKeys(u.Recipe.Manifest.ManifestPassthrough); len(keys) > 0 {
-		items = append(items, u.item(plan.Note, "hub manifest", "the hub recipe sets "+strings.Join(keys, ", ")+" at the root of the manifest; not applied: the generator sets them from what was observed"))
+		reasons := make([]string, len(keys))
+		for i, k := range keys {
+			reasons[i] = k + " " + hubKeyReason(k)
+		}
+		items = append(items, u.item(plan.Note, "hub manifest", "the hub recipe sets "+strings.Join(keys, ", ")+" at the root of the manifest; not applied: "+strings.Join(reasons, "; ")))
 	}
 	return items
+}
+
+// hubKeyReason says why a key of the root of the recipe manifest is not applied.
+func hubKeyReason(key string) string {
+	switch key {
+	case "cwd", "uid", "gid":
+		return "comes from the observation"
+	case "exec_wait_for_ip4_secs":
+		return "is set by the generator from depends_on, and not set for a service without it"
+	}
+	return "is not applied"
 }
 
 func sortedKeys(m map[string]any) []string {

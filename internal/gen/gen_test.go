@@ -2134,19 +2134,131 @@ func TestDependsOnSetsExecWaitForIP4(t *testing.T) {
 			}
 		}
 	}
-	want1(t, p, "web", plan.Note, "depends_on.wait", "exec_wait_for_ip4_secs 30")
-	wantNone(t, p, "db", plan.Note, "depends_on.wait")
+	want1(t, p, "web", plan.Note, "address wait", "exec_wait_for_ip4_secs 30")
+	wantNone(t, p, "db", plan.Note, "address wait")
 }
 
+// Every reason that puts a service in the skipped map: a service that depends_on only such a
+// service is not made to wait.
 func TestDependsOnOnSkippedServiceDoesNotWait(t *testing.T) {
-	zero, web := svc("zero"), svc("web")
-	zero.Replicas = intp(0)
-	web.DependsOn = []compose.Dependency{{Service: "zero"}}
-	p := mustGen(t, newInput(&fake{}, zero, web))
-	if _, has := p.Services[0].Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]; has {
-		t.Errorf("passthrough = %v, a skipped dependency is not waited for", p.Services[0].Manifest.ManifestPassthrough)
+	for _, tc := range []struct {
+		name  string
+		setup func(in *Input, zero *compose.Service)
+	}{
+		{"replicas 0", func(in *Input, zero *compose.Service) { zero.Replicas = intp(0) }},
+		{"profile not selected", func(in *Input, zero *compose.Service) { zero.Profiles = []string{"debug"} }},
+		{"skipped by the caller", func(in *Input, zero *compose.Service) {
+			in.Skipped = map[string]string{"zero": "the image cannot be built: no Dockerfile"}
+		}},
+		{"not observed", func(in *Input, zero *compose.Service) { delete(in.Services, "zero") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zero, web := svc("zero"), svc("web")
+			web.DependsOn = []compose.Dependency{{Service: "zero"}}
+			in := newInput(&fake{}, zero, web)
+			tc.setup(&in, zero)
+			p := mustGen(t, in)
+			if got := names(p); !reflect.DeepEqual(got, []string{"web"}) {
+				t.Fatalf("services = %v, want [web]", got)
+			}
+			if _, has := p.Services[0].Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]; has {
+				t.Errorf("passthrough = %v, a skipped dependency is not waited for", p.Services[0].Manifest.ManifestPassthrough)
+			}
+			wantNone(t, p, "web", plan.Note, "address wait")
+		})
 	}
-	wantNone(t, p, "web", plan.Note, "depends_on.wait")
+}
+
+// One converted dependency is enough, whatever else web depends on.
+func TestDependsOnOnSkippedAndConvertedServiceWaits(t *testing.T) {
+	zero, db, web := svc("zero"), svc("db"), svc("web")
+	zero.Replicas = intp(0)
+	web.DependsOn = []compose.Dependency{{Service: "zero"}, {Service: "db"}}
+	p := mustGen(t, newInput(&fake{}, zero, db, web))
+	for _, s := range p.Services {
+		if s.Name != "web" {
+			continue
+		}
+		if got := s.Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]; got != "30" {
+			t.Errorf("web: exec_wait_for_ip4_secs = %#v, want \"30\"", got)
+		}
+	}
+	want1(t, p, "web", plan.Note, "address wait", "exec_wait_for_ip4_secs 30")
+}
+
+// The rule does not depend on the order of the file: depends_on puts db first.
+func TestDependsOnWaitDoesNotDependOnTheFileOrder(t *testing.T) {
+	db, web := svc("db"), svc("web")
+	web.DependsOn = []compose.Dependency{{Service: "db"}}
+	p := mustGen(t, newInput(&fake{}, web, db))
+	if got := names(p); !reflect.DeepEqual(got, []string{"db", "web"}) {
+		t.Fatalf("services = %v, want [db web]", got)
+	}
+	for _, s := range p.Services {
+		got, has := s.Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]
+		if s.Name == "web" && got != "30" || s.Name == "db" && has {
+			t.Errorf("%s: exec_wait_for_ip4_secs = %#v (%v)", s.Name, got, has)
+		}
+	}
+	want1(t, p, "web", plan.Note, "address wait", "exec_wait_for_ip4_secs 30")
+	wantNone(t, p, "db", plan.Note, "address wait")
+}
+
+func TestAddressWaitNoteSaysWhatWasMeasured(t *testing.T) {
+	db, web := svc("db"), svc("web")
+	web.DependsOn = []compose.Dependency{{Service: "db"}}
+	p := mustGen(t, newInput(&fake{}, db, web))
+	m := itemsOf(p, "web", plan.Note, "address wait")[0].Message
+	for _, w := range []string{"3 of 3 runs", "44583469624", "44612626939", "44612633466", "nanovms/ops#1813", "nginx only", "a timeout, not a fixed delay", "older than nanovms/ops#1816", "also reaches the services started after this one", "stays in this service only"} {
+		if !strings.Contains(m, w) {
+			t.Errorf("message lacks %q: %q", w, m)
+		}
+	}
+}
+
+// The notes that talk about a name looked up at start say whether the wait is set for the service.
+func TestNameNotesAgreeWithTheAddressWait(t *testing.T) {
+	const set = "is set for this service because of its depends_on (see the note address wait)"
+	const makes = "declaring depends_on in the compose file makes this tool set exec_wait_for_ip4_secs 30"
+	for _, tc := range []struct {
+		name    string
+		depends bool
+	}{{"with depends_on", true}, {"without depends_on", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(t *testing.T, p *plan.Plan, key string) {
+				t.Helper()
+				items := itemsOf(p, "proxy", plan.Note, key)
+				if len(items) != 1 {
+					t.Fatalf("%s: got %d items", key, len(items))
+				}
+				m := items[0].Message
+				if tc.depends && (!strings.Contains(m, set) || strings.Contains(m, makes)) {
+					t.Errorf("%s: %q", key, m)
+				}
+				if !tc.depends && (!strings.Contains(m, makes) || strings.Contains(m, set)) {
+					t.Errorf("%s: %q", key, m)
+				}
+			}
+			in := nameInput(map[string]string{"/etc/n.conf": "server backend.service:80;"}, false, "proxy", "backend")
+			if tc.depends {
+				in.Project.Service("proxy").DependsOn = []compose.Dependency{{Service: "backend"}}
+			}
+			check(t, mustGen(t, in), "name at start")
+			in = nameInput(map[string]string{"/etc/n.conf": "server Backend:80;"}, false, "proxy", "backend")
+			if tc.depends {
+				in.Project.Service("proxy").DependsOn = []compose.Dependency{{Service: "backend"}}
+			}
+			check(t, mustGen(t, in), "name at start")
+
+			// start order: proxy names backend in a variable and is listed first; depends_on is on cache
+			proxy, backend, cache := svc("proxy"), svc("backend"), svc("cache")
+			proxy.Environment = []compose.EnvVar{{Name: "UP", Value: "backend", Set: true}}
+			if tc.depends {
+				proxy.DependsOn = []compose.Dependency{{Service: "cache"}}
+			}
+			check(t, mustGen(t, newInput(&fake{}, cache, proxy, backend)), "start order")
+		})
+	}
 }
 
 func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
@@ -2258,7 +2370,7 @@ func TestNameAtStartPackageFormInDefaultMode(t *testing.T) {
 	want1(t, p, "proxy", plan.Note, "name at start", "contains the word backend.service, which may name service backend")
 	wantNone(t, p, "backend", plan.Note, "name at start")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200", "when nginx exited", "the upstream's address changed from run to run", "the proxy's guest had no address yet", "the converter cannot write it in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
+	for _, w := range []string{"nanovms/ops#1813", "no address yet", "the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200", "when nginx exited", "the upstream's address changed from run to run", "the proxy's guest had no address yet", "the converter cannot write the literal IP in compose.yaml", "exit with \"host not found\". Observed with ops compose", "starting the other service first (the order of compose.yaml) did not help"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}

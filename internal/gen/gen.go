@@ -539,28 +539,42 @@ func (g *generator) dependencies(s *compose.Service, skipped map[string]bool) {
 // every value of ManifestPassthrough.
 const execWaitSecs = "30"
 
-// waitForAddress sets exec_wait_for_ip4_secs in the manifest of a service that depends_on a service
-// that is converted: a program that resolves the name of its dependency when it starts (an nginx
-// upstream) exits with "host not found" when the guest has no address yet. A dependency that is
-// not converted is not waited for. A value already in ManifestPassthrough is kept.
-func (g *generator) waitForAddress(s *compose.Service, skipped map[string]bool, m *plan.Manifest) {
-	converted := false
+// dependsOnConverted reports whether s depends_on at least one service that is converted.
+func dependsOnConverted(s *compose.Service, skipped map[string]bool) bool {
 	for _, d := range s.DependsOn {
 		if !skipped[d.Service] {
-			converted = true
+			return true
 		}
 	}
-	if !converted {
-		return
+	return false
+}
+
+// hasExecWait reports whether the manifest carries exec_wait_for_ip4_secs.
+func hasExecWait(m plan.Manifest) bool {
+	_, has := m.ManifestPassthrough["exec_wait_for_ip4_secs"]
+	return has
+}
+
+// waitTail is the sentence the start order and name at start notes end with: it says whether the
+// wait is set for the service and points to the note address wait, so the notes do not contradict it.
+func waitTail(m plan.Manifest) string {
+	if hasExecWait(m) {
+		return "exec_wait_for_ip4_secs " + execWaitSecs + " is set for this service because of its depends_on (see the note address wait)"
 	}
-	if m.ManifestPassthrough == nil {
-		m.ManifestPassthrough = map[string]any{}
-	}
-	if _, has := m.ManifestPassthrough["exec_wait_for_ip4_secs"]; has {
+	return "declaring depends_on in the compose file makes this tool set exec_wait_for_ip4_secs " + execWaitSecs + " for this service (see the note address wait)"
+}
+
+// waitForAddress sets exec_wait_for_ip4_secs in the manifest of a service that depends_on a service
+// that is converted: a program that resolves the name of its dependency when it starts (an nginx
+// upstream) exits with "host not found" when the guest has no address yet. A service whose
+// dependencies are all not converted is not made to wait. It must run after identity(), which
+// replaces ManifestPassthrough with a fresh map.
+func (g *generator) waitForAddress(s *compose.Service, skipped map[string]bool, m *plan.Manifest) {
+	if !dependsOnConverted(s, skipped) {
 		return
 	}
 	m.ManifestPassthrough["exec_wait_for_ip4_secs"] = execWaitSecs
-	g.add(s.Name, plan.Note, "depends_on.wait", "exec_wait_for_ip4_secs "+execWaitSecs+" is set in the package manifest so that nanos waits up to "+execWaitSecs+" seconds for an address before it starts the program, because a program that resolves the name of a dependency when it starts (an nginx upstream) exits otherwise (nanovms/ops#1813); it was verified on nginx only, and it is a timeout, not a fixed delay")
+	g.add(s.Name, plan.Note, "address wait", "exec_wait_for_ip4_secs "+execWaitSecs+" is set in the package manifest: nanos waits up to "+execWaitSecs+" seconds for an address before it starts the program (a timeout, not a fixed delay). Measured on nginx only, with an upstream looked up at start: without the option it exited with \"host not found in upstream\" (3 of 3 runs) and with it it started (3 of 3 runs); GitHub Actions runs 44583469624, 44612626939 and 44612633466 on AngeloRubens/dock2nano, nanovms/ops#1813; other programs were not tested. An ops older than nanovms/ops#1816 merges the manifests of all packages into one configuration, so the option also reaches the services started after this one; with a newer ops it stays in this service only")
 }
 
 func (g *generator) healthcheck(s *compose.Service, si ServiceInput) {
@@ -1125,7 +1139,7 @@ func (g *generator) startOrderNote() {
 				}
 			}
 			if len(vars) > 0 {
-				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml lists %s before %s and %s declares no depends_on on %s, so nothing makes %s wait for %s; for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813)", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name))
+				g.add(svc.Name, plan.Note, "start order", fmt.Sprintf("%s names %s in %s, but compose.yaml lists %s before %s and %s declares no depends_on on %s, so nothing makes %s wait for %s; for an nginx upstream looked up at start, listing the other service first did not help (nanovms/ops#1813); %s", svc.Name, other.Name, strings.Join(vars, ", "), svc.Name, other.Name, svc.Name, other.Name, svc.Name, other.Name, waitTail(svc.Manifest)))
 			}
 		}
 	}
@@ -1169,8 +1183,7 @@ func hostWords(line string) []string {
 // IP in proxy_pass answered 200 (run 43393644875; with the converted package a literal IP was not
 // shown to work, run 43280764097); the address of the upstream differed between the two jobs
 // of run 43393644875 (.13 and .77) and in run 43278064908 (.109), so the converter cannot write
-// it. What
-// was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
+// the literal IP. What was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
 // (sparkjava-mysql, with and without dns_search): with dns_search the backend answered 200,
 // without it did not; dig db gave SERVFAIL and db.service gave NOERROR; the resolv.conf itself
 // was not printed. The search line works only with an ops that reads dns_search (nanovms/ops#1815,
@@ -1273,10 +1286,10 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			}
 		}
 		if anyOK {
-			parts = append(parts, "Observed with ops compose (nginx upstream in the .service form, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write it in compose.yaml (nanovms/ops#1813)")
+			parts = append(parts, "Observed with ops compose (nginx upstream in the .service form, converted package and hub nginx 1.28.3): the proxy's guest had no address yet when nginx exited; starting the other service first (the order of compose.yaml) did not help; the hub nginx 1.28.3 with the upstream's literal IP in proxy_pass answered 200; the upstream's address changed from run to run, so the converter cannot write the literal IP in compose.yaml (nanovms/ops#1813); "+waitTail(svc.Manifest))
 		}
 		if anyNotOK && !anyOK {
-			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)")
+			parts = append(parts, "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813); "+waitTail(svc.Manifest))
 		}
 		if len(parts) > 0 {
 			g.add(svc.Name, plan.Note, "name at start", strings.Join(parts, ". "))

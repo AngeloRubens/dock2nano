@@ -412,6 +412,23 @@ func TestApplyHubRecipeSaysWhatItDoesNotApply(t *testing.T) {
 	}
 }
 
+func TestHubNotAppliedGivesTheReasonPerKey(t *testing.T) {
+	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
+	u.Recipe.Manifest.ManifestPassthrough = map[string]any{"cwd": "/x", "uid": "5", "exec_wait_for_ip4_secs": "5", "klib": "y"}
+	p := hubFind(hubNotApplied(u), "hub manifest")
+	if len(p) != 1 {
+		t.Fatalf("items: %+v", p)
+	}
+	for _, w := range []string{"cwd comes from the observation", "uid comes from the observation", "exec_wait_for_ip4_secs is set by the generator from depends_on, and not set for a service without it", "klib is not applied"} {
+		if !strings.Contains(p[0].Message, w) {
+			t.Errorf("message lacks %q: %q", w, p[0].Message)
+		}
+	}
+	if strings.Contains(p[0].Message, "from what was observed") {
+		t.Errorf("the general reason is back: %q", p[0].Message)
+	}
+}
+
 func hubWholeUse(level hub.Level, wanted, version string) HubUse {
 	p := hub.Package{Namespace: "francescolavra", Name: "postgres", Version: version, Arch: "x86_64", SHA256: hubSum}
 	rec := &hub.Recipe{Package: p}
