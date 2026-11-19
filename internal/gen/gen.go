@@ -542,7 +542,7 @@ const execWaitSecs = "30"
 // dependsOnConverted reports whether s depends_on at least one service that is converted.
 func dependsOnConverted(s *compose.Service, skipped map[string]bool) bool {
 	for _, d := range s.DependsOn {
-		if !skipped[d.Service] {
+		if d.Service != "" {
 			return true
 		}
 	}
