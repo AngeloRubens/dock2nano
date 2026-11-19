@@ -542,11 +542,11 @@ const execWaitSecs = "30"
 // dependsOnConverted reports whether s depends_on at least one service that is converted.
 func dependsOnConverted(s *compose.Service, skipped map[string]bool) bool {
 	for _, d := range s.DependsOn {
-		if !skipped[d.Service] {
-			return true
+		if skipped[d.Service] {
+			return false
 		}
 	}
-	return false
+	return len(s.DependsOn) > 0
 }
 
 // hasExecWait reports whether the manifest carries exec_wait_for_ip4_secs.
