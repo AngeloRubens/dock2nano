@@ -374,7 +374,6 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.healthcheck(s, si)
 	g.networks(s)
 	g.identity(s, si, obs, &m)
-	g.waitForAddress(s, skipped, &m)
 	g.unknown(s, si)
 	g.observed(s, obs)
 	g.plan.Report = append(g.plan.Report, si.HubItems...)
@@ -532,35 +531,6 @@ func (g *generator) dependencies(s *compose.Service, skipped map[string]bool) {
 			g.add(s.Name, plan.Note, key, d.Service+" is not converted, so this service starts without it")
 		}
 	}
-}
-
-// execWaitSecs is the value of exec_wait_for_ip4_secs: nanos waits up to this many seconds for an
-// ipv4 address before it starts the program. It is a timeout, not a fixed delay. A string, like
-// every value of ManifestPassthrough.
-const execWaitSecs = "30"
-
-// waitForAddress sets exec_wait_for_ip4_secs in the manifest of a service that depends_on a service
-// that is converted: a program that resolves the name of its dependency when it starts (an nginx
-// upstream) exits with "host not found" when the guest has no address yet. A dependency that is
-// not converted is not waited for. A value already in ManifestPassthrough is kept.
-func (g *generator) waitForAddress(s *compose.Service, skipped map[string]bool, m *plan.Manifest) {
-	converted := false
-	for _, d := range s.DependsOn {
-		if !skipped[d.Service] {
-			converted = true
-		}
-	}
-	if !converted {
-		return
-	}
-	if m.ManifestPassthrough == nil {
-		m.ManifestPassthrough = map[string]any{}
-	}
-	if _, has := m.ManifestPassthrough["exec_wait_for_ip4_secs"]; has {
-		return
-	}
-	m.ManifestPassthrough["exec_wait_for_ip4_secs"] = execWaitSecs
-	g.add(s.Name, plan.Note, "depends_on.wait", "exec_wait_for_ip4_secs "+execWaitSecs+" is set in the package manifest so that nanos waits up to "+execWaitSecs+" seconds for an address before it starts the program, because a program that resolves the name of a dependency when it starts (an nginx upstream) exits otherwise (nanovms/ops#1813); it was verified on nginx only, and it is a timeout, not a fixed delay")
 }
 
 func (g *generator) healthcheck(s *compose.Service, si ServiceInput) {
