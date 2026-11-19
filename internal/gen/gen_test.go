@@ -2117,6 +2117,38 @@ func TestEveryPassthroughValueIsAString(t *testing.T) {
 	}
 }
 
+func TestDependsOnSetsExecWaitForIP4(t *testing.T) {
+	db, web := svc("db"), svc("web")
+	web.DependsOn = []compose.Dependency{{Service: "db"}}
+	p := mustGen(t, newInput(&fake{}, db, web))
+	for _, s := range p.Services {
+		got, has := s.Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]
+		switch s.Name {
+		case "web":
+			if got != "30" {
+				t.Errorf("web: exec_wait_for_ip4_secs = %#v, want the string \"30\"", got)
+			}
+		case "db":
+			if has {
+				t.Errorf("db has no depends_on and must not wait: %v", s.Manifest.ManifestPassthrough)
+			}
+		}
+	}
+	want1(t, p, "web", plan.Note, "depends_on.wait", "exec_wait_for_ip4_secs 30")
+	wantNone(t, p, "db", plan.Note, "depends_on.wait")
+}
+
+func TestDependsOnOnSkippedServiceDoesNotWait(t *testing.T) {
+	zero, web := svc("zero"), svc("web")
+	zero.Replicas = intp(0)
+	web.DependsOn = []compose.Dependency{{Service: "zero"}}
+	p := mustGen(t, newInput(&fake{}, zero, web))
+	if _, has := p.Services[0].Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]; has {
+		t.Errorf("passthrough = %v, a skipped dependency is not waited for", p.Services[0].Manifest.ManifestPassthrough)
+	}
+	wantNone(t, p, "web", plan.Note, "depends_on.wait")
+}
+
 func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
 	web := svc("web")
 	in := newInput(&fake{}, web)
