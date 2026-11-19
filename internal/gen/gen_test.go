@@ -2208,7 +2208,11 @@ func TestAddressWaitNoteSaysWhatWasMeasured(t *testing.T) {
 	db, web := svc("db"), svc("web")
 	web.DependsOn = []compose.Dependency{{Service: "db"}}
 	p := mustGen(t, newInput(&fake{}, db, web))
-	m := itemsOf(p, "web", plan.Note, "address wait")[0].Message
+	notes := itemsOf(p, "web", plan.Note, "address wait")
+	if len(notes) != 1 {
+		t.Fatalf("items web/note/\"address wait\": got %d, want 1", len(notes))
+	}
+	m := notes[0].Message
 	for _, w := range []string{"3 of 3 runs", "44583469624", "44612626939", "44612633466", "nanovms/ops#1813", "nginx only", "a timeout, not a fixed delay", "older than nanovms/ops#1816", "also reaches the services started after this one", "stays in this service only"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
