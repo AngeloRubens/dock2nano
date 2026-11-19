@@ -561,7 +561,7 @@ func waitTail(m plan.Manifest) string {
 	if hasExecWait(m) {
 		return "exec_wait_for_ip4_secs " + execWaitSecs + " is set for this service because of its depends_on (see the note address wait)"
 	}
-	return "declaring depends_on on a converted service makes this tool set exec_wait_for_ip4_secs " + execWaitSecs + " for this service (see the note address wait)"
+	return "declaring depends_on in the compose file makes this tool set exec_wait_for_ip4_secs " + execWaitSecs + " for this service (see the note address wait)"
 }
 
 // waitForAddress sets exec_wait_for_ip4_secs in the manifest of a service that depends_on a service
@@ -574,7 +574,7 @@ func (g *generator) waitForAddress(s *compose.Service, skipped map[string]bool, 
 		return
 	}
 	m.ManifestPassthrough["exec_wait_for_ip4_secs"] = execWaitSecs
-	g.add(s.Name, plan.Note, "address wait", "exec_wait_for_ip4_secs "+execWaitSecs+" is set in the package manifest: nanos waits up to "+execWaitSecs+" seconds for an address before it starts the program (a timeout, not a fixed delay). Measured on nginx only, with an upstream looked up at start: without the option it exited with \"host not found in upstream\" (3 of 3 runs) and with it it started (3 of 3 runs); GitHub Actions runs 44583469624, 44612626939 and 44612633466 on AngeloRubens/dock2nano, nanovms/ops#1813; other programs were not tested. an ops older than nanovms/ops#1816 (merged 2026-11-15; the ops used for the measurement is older) merges the manifests of all packages into one configuration, so the option also reaches the services started after this one; nanovms/ops#1816 is meant to keep it in this service only (not run with this tool)")
+	g.add(s.Name, plan.Note, "address wait", "exec_wait_for_ip4_secs "+execWaitSecs+" is set in the package manifest: nanos waits up to "+execWaitSecs+" seconds for an address before it starts the program (a timeout, not a fixed delay). Measured on nginx only, with an upstream looked up at start: without the option it exited with \"host not found in upstream\" (3 of 3 runs) and with it it started (3 of 3 runs); GitHub Actions runs 44583469624, 44612626939 and 44612633466 on AngeloRubens/dock2nano, nanovms/ops#1813; other programs were not tested. An ops older than nanovms/ops#1816 merges the manifests of all packages into one configuration, so the option also reaches the services started after this one; with a newer ops it stays in this service only")
 }
 
 func (g *generator) healthcheck(s *compose.Service, si ServiceInput) {
