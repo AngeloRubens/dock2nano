@@ -1,0 +1,188 @@
+name: compose-up
+# Converts compose files of docker/awesome-compose, starts each result with "ops compose up" on
+# nanos and asks the ports it names. One compose file per job. A job is red when compose up fails
+# 3 of 3 or a service of the probe list gives no address or no answer; the output is the finding. Runs on a push whose head commit message contains [compose-up], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  up:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[compose-up]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # probe: service:port:kind, kind http or tcp; flags: options of the conversion
+          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
+          - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
+          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
+          - {name: sparkjava-mysql-short, dir: sparkjava-mysql, flags: "--short-names", probe: "backend:8080:http db:3306:tcp"}
+          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
+          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
+          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source (nanovms/ops master 1183538 with the arp fix of PR 1805, plus dns_search f3ee91e of the fork)
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
+          # dns_search: the one commit f3ee91e of AngeloRubens/ops feat/compose-dns-search-indep, on top of 1183538
+          git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
+          git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
+          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+          cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
+          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly, it reads uid and gid from the manifest)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          # ops update replaces the ops binary too: put the one built from source back
+          sudo install /tmp/ops /usr/local/bin/ops
+          grep -c "not registered in the dns" /usr/local/bin/ops || true
+          ops pkg get eyberg/ops-dns:0.0.1
+      - name: the compose file
+        run: |
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          git -C /tmp/ac log --oneline | head -1
+          ls -la /tmp/ac/${{ matrix.dir }}
+          cat /tmp/ac/${{ matrix.dir }}/compose.y*ml /tmp/ac/${{ matrix.dir }}/docker-compose.y*ml 2>/dev/null || true
+      - name: changes to the source before the conversion
+        run: |
+          if [ -f ci/patches/${{ matrix.name }}.pre.sh ]; then bash ci/patches/${{ matrix.name }}.pre.sh; else echo "none"; fi
+      - name: convert
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/out/traces
+          export DOCK2NANO_KEEP_TRACE=/tmp/out/traces
+          cd /tmp/ac/${{ matrix.dir }}
+          f=$(ls compose.yaml compose.yml docker-compose.yml docker-compose.yaml 2>/dev/null | head -1 || true)
+          cd "$GITHUB_WORKSPACE"
+          go run . convert -f /tmp/ac/${{ matrix.dir }}/$f --ops-home "$OPS_HOME" -o /tmp/out --pull --seconds 90 ${{ matrix.flags }} 2>&1 | tee /tmp/out/report.txt
+          cat /tmp/out/compose.yaml
+          for m in "$OPS_HOME"/.ops/local_packages/*/*/package.manifest; do echo "== $m"; head -c 1500 "$m"; echo; done
+      - name: the changes the report asks for, by hand
+        run: |
+          if [ -f ci/patches/${{ matrix.name }}.sh ]; then
+            OPS_HOME="$OPS_HOME" bash ci/patches/${{ matrix.name }}.sh
+          else
+            echo "no changes for ${{ matrix.name }}"
+          fi
+      - name: compose up
+        timeout-minutes: 15
+        run: |
+          cd /tmp/out
+          # ops waits 30 seconds for the address of each guest (ps and arp); when it does not get one
+          # it exits with "ip timeout". The cause may be the guest (a dead nginx has no address to
+          # find) or the lookup, so try again from a clean state, up to three times, and fail the
+          # step when all three fail: the probe step then still runs, but the job is red.
+          up_ok=0
+          for attempt in 1 2 3; do
+            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up.log 2>&1; then
+              echo "ops compose up: ok (attempt $attempt)"; up_ok=1; break
+            fi
+            echo "ops compose up failed (attempt $attempt)"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" /tmp/out/up.log | cut -c1-200 | tail -6
+            cp /tmp/out/up.log /tmp/out/up-attempt-$attempt.log
+            test "$attempt" -lt 3 || break
+            sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true
+            sleep 5
+          done
+          grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" /tmp/out/up.log | cut -c1-300 | tail -30
+          echo "--- mac lines of up.log, counted (kept whole in the artifact)"
+          grep "^couldn't find mac\|^mac is an empty\|^no ip found" /tmp/out/up.log | sort | uniq -c | sort -rn | head -20
+          echo "--- mac of each instance, from qemu"
+          ps -eo args | grep '[q]emu' | while read -r l; do
+            n=$(echo "$l" | grep -o -- '-name [^ ]*' | head -1); m=$(echo "$l" | grep -o 'mac=[0-9a-fA-F:]*' | head -1)
+            echo "instance: ${n:-?} $m"
+          done | tee /tmp/out/macs.txt
+          ps -eo args | grep '[q]emu' | cut -c1-600 > /tmp/out/qemu-args.txt
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-after-up.txt
+          if [ "$up_ok" != 1 ]; then echo "ops compose up failed 3 of 3"; exit 1; fi
+      - name: probe
+        if: always()
+        run: |
+          sleep 60
+          echo "--- mac of each instance, from qemu, after the wait"
+          ps -eo args | grep '[q]emu' | while read -r l; do
+            n=$(echo "$l" | grep -o -- '-name [^ ]*' | head -1); m=$(echo "$l" | grep -o 'mac=[0-9a-fA-F:]*' | head -1)
+            echo "instance: ${n:-?} $m"
+          done | tee /tmp/out/macs-after-wait.txt
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances.txt
+          for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u) dns; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+          done
+          # what the dns of the session answers, asked from this machine, with everything dig says
+          dnsip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-dns.txt 2>/dev/null | tail -1 | awk '{print $2}')
+          echo "dns at: $dnsip"
+          if [ -n "$dnsip" ]; then
+            ping -c 2 -W 2 $dnsip 2>&1 | tail -3
+            curl -s -m 5 -o /dev/null -w 'dns control port 8080: %{http_code}\n' "http://$dnsip:8080/" || true
+            # what the dns does with a name with and without the suffix, whatever ops registered
+            echo "--- add by hand"
+            curl -s -m 5 "http://$dnsip:8080/add?svc=plainprobe&ip=10.9.9.9" -w ' [%{http_code}]\n' || true
+            curl -s -m 5 "http://$dnsip:8080/add?svc=suffixprobe.service&ip=10.9.9.8" -w ' [%{http_code}]\n' || true
+            curl -s -m 5 "http://$dnsip:8080/add?svc=dotprobe.&ip=10.9.9.7" -w ' [%{http_code}]\n' || true
+            for name in plainprobe suffixprobe.service dotprobe; do
+              echo "--- dig $name -> $(dig +short +time=3 +tries=1 @$dnsip $name A 2>&1 | tr '\n' ' ')"
+              dig +time=3 +tries=1 @$dnsip $name A 2>&1 | grep -a "status:" | head -1
+            done
+            for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
+              for name in $svc $svc.service; do
+                echo "--- dig $name"; dig +time=3 +tries=1 @$dnsip $name A 2>&1 | grep -a -v "^;; Query time\|^;; WHEN\|^;; MSG\|^$\|^; <<>>" | head -12
+              done
+            done
+          fi
+          probe_fail=0
+          for p in ${{ matrix.probe }}; do
+            svc=${p%%:*}; rest=${p#*:}; port=${rest%%:*}; kind=${rest##*:}
+            ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
+            echo "=== $svc $ip:$port $kind"
+            [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
+            for i in $(seq 1 24); do
+              if [ "$kind" = http ]; then
+                code=$(curl -s -m 5 -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                case "$code" in 2*|3*|4*) break;; esac
+              else
+                if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
+              fi
+              sleep 10
+            done
+            echo "answer: $code"
+            if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
+            # a service of the probe list that gives no answer fails the job
+            case "$code" in 2*|3*|4*|open) ;; *) echo "no answer from $svc"; probe_fail=1;; esac
+          done
+          for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+            echo "=== console of $svc, last 25 lines"; tail -25 /tmp/out/console-$svc.txt | cut -c1-250
+          done
+          if [ "$probe_fail" != 0 ]; then echo "probe: a service did not answer"; exit 1; fi
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-up-${{ matrix.name }}
+          path: /tmp/out
+      - name: down
+        if: always()
+        run: cd /tmp/out && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true

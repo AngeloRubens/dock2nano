@@ -1,0 +1,30 @@
+name: integration
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: docker version
+        run: docker version
+      - name: integration tests
+        env:
+          OBSERVE_TRACE_DIR: ${{ runner.temp }}/traces
+        run: go test -tags integration -p 1 -v -timeout 15m ./internal/docker ./internal/observe ./cmd
+      - name: upload traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces
+          path: ${{ runner.temp }}/traces
+          if-no-files-found: warn
