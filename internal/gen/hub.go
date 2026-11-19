@@ -166,9 +166,9 @@ func hubKeyReason(key string) string {
 	case "cwd", "uid", "gid":
 		return "comes from the observation"
 	case "exec_wait_for_ip4_secs":
-		return "is set by the generator from depends_on, and not set for a service without it"
+		return "is set by the generator for a service that depends_on a converted service, and not otherwise"
 	}
-	return "is not applied"
+	return "is not read by the generator"
 }
 
 func sortedKeys(m map[string]any) []string {

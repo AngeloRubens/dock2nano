@@ -419,7 +419,7 @@ func TestHubNotAppliedGivesTheReasonPerKey(t *testing.T) {
 	if len(p) != 1 {
 		t.Fatalf("items: %+v", p)
 	}
-	for _, w := range []string{"cwd comes from the observation", "uid comes from the observation", "exec_wait_for_ip4_secs is set by the generator from depends_on, and not set for a service without it", "klib is not applied"} {
+	for _, w := range []string{"cwd comes from the observation", "uid comes from the observation", "exec_wait_for_ip4_secs is set by the generator for a service that depends_on a converted service", "klib is not read by the generator"} {
 		if !strings.Contains(p[0].Message, w) {
 			t.Errorf("message lacks %q: %q", w, p[0].Message)
 		}

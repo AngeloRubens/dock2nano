@@ -2121,6 +2121,9 @@ func TestDependsOnSetsExecWaitForIP4(t *testing.T) {
 	db, web := svc("db"), svc("web")
 	web.DependsOn = []compose.Dependency{{Service: "db"}}
 	p := mustGen(t, newInput(&fake{}, db, web))
+	if got := names(p); !reflect.DeepEqual(got, []string{"db", "web"}) {
+		t.Fatalf("services = %v, want [db web]", got)
+	}
 	for _, s := range p.Services {
 		got, has := s.Manifest.ManifestPassthrough["exec_wait_for_ip4_secs"]
 		switch s.Name {
@@ -2169,12 +2172,35 @@ func TestDependsOnOnSkippedServiceDoesNotWait(t *testing.T) {
 	}
 }
 
+// web depends_on only a skipped service and names a converted third service in a variable: the
+// start order note must not claim that the wait was set.
+func TestStartOrderNoteOfASkippedDependencyDoesNotClaimTheWait(t *testing.T) {
+	zero, web, third := svc("zero"), svc("web"), svc("third")
+	zero.Replicas = intp(0)
+	web.DependsOn = []compose.Dependency{{Service: "zero"}}
+	web.Environment = []compose.EnvVar{{Name: "UP", Value: "third", Set: true}}
+	p := mustGen(t, newInput(&fake{}, zero, web, third))
+	if got := names(p); !reflect.DeepEqual(got, []string{"web", "third"}) {
+		t.Fatalf("services = %v, want [web third]", got)
+	}
+	items := itemsOf(p, "web", plan.Note, "start order")
+	if len(items) != 1 {
+		t.Fatalf("items web/note/\"start order\": got %d, want 1", len(items))
+	}
+	if m := items[0].Message; !strings.HasSuffix(m, "on a converted service makes this tool set exec_wait_for_ip4_secs 30 for this service (see the note address wait)") || strings.Contains(m, "is set for this service") {
+		t.Errorf("message: %q", m)
+	}
+}
+
 // One converted dependency is enough, whatever else web depends on.
 func TestDependsOnOnSkippedAndConvertedServiceWaits(t *testing.T) {
 	zero, db, web := svc("zero"), svc("db"), svc("web")
 	zero.Replicas = intp(0)
 	web.DependsOn = []compose.Dependency{{Service: "zero"}, {Service: "db"}}
 	p := mustGen(t, newInput(&fake{}, zero, db, web))
+	if got := names(p); !reflect.DeepEqual(got, []string{"db", "web"}) {
+		t.Fatalf("services = %v, want [db web]", got)
+	}
 	for _, s := range p.Services {
 		if s.Name != "web" {
 			continue
@@ -2213,7 +2239,7 @@ func TestAddressWaitNoteSaysWhatWasMeasured(t *testing.T) {
 		t.Fatalf("items web/note/\"address wait\": got %d, want 1", len(notes))
 	}
 	m := notes[0].Message
-	for _, w := range []string{"3 of 3 runs", "44583469624", "44612626939", "44612633466", "nanovms/ops#1813", "nginx only", "a timeout, not a fixed delay", "older than nanovms/ops#1816", "also reaches the services started after this one", "stays in this service only"} {
+	for _, w := range []string{"3 of 3 runs", "44583469624", "44612626939", "44612633466", "nanovms/ops#1813", "nginx only", "a timeout, not a fixed delay", "older than nanovms/ops#1816", "also reaches the services started after this one", "is meant to keep it in this service only"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
@@ -2223,7 +2249,7 @@ func TestAddressWaitNoteSaysWhatWasMeasured(t *testing.T) {
 // The notes that talk about a name looked up at start say whether the wait is set for the service.
 func TestNameNotesAgreeWithTheAddressWait(t *testing.T) {
 	const set = "is set for this service because of its depends_on (see the note address wait)"
-	const makes = "declaring depends_on in the compose file makes this tool set exec_wait_for_ip4_secs 30"
+	const makes = "declaring depends_on on a converted service makes this tool set exec_wait_for_ip4_secs 30"
 	for _, tc := range []struct {
 		name    string
 		depends bool
