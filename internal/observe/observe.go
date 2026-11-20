@@ -738,6 +738,9 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 				switch {
 				case len(cmdline) == 0:
 					cmdline = parts
+				case startedThroughShebang(parts, cmdline):
+					r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
+					cmdline = parts
 				case !slices.Equal(parts, cmdline):
 					r.warnOnce(r.redact(fmt.Sprintf("the command line in /proc %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
 				}
@@ -1759,4 +1762,25 @@ func (httpProber) Get(ctx context.Context, url string) error {
 		resp.Body.Close()
 	}
 	return nil
+}
+
+// startedThroughShebang tells whether the command line in /proc is the one execve was given with
+// the kernel's shebang expansion in front: the interpreter, optionally its one argument, then the
+// script in place of argv[0], then the rest of the arguments unchanged. The script must be argv[0]
+// itself or have its name. Anything else (a program that rewrote its own arguments, a launcher) is
+// not taken for a shebang.
+func startedThroughShebang(proc, execve []string) bool {
+	if len(execve) == 0 {
+		return false
+	}
+	// the interpreter and the script replace argv[0]; the interpreter argument is optional
+	lead := len(proc) - len(execve) + 1
+	if lead != 2 && lead != 3 {
+		return false
+	}
+	if !slices.Equal(proc[lead:], execve[1:]) || !strings.HasPrefix(proc[0], "/") {
+		return false
+	}
+	script := proc[lead-1]
+	return script == execve[0] || filepath.Base(script) == filepath.Base(execve[0])
 }

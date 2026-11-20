@@ -586,6 +586,38 @@ func TestObserveProgramFromProcExe(t *testing.T) {
 	})
 }
 
+func TestObserveShebangUsesTheCommandLineOfProc(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/gunicorn", ["gunicorn", "-k", "w", "app.main:app"]`, 1)
+	s.d.files["/usr/local/bin/gunicorn"] = entry{data: "#!/usr/local/bin/python3.9\n", mode: 0755}
+	s.d.files["/usr/local/bin/python3.9"] = entry{data: "py", mode: 0755}
+	s.d.exec["readlink /proc/11/exe"] = "/usr/local/bin/python3.9\n"
+	s.d.exec["cat /proc/11/cmdline"] = "/usr/local/bin/python3.9\x00/usr/local/bin/gunicorn\x00-k\x00w\x00app.main:app\x00"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/local/bin/python3.9")
+	equal(t, "argv", res.Argv, []string{"/usr/local/bin/python3.9", "/usr/local/bin/gunicorn", "-k", "w", "app.main:app"})
+	equal(t, "warnings", res.Warnings, []string{
+		`the program was started through a shebang: the command line of /proc ["/usr/local/bin/python3.9" "/usr/local/bin/gunicorn" "-k" "w" "app.main:app"] is used, not the one execve was given ["gunicorn" "-k" "w" "app.main:app"]`,
+	})
+}
+
+func TestObserveShebangNeedsTheScriptToBeArgvZero(t *testing.T) {
+	s := newScene(t)
+	// same shape as a shebang, but the element after the leading one is not the script of argv[0]
+	s.d.exec["cat /proc/11/cmdline"] = "/usr/bin/other\x00helper\x00--serve\x00"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "argv", res.Argv, []string{"app", "--serve"})
+	equal(t, "warnings", res.Warnings, []string{
+		`the command line in /proc ["/usr/bin/other" "helper" "--serve"] differs from the one execve was given ["app" "--serve"]: the one execve was given is used`,
+	})
+}
+
 func TestObserveNginxRewritesItsCommandLine(t *testing.T) {
 	s := newScene(t)
 	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/sbin/nginx", ["nginx", "-g", "daemon off;"]`, 1)
