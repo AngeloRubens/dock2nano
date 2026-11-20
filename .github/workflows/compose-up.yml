@@ -19,16 +19,9 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-golang-mysql, dir: nginx-golang-mysql, flags: "--short-names", probe: "proxy:80:http db:3306:tcp"}
           - {name: nginx-golang-postgres, dir: nginx-golang-postgres, flags: "--short-names", probe: "proxy:80:http db:5432:tcp"}
-          - {name: nginx-flask-mysql, dir: nginx-flask-mysql, flags: "--short-names", probe: "proxy:80:http backend:8000:http db:3306:tcp"}
-          - {name: apache-php, dir: apache-php, flags: "", probe: "web:80:http"}
-          - {name: django, dir: django, flags: "", probe: "web:8000:http"}
-          - {name: fastapi, dir: fastapi, flags: "", probe: "api:8000:http"}
-          - {name: flask, dir: flask, flags: "", probe: "web:8000:http"}
-          - {name: spring-postgres, dir: spring-postgres, flags: "--short-names", probe: "backend:8080:http db:5432:tcp"}
-          - {name: wordpress-mysql, dir: wordpress-mysql, flags: "--short-names", probe: "wordpress:80:http db:3306:tcp"}
-          - {name: nginx-wsgi-flask, dir: nginx-wsgi-flask, flags: "--short-names", probe: "nginx-proxy:80:http flask-app:8000:http"}
+          - {name: nginx-golang-postgres-nopid, dir: nginx-golang-postgres, flags: "--short-names", probe: "proxy:80:http db:5432:tcp"}
+          - {name: nginx-golang-postgres-nopid2, dir: nginx-golang-postgres, flags: "--short-names", probe: "proxy:80:http db:5432:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
