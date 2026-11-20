@@ -28,7 +28,7 @@ jobs:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (nanovms/ops master 2177c54: PR 1815 dns_search and PR 1816 one config for each spawned instance are in it)
+      - name: ops from source (nanovms/ops master 2177c54, with PR 1815 dns_search and PR 1816 one config for each spawned instance)
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
           git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
