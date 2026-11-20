@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-nodejs-redis-with, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis-with2, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis-hubnginx, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis-hubnginx2, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-with, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http web2:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-with2, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http web2:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-with3, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http web2:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-with4, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http web2:5000:http redis:6379:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -167,6 +167,26 @@ jobs:
             echo "=== console of $svc, last 25 lines"; tail -25 /tmp/out/console-$svc.txt | cut -c1-250
           done
           if [ "$probe_fail" != 0 ]; then echo "probe: a service did not answer"; exit 1; fi
+      - name: diagnose web1 and web2
+        if: always()
+        run: |
+          for svc in web1 web2 nginx redis; do
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
+          done
+          for svc in web1 web2; do
+            ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt | tail -1 | awk '{print $2}')
+            echo "=== $svc ip=${ip:-none}"
+            [ -z "$ip" ] && continue
+            { echo "--- ping"; ping -c 2 -W 2 $ip 2>&1 | tail -3
+              echo "--- tcp connect 5000"; timeout 5 bash -c "exec 3<>/dev/tcp/$ip/5000 && echo connected" 2>&1
+              echo "--- curl -sv"; curl -sv -m 10 -o /dev/null "http://$ip:5000/" 2>&1 | head -25
+              echo "--- redis from here"; timeout 3 bash -c "exec 3<>/dev/tcp/$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-redis.txt | tail -1 | awk '{print $2}')/6379 && echo redis-open" 2>&1
+            } 2>&1 | tee /tmp/out/diag-$svc.txt
+          done
+          echo "=== console of web1 and web2 whole (non futex), then count of futex lines"
+          for svc in web1 web2; do echo "-- $svc"; grep -v "futex op" /tmp/out/console-$svc.txt | cut -c1-240 | head -60; echo "futex lines: $(grep -c 'futex op' /tmp/out/console-$svc.txt)"; done
+          echo "=== redis console tail"; tail -8 /tmp/out/console-redis.txt | cut -c1-200
+          sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-diag.txt
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4
