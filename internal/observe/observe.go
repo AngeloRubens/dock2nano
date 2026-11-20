@@ -738,9 +738,6 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 				switch {
 				case len(cmdline) == 0:
 					cmdline = parts
-				case startedThroughShebang(parts, cmdline):
-					r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
-					cmdline = parts
 				case !slices.Equal(parts, cmdline):
 					r.warnOnce(r.redact(fmt.Sprintf("the command line in /proc %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
 				}
