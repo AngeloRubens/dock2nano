@@ -19,8 +19,8 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: nginx-golang-wait, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
+          - {name: nginx-leak-old, dir: nginx-golang, ops: 11835380d63576a0a7d3021cc176bf3cd4c60935, pick: f3ee91e6569300981687d6a33c9d60065cc63d91, probe: "proxy:80:http backend:80:http"}
+          - {name: nginx-leak-new, dir: nginx-golang, ops: 2177c549df3fab2662d6386042c74bec859275bd, pick: "", probe: "proxy:80:http backend:80:http"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,10 +28,15 @@ jobs:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (nanovms/ops master 2177c54, with PR 1815 dns_search and PR 1816 one config for each spawned instance)
+      - name: ops from source (matrix.ops, with the dns_search commit on top when matrix.pick is set)
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
+          git -C /tmp/ops-src checkout ${{ matrix.ops }}
+          if [ -n "${{ matrix.pick }}" ]; then
+            git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
+            git -C /tmp/ops-src fetch fork ${{ matrix.pick }}
+            git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick ${{ matrix.pick }}
+          fi
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
