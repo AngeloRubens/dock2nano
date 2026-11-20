@@ -20,6 +20,9 @@ jobs:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
           - {name: nginx-nodejs-redis-with, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-with2, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-hubnginx, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
+          - {name: nginx-nodejs-redis-hubnginx2, dir: nginx-nodejs-redis, flags: "--with redis", probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
