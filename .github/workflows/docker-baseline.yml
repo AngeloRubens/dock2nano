@@ -1,0 +1,48 @@
+name: docker-baseline
+# Control run: the awesome-compose cases that failed on nanos, started with plain docker compose.
+on:
+  push:
+    branches: [ check/docker-baseline ]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: apache-php, port: 80}
+          - {name: django, port: 8000}
+          - {name: fastapi, port: 8000}
+          - {name: nginx-flask-mysql, port: 80}
+          - {name: nginx-golang-postgres, port: 80}
+          - {name: nginx-wsgi-flask, port: 80}
+          - {name: spring-postgres, port: 8080}
+          - {name: wordpress-mysql, port: 80}
+    steps:
+      - name: the compose file
+        run: git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+      - name: up
+        run: |
+          cd /tmp/ac/${{ matrix.name }}
+          docker compose up -d --build 2>&1 | tail -15
+          docker compose ps
+      - name: probe
+        run: |
+          cd /tmp/ac/${{ matrix.name }}
+          code=000
+          for i in $(seq 1 18); do
+            code=$(curl -s -m 5 -o /tmp/body.txt -w '%{http_code}' "http://localhost:${{ matrix.port }}/" || true)
+            echo "try $i: $code"
+            case "$code" in 2*|3*|4*) break;; esac
+            sleep 10
+          done
+          echo "answer: $code"
+          head -c 300 /tmp/body.txt || true; echo
+          case "$code" in 2*|3*|4*) ;; *) echo "no answer"; docker compose ps; docker compose logs --tail 25 2>&1 | cut -c1-220; exit 1;; esac
+      - name: down
+        if: always()
+        run: cd /tmp/ac/${{ matrix.name }} && docker compose down -v 2>&1 | tail -3
