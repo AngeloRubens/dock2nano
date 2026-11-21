@@ -57,6 +57,12 @@ type ServiceInput struct {
 	// service (see ApplyHubRecipe); they are added to the report as they are.
 	HubItems []plan.Item
 
+	// HubWhole is set when the package of the hub was used whole: the files of
+	// the observed image are not in the package, so binds and secrets that were
+	// carried through its sysroot are not carried, and the program and its
+	// arguments are those of the package.
+	HubWhole bool
+
 	// MinVolume is the least size of the writable volume the hub recipe for the
 	// program asks for ("200m"); empty when there is none.
 	MinVolume string
@@ -363,7 +369,11 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	if n := len(m.Args) - 1; n > 0 {
 		msg += fmt.Sprintf(" and %d arguments, which are in package.manifest", n)
 	}
-	g.add(s.Name, plan.Observed, "program", msg+" (observed from the image; the choice of the program is an estimate)")
+	if si.HubWhole {
+		g.add(s.Name, plan.Observed, "program", msg+" (those of the package of the hub, used whole; they were not observed from your image)")
+	} else {
+		g.add(s.Name, plan.Observed, "program", msg+" (observed from the image; the choice of the program is an estimate)")
+	}
 
 	g.replicas(s)
 	m.Env = g.env(s, si)
@@ -464,6 +474,8 @@ func (g *generator) volumes(s *compose.Service, si ServiceInput, m *plan.Manifes
 		switch {
 		case strings.Contains(v.Source, "$") || v.Type == "unresolved":
 			g.add(s.Name, plan.Unsupported, key, "the source holds a variable, so it is not known whether it is a bind mount or a named volume; it is not converted")
+		case v.Type == "bind" && si.HubWhole:
+			g.add(s.Name, plan.Unsupported, key, "not carried: the package of the hub is used whole; "+v.Target+" is not in it")
 		case v.Type == "bind":
 			g.bind(s.Name, key, v)
 		case v.Type == "volume" && v.Source == "":

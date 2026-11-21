@@ -159,9 +159,17 @@ func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := rows[0].EntrypointNote
-	for _, want := range []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "CREATE DATABASE", "answered 200"} {
+	for _, want := range []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "CREATE DATABASE", "answered 200",
+		"{POSTGRES_DB}", "{POSTGRES_USER|postgres}", "CREATE ROLE", "POSTGRES_PASSWORD_FILE", "POSTGRES_INITDB_ARGS", "/docker-entrypoint-initdb.d",
+		"44909583390", "44910340290", "at every start", "13:30:17.893", "no database eyberg"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the note does not say %q: %q", want, n)
 		}
+	}
+	if strings.Contains(n, "seen in a run alone") || strings.Contains(n, "needs -d template1") {
+		t.Errorf("the note claims more than was seen: %q", n)
+	}
+	if strings.Contains(rows[0].Reason, "shmget") {
+		t.Errorf("the reason says something not measured: %q", rows[0].Reason)
 	}
 }

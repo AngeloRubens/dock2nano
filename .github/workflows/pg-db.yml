@@ -1,5 +1,6 @@
 name: pg-db
 # Experiments: how to get the database POSTGRES_DB created with the hub postgres packages.
+# The compose job runs only on a head commit message with [pg-db-compose], and never on workflow_dispatch.
 # Runs on a push whose head commit message contains [pg-db], and by hand.
 on:
   push:

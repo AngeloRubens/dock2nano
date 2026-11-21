@@ -527,3 +527,30 @@ func TestRequiredBuildReportsTheEntrypointNoteOfTheRow(t *testing.T) {
 		}
 	}
 }
+
+func TestRequiredBuildMatchesABuiltImageByTheNameOfTheProgram(t *testing.T) {
+	pgObserved := func(sysroot string) *observe.Result {
+		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres", "-c", "x=y"}, Env: []string{"POSTGRES_DB=shop"}, UID: -1, GID: -1}
+	}
+	h := newHubHarness(t, "postgres:16", pgObserved)
+	h.write("compose.yaml", "services:\n  db:\n    build: ./db\n")
+	h.write("db/Dockerfile", "FROM postgres:16\n")
+	rows, err := hub.DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
+	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
+	h.stub.args = []string{"./postgres", "-D", "db"}
+	h.mustRun(0, "convert")
+	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "whole francescolavra/postgres 16.2"}) {
+		t.Errorf("calls: %v", h.stub.calls)
+	}
+	out := h.stdout.String()
+	for _, want := range []string{"hub files", "hub entrypoint", "CREATE DATABASE shop", "hub arguments"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+}

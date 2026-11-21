@@ -314,7 +314,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// The package of a service holds its files as they were at the end of its own observation. What
 	// the services observed beside it did to it afterwards (a schema, rows, files) is not in it.
 	for name, by := range rs.served {
-		if si, ok := inputs[name]; ok && si.Observed != nil {
+		if si, ok := inputs[name]; ok && si.Observed != nil && !si.HubWhole {
 			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s was observed while this service was running; what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
 		}
 	}
