@@ -603,13 +603,27 @@ func TestApplyHubWholeNamesTheArgumentsItDrops(t *testing.T) {
 	obs := hubWholeObs()
 	items := ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
 	a := hubFind(items, "hub arguments")
-	if len(a) != 1 || a[0].Kind != plan.Unsupported || !strings.Contains(a[0].Message, "-c x=y") || !strings.Contains(a[0].Message, "./postgres -D db") {
+	if len(a) != 1 || a[0].Kind != plan.Unsupported || !strings.Contains(a[0].Message, "2 arguments were dropped") || !strings.Contains(a[0].Message, "./postgres -D db") {
 		t.Errorf("%+v", a)
 	}
 	obs = hubWholeObs()
 	obs.Argv = []string{"postgres"}
 	if a := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs), "hub arguments"); len(a) != 0 {
 		t.Errorf("nothing was dropped: %+v", a)
+	}
+}
+
+func TestApplyHubWholeDoesNotPrintTheArgumentsItDrops(t *testing.T) {
+	obs := hubWholeObs()
+	obs.Argv = []string{"postgres", "--password=hunter2", "-c", "ssl_key_password=hunter2"}
+	items := ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
+	for _, it := range items {
+		if strings.Contains(it.Message, "hunter2") || strings.Contains(it.Key, "hunter2") {
+			t.Errorf("the report prints a secret from the command line: %s: %q", it.Key, it.Message)
+		}
+	}
+	if a := hubFind(items, "hub arguments"); len(a) != 1 || !strings.Contains(a[0].Message, "3 arguments were dropped") {
+		t.Errorf("the dropped arguments are still reported: %+v", a)
 	}
 }
 
