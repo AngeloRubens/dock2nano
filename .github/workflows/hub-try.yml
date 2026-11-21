@@ -67,6 +67,7 @@ jobs:
           fi
           echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
           ops pkg get "$pkg" 2>&1 | grep -av '%' | tail -5
+          ls -R "$OPS_HOME/.ops/packages" "$OPS_HOME/.ops/local_packages" 2>&1 | head -20
           echo "::group::ops pkg describe $pkg"
           ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -av '%' | head -80 || true
           echo "::endgroup::"
@@ -77,7 +78,7 @@ jobs:
           port=${{ matrix.port }}; kind=${{ matrix.kind }}
           envflag=""
           case "${{ matrix.name }}" in pg*) envflag="-e POSTGRES_PASSWORD=pw";; esac
-          ops pkg load -l "$pkg" -p $port $envflag > /tmp/console.log 2>&1 &
+          ops pkg load "$pkg" -p $port $envflag > /tmp/console.log 2>&1 &
           opspid=$!
           result=no-answer
           for i in $(seq 1 24); do
