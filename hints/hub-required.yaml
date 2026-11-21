@@ -16,11 +16,15 @@ rows:
       - eyberg/postgresql
     reason: postgres starts a process per connection and needs SysV shared memory (shmget), which nanos does not have; the hub builds run it with threads
     entrypoint_note: >-
-      POSTGRES_DB, POSTGRES_USER and POSTGRES_PASSWORD do not create the
-      database, the user or the password; in a CI run (run 44908630495) the
-      database "example" did not exist after the start, the backend of
-      spring-postgres gave no answer and its console said database "example"
-      does not exist, and with CREATE DATABASE sent over the network to the
-      started package (psql, user postgres; user eyberg for
-      eyberg/postgresql 11.3.0) the same backend answered 200. That step is
-      not done by this tool: do it yourself after the start
+      POSTGRES_DB, POSTGRES_USER and POSTGRES_PASSWORD are read by that
+      entrypoint, so they create no database, user or password; measured with
+      francescolavra/postgres 16.2 (run 44908630495): passing POSTGRES_DB did not create the
+      database, the database "example" did not exist after the start, the
+      backend of spring-postgres gave no answer and its console said database
+      "example" does not exist. After CREATE DATABASE sent over the network to
+      the started package (psql -h <address of the db> -U postgres -c
+      'CREATE DATABASE example'; the superuser of eyberg/postgresql 11.3.0 is
+      eyberg and the connection needs -d template1, seen in a run alone, not
+      with an application) the same backend answered 200. That step is not
+      done by this tool: do it yourself after the start, before the
+      application connects
