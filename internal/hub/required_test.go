@@ -1,14 +1,9 @@
 package hub
 
-import (
-	"strings"
-	"testing"
-
-	"github.com/AngeloRubens/dock2nano/hints"
-)
+import "testing"
 
 // testRows is a table for the tests only. The table that ships in the binary
-// has no active row.
+// has only the postgres row.
 const testRows = `
 rows:
   - images: [postgres, postgresql]
@@ -56,40 +51,29 @@ func TestParseRequiredEmpty(t *testing.T) {
 	}
 }
 
-// The table that ships in the binary has no active row until the proof that
-// the packages of the hub run on nanos exists.
-func TestTheTableThatShipsHasNoActiveRow(t *testing.T) {
+// The table that ships in the binary has the postgres row, proven on the fork.
+func TestTheTableThatShipsHasThePostgresRow(t *testing.T) {
 	rows, err := DefaultRequired()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 0 {
-		t.Errorf("the shipped table has %d active rows: %+v", len(rows), rows)
+	if len(rows) != 1 {
+		t.Fatalf("the shipped table has %d rows: %+v", len(rows), rows)
 	}
-}
-
-func TestTheShippedTableKeepsTheExampleRowAsAComment(t *testing.T) {
-	// the commented example must stay a valid row once the comment marks are taken off
-	var b strings.Builder
-	in := false
-	for _, line := range strings.Split(string(hints.HubRequired), "\n") {
-		if strings.HasPrefix(line, "#  - images:") {
-			in = true
-			b.WriteString("rows:\n")
-		}
-		if in {
-			if !strings.HasPrefix(line, "#") {
-				break
-			}
-			b.WriteString(strings.TrimPrefix(line, "#") + "\n")
-		}
+	if MatchRequired(rows, "postgres", "/usr/lib/postgresql/16/bin/postgres") == nil {
+		t.Error("image postgres, program postgres is not matched")
 	}
-	rows, err := ParseRequired([]byte(b.String()))
-	if err != nil || len(rows) != 1 || rows[0].Programs[0] != "postgres" {
-		t.Fatalf("the example row: %v %v\n%s", rows, err, b.String())
+	if MatchRequired(rows, "postgresql", "postgres") == nil {
+		t.Error("image postgresql, program postgres is not matched")
 	}
-	if rows[0].Packages[0] != "francescolavra/postgres" || rows[0].Packages[1] != "eyberg/postgresql" {
-		t.Errorf("packages: %v", rows[0].Packages)
+	if MatchRequired(rows, "nginx", "/usr/sbin/nginx") != nil {
+		t.Error("an unrelated image and program matched")
+	}
+	if MatchRequired(rows, "postgres", "/bin/sh") != nil {
+		t.Error("an unrelated program matched")
+	}
+	if got := rows[0].Packages; len(got) != 2 || got[0] != "francescolavra/postgres" || got[1] != "eyberg/postgresql" {
+		t.Errorf("packages: %v", got)
 	}
 }
 
