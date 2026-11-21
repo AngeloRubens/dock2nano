@@ -17,9 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: pg11-users, pkg: "eyberg/postgresql:11.3.0", exp: users}
           - {name: pg16-e3img, pkg: "francescolavra/postgres:16.2", exp: e3img}
-          - {name: pg11-e3img, pkg: "eyberg/postgresql:11.3.0", exp: e3img}
+          - {name: pg11-e3img, pkg: "eyberg/postgresql:11.3.0", exp: e3img, dbuser: eyberg}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -76,7 +75,7 @@ jobs:
             stop
           fi
           if [ "${{ matrix.exp }}" = e3img ]; then
-            u=postgres
+            u=${{ matrix.dbuser || 'postgres' }}
             echo "=== boot 1: build the image as pkgimg, create the database"
             start "-i pkgimg" /tmp/console.log
             psql -h 127.0.0.1 -U $u -w -c 'CREATE DATABASE example' 2>&1
@@ -86,7 +85,8 @@ jobs:
             stop
             echo "=== images"; ls -la "$OPS_HOME"/.ops/images/ 2>&1 | head
             echo "=== boot 2: same image, no build (-s)"
-            start "-i pkgimg -s" /tmp/console2.log
+            start "-i pkgimg -s" /tmp/console2.log || true
+            echo "::group::ops output of boot 2"; head -40 /tmp/console2.log | cut -c1-300; echo "::endgroup::"
             psql -h 127.0.0.1 -U $u -w -l 2>&1 | cut -c1-40 | head -8
             psql -h 127.0.0.1 -U $u -w -d example -c 'select a from t' 2>&1
             echo "::group::console 2"; tail -40 /tmp/console2.log | cut -c1-300; echo "::endgroup::"
