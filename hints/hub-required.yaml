@@ -170,7 +170,8 @@ rows:
       db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
       {POSTGRES_DB,POSTGRES_USER:ident}'; with neither set the entrypoint
       would use the database postgres, which exists in the package.[[end]]
-      This tool does not do these steps.
+      This tool does not run these commands; the end of this item says whether
+      it wrote a script for them.
       {HUB_FACTS} The superuser of eyberg/postgresql 11.3.0 is eyberg, the role
       postgres does not exist there (run 44909583390).
       The database has to exist before the application connects: in run

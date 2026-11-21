@@ -37,7 +37,14 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 	// the real writer puts it next to compose.yaml, executable
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "compose.yaml")
-	written, err := output.Write(h.plan, output.Options{OpsHome: filepath.Join(dir, "home"), ComposePath: composePath})
+	// the sysroot of the run is gone by now: the writer gets a plan with a new one
+	p := *h.plan
+	p.Services = append(p.Services[:0:0], h.plan.Services...)
+	p.Services[0].Sysroot = filepath.Join(dir, "sysroot")
+	if err := os.MkdirAll(p.Services[0].Sysroot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	written, err := output.Write(&p, output.Options{OpsHome: filepath.Join(dir, "home"), ComposePath: composePath})
 	if err != nil {
 		t.Fatal(err)
 	}
