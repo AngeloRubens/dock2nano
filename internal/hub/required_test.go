@@ -178,7 +178,7 @@ func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
 	if rn := rows[0].RestartNote; !strings.Contains(rn, "44910340290") || !strings.Contains(rn, "not measured") {
 		t.Errorf("restart note: %q", rn)
 	}
-	if !strings.Contains(n, "comes from the postmaster.pid that it leaves") || !strings.Contains(n, "the file itself was not seen") || strings.Contains(n, "which leaves postmaster.pid") {
+	if !strings.Contains(n, "comes from the postmaster.pid left by the first boot") || !strings.Contains(n, "the file itself was not seen") || strings.Contains(n, "which leaves postmaster.pid") {
 		t.Errorf("the note says the postmaster.pid was seen: %q", n)
 	}
 	for ref, run := range map[string]string{"francescolavra/postgres": "44908630495", "eyberg/postgresql": "44910340290"} {

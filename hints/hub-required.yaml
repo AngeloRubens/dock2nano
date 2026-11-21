@@ -30,14 +30,12 @@ rows:
       eyberg/postgresql: eyberg
     package_facts:
       francescolavra/postgres: >-
-        In francescolavra/postgres 16.2 the superuser is postgres and a
-        database named postgres exists, so psql -U postgres without -d
-        connects (run 44908630495 ran psql -U postgres without -d and CREATE
-        DATABASE worked; list of databases, run 44910340290).
+        In francescolavra/postgres 16.2 a database named postgres exists, so
+        psql -U postgres without -d connects (run 44908630495 ran psql -U
+        postgres without -d; CREATE DATABASE worked).
       eyberg/postgresql: >-
         In eyberg/postgresql 11.3.0 there is no database named eyberg, which
-        psql uses by default for the user eyberg, so -d is needed (list of
-        databases, run 44910340290).
+        psql uses by default for the user eyberg, so -d is needed.
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
     restart_note: >-
       A restart of the same disk was seen failing: after an unclean stop (the
@@ -47,18 +45,13 @@ rows:
     entrypoint_note: >-
       POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_PASSWORD_FILE,
       POSTGRES_INITDB_ARGS and the files of /docker-entrypoint-initdb.d are
-      inputs of that entrypoint and are ignored, so they create no database,
-      user or password and run no script. Measured with
-      francescolavra/postgres 16.2 (run 44908630495): passing POSTGRES_DB did
-      not create the database, the database "example" did not exist after the
-      start, the backend of spring-postgres gave no answer and its console
-      said database "example" does not exist. After a CREATE DATABASE sent over
-      the network to the started package the same backend answered 200. The
-      connection needs the superuser of the package, here {HUB_SUPERUSER}
-      (the superuser of eyberg/postgresql 11.3.0 is eyberg and the role
-      postgres does not exist there, run 44909583390), and -d with an existing
-      database: postgres and template1 exist in both packages (list of
-      databases, run 44910340290). {HUB_FACTS}
+      ignored: no database, user, password or script. Run 44908630495
+      (francescolavra/postgres 16.2): the database "example" did not exist
+      after the start, the backend of spring-postgres gave no answer (console:
+      database "example" does not exist); after a CREATE DATABASE over the
+      network it answered 200. Connect as the superuser, here {HUB_SUPERUSER},
+      with -d to an existing database (postgres and template1 exist in both
+      packages, run 44910340290).
       [[if HUB_CONTROL]]The name of the database or of the role holds a
       control character (a line break, a tab or another one): no command is
       printed for it, quote the name by hand.[[end]]
@@ -91,16 +84,18 @@ rows:
       db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
       {POSTGRES_DB,POSTGRES_USER:ident}'; with neither set the entrypoint
       would use the database postgres, which exists in the package.[[end]]
-      These steps are not done by this tool. A second boot of the same disk
-      after an unclean stop (the first boot ended by SIGTERM to qemu) did not
-      start postgres. The FATAL, pre-existing shared memory block (key
-      5432001 for eyberg/postgresql 11.3.0, key 896 for francescolavra/postgres
-      16.2) is still in use, comes from the postmaster.pid that it leaves; the
-      file itself was not seen (run 44910340290, boot 2).
-      Whether the data is kept across a restart was not measured. ops compose
-      builds the image again at each up; whether the database exists after
-      that was not measured otherwise. The database has to exist before the
-      application connects: in run 44908630495 the backend connected about 43 s
-      after CREATE DATABASE (CREATE DATABASE at 13:29:34.95, HikariPool-1
-      starting at 13:30:17.893), and ops compose up starts all instances
-      together, so an application that connects sooner fails unless it retries
+      This tool does not do these steps.
+      {HUB_FACTS} The superuser of eyberg/postgresql 11.3.0 is eyberg, the role
+      postgres does not exist there (run 44909583390).
+      The database has to exist before the application connects: in run
+      44908630495 the backend connected about 43 s after CREATE DATABASE
+      (13:29:34.95; HikariPool-1 starting at 13:30:17.893) and ops compose up
+      starts all instances together, so a sooner connection fails unless the
+      application retries.
+      A second boot of the same disk after an unclean stop did not start
+      postgres: FATAL, pre-existing shared memory block (key 5432001 for
+      eyberg/postgresql 11.3.0, key 896 for francescolavra/postgres 16.2) is
+      still in use (run 44910340290, boot 2); it comes from the postmaster.pid
+      left by the first boot, the file itself was not seen. Data kept across a
+      restart was not measured, nor the database after ops compose builds the
+      image again at each up.
