@@ -28,9 +28,10 @@ jobs:
           - {run: r2, name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
           - {run: r2, name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 netcat-openbsd curl postgresql-client >/dev/null
       - name: ops from source (nanovms/ops master 2177c54)
