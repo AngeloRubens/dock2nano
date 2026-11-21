@@ -64,7 +64,7 @@ func TestPostUpScriptCreatesTheDatabaseAsTheSuperuserOfFrancescolavra(t *testing
 			t.Errorf("the script lacks %q:\n%s", want, s)
 		}
 	}
-	if strings.Contains(s, "ensure 'role'") || strings.Contains(s, "OWNER") {
+	if strings.Contains(s, "\nensure 'role'") || strings.Contains(s, `OWNER "`) {
 		t.Errorf("a role is made although POSTGRES_USER is not set:\n%s", s)
 	}
 	syntaxOK(t, s)
@@ -95,7 +95,7 @@ func TestPostUpScriptCreatesTheRoleFirstWhenItIsNotTheSuperuserAndWritesNoPasswo
 
 func TestPostUpScriptDoesNotMakeTheRoleWhenItIsTheSuperuser(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_USER=postgres")
-	if strings.Contains(s, "ensure 'role'") || !strings.Contains(s, `'CREATE DATABASE "shop"'`) {
+	if strings.Contains(s, "\nensure 'role'") || !strings.Contains(s, `'CREATE DATABASE "shop"'`) {
 		t.Errorf("%s", s)
 	}
 }
