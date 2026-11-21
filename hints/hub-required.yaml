@@ -11,14 +11,9 @@
 #
 # The text of entrypoint_note can hold {NAME}, {NAME|default}, {A,B} (the first
 # of A and B that is set), {NAME:ident} (a quoted identifier), {HUB_SUPERUSER}
-# (from superusers) and {HUB_FACTS} (from package_facts); both must have an
-# entry for every package of the row. [[if TEST]]...[[end]] and
-# [[unless TEST]]...[[end]] do not nest; TEST is terms joined by " and ", each
-# NAMES, NAMES!="text" or NAMES!=OTHER, with "not " before it. HUB_ENV_UNCERTAIN
-# (the environment of the service could not be read completely) and HUB_CONTROL
-# (a name holds control characters) are set by the tool. A variable whose name
-# says PASS, PWD, SECRET, TOKEN or KEY is never written. The text is checked
-# when the table is read.
+# (from superusers), and [[if TEST]]...[[end]] or [[unless TEST]]...[[end]]
+# with TEST as NAMES or NAMES!="text" or NAMES!=OTHER. A variable whose name
+# says PASSWORD, SECRET, TOKEN or KEY is never written.
 rows:
   - images: [postgres, postgresql]
     programs: [postgres]
@@ -28,16 +23,6 @@ rows:
     superusers:
       francescolavra/postgres: postgres
       eyberg/postgresql: eyberg
-    package_facts:
-      francescolavra/postgres: >-
-        In francescolavra/postgres 16.2 the superuser is postgres and a
-        database named postgres exists, so psql -U postgres without -d
-        connects (run 44908630495 ran psql -U postgres without -d and CREATE
-        DATABASE worked; list of databases, run 44910340290).
-      eyberg/postgresql: >-
-        In eyberg/postgresql 11.3.0 there is no database named eyberg, which
-        psql uses by default for the user eyberg, so -d is needed (list of
-        databases, run 44910340290).
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
     restart_note: >-
       A restart of the same disk was seen failing: after an unclean stop (the
@@ -58,45 +43,23 @@ rows:
       (the superuser of eyberg/postgresql 11.3.0 is eyberg and the role
       postgres does not exist there, run 44909583390), and -d with an existing
       database: postgres and template1 exist in both packages (list of
-      databases, run 44910340290). {HUB_FACTS}
-      [[if HUB_CONTROL]]The name of the database or of the role holds a
-      control character (a line break, a tab or another one): no command is
-      printed for it, quote the name by hand.[[end]]
-      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]The role
-      {POSTGRES_USER:ident} is not created either. In the image POSTGRES_USER
-      is the superuser; to make it so, run by hand: psql -h <address of the
-      db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE ROLE
-      {POSTGRES_USER:ident} LOGIN SUPERUSER'. This command and the CREATE
-      DATABASE with OWNER below were NOT run in any CI run (no cited run
-      executes CREATE ROLE): do not take them to work.[[end]]
-      [[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]To create
-      the database, owned by that role as in the image, run by hand after the
-      role: psql -h <address of the db> -U {HUB_SUPERUSER} -d template1 -c
-      'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident} OWNER
-      {POSTGRES_USER:ident}'.[[end]]
-      [[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]To create
-      the database, run it by hand: psql -h <address of the db> -U
-      {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
-      {POSTGRES_DB,POSTGRES_USER:ident}'.[[end]]
-      [[if not HUB_ENV_UNCERTAIN and not POSTGRES_DB,POSTGRES_USER!="postgres"]]No database has to be
+      databases, run 44910340290); there is no database named like the
+      superuser, which psql uses by default.
+      [[if POSTGRES_DB,POSTGRES_USER!="postgres"]]To create the database, run
+      it by hand: psql -h <address of the db> -U {HUB_SUPERUSER} -d template1
+      -c 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident}'.[[end]]
+      [[unless POSTGRES_DB,POSTGRES_USER!="postgres"]]No database has to be
       created: with neither POSTGRES_DB nor POSTGRES_USER set (or set to
       postgres) the entrypoint would use the database postgres, which exists
       in the package.[[end]]
-      [[if HUB_ENV_UNCERTAIN]]The environment of this service could not be
-      read completely (see the other items of the service), so the names of
-      POSTGRES_DB and POSTGRES_USER may differ from the ones shown.[[end]]
-      [[if HUB_ENV_UNCERTAIN and not POSTGRES_DB,POSTGRES_USER and not HUB_CONTROL]]POSTGRES_DB and
-      POSTGRES_USER are not known here. If POSTGRES_DB is set (else
-      POSTGRES_USER), create the database it names: psql -h <address of the
-      db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
-      {POSTGRES_DB,POSTGRES_USER:ident}'; with neither set the entrypoint
-      would use the database postgres, which exists in the package.[[end]]
+      [[if POSTGRES_USER!=HUB_SUPERUSER]]The role {POSTGRES_USER} is not
+      created either: psql -h <address of the db> -U {HUB_SUPERUSER} -d
+      template1 -c 'CREATE ROLE {POSTGRES_USER:ident} LOGIN'.[[end]]
       These steps are not done by this tool. A second boot of the same disk
-      after an unclean stop (the first boot ended by SIGTERM to qemu) did not
-      start postgres. The FATAL, pre-existing shared memory block (key
-      5432001 for eyberg/postgresql 11.3.0, key 896 for francescolavra/postgres
-      16.2) is still in use, comes from the postmaster.pid that it leaves; the
-      file itself was not seen (run 44910340290, boot 2).
+      after an unclean stop (the first boot ended by SIGTERM to qemu, which
+      leaves postmaster.pid) did not start postgres: FATAL, pre-existing shared
+      memory block (key 5432001 for eyberg/postgresql 11.3.0, key 896 for
+      francescolavra/postgres 16.2) is still in use (run 44910340290, boot 2).
       Whether the data is kept across a restart was not measured. ops compose
       builds the image again at each up; whether the database exists after
       that was not measured otherwise. The database has to exist before the

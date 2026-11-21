@@ -81,25 +81,6 @@ func ParseRequired(data []byte) ([]Required, error) {
 				}
 			}
 		}
-		if r.EntrypointNote != "" {
-			if err := ValidateNote(r.EntrypointNote); err != nil {
-				return nil, fmt.Errorf("row %d of the table of required builds: entrypoint_note: %w", i+1, err)
-			}
-			for name, field := range NoteFixed {
-				if !NoteUses(r.EntrypointNote, name) {
-					continue
-				}
-				have := r.Superusers
-				if field == "package_facts" {
-					have = r.PackageFacts
-				}
-				for _, p := range r.Packages {
-					if have[p] == "" {
-						return nil, fmt.Errorf("row %d of the table of required builds: the note uses {%s}, so %s needs an entry for %q", i+1, name, field, p)
-					}
-				}
-			}
-		}
 	}
 	return doc.Rows, nil
 }

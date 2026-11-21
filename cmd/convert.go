@@ -114,9 +114,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	var sysroots []string
 	defer func() {
 		for _, s := range append(sysroots, rs.undeleted...) {
-			if err := a.RemoveAll(s); err != nil {
-				fmt.Fprintf(a.Stderr, "%s: warning: the directory %s could not be removed (%v)\n", ToolName, s, err)
-			}
+			a.RemoveAll(s)
 		}
 	}()
 	arch, archOwner := "", ""

@@ -269,7 +269,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 	obs.Sysroot = dest
 	si.HubWhole = true
 	si.HubRestartNote = row.RestartNote
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, ComposeEnv: hc.composeEnv, EnvUncertain: hc.envUncertain, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], PackageFacts: row.PackageFacts[pkg.Ref()], Recipe: rec}
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
 	return nil
 }

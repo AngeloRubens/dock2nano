@@ -345,20 +345,13 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
-		fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package"}
+		fixed := map[string]string{}
 		if u.Superuser != "" {
 			fixed["HUB_SUPERUSER"] = u.Superuser
-		}
-		if u.PackageFacts != "" {
-			fixed["HUB_FACTS"] = u.PackageFacts
-		}
-		if u.EnvUncertain {
-			fixed["HUB_ENV_UNCERTAIN"] = "yes"
 		}
 		// the image first, the observed environment over it, what the compose file
 		// gives the service over both: the order in which the manifest gets them
 		env := append(slices.Clone(u.ImageEnv), obs.Env...)
-		env = append(env, u.ComposeEnv...)
 		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, env, fixed)))
 	}
 	items = append(items, hubNotApplied(u, true)...)
@@ -417,7 +410,7 @@ func dropFileWarnings(ws []string) []string {
 // The value of such a variable is never written into a note.
 func secretName(name string) bool {
 	u := strings.ToUpper(name)
-	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "PASS", "PWD"} {
+	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY"} {
 		if strings.Contains(u, w) {
 			return true
 		}
@@ -455,6 +448,10 @@ func firstSet(have map[string]string, names string) (string, bool) {
 // NAMES!=OTHER (it is set and differs from the variable OTHER, or from the
 // text between quotes), and "not " before it turns it round.
 func condition(have map[string]string, expr string) bool {
+	return term(have, expr)
+}
+
+func conditionNew(have map[string]string, expr string) bool {
 	for _, t := range strings.Split(expr, " and ") {
 		t = strings.TrimSpace(t)
 		neg := strings.HasPrefix(t, "not ")
@@ -480,10 +477,6 @@ func term(have map[string]string, expr string) bool {
 	rhs = strings.TrimSpace(rhs)
 	if len(rhs) >= 2 && strings.HasPrefix(rhs, `"`) && strings.HasSuffix(rhs, `"`) {
 		return v != rhs[1:len(rhs)-1]
-	}
-	if secretName(rhs) {
-		// the value of a secret is not read, so it cannot be compared
-		return false
 	}
 	return v != have[rhs]
 }
@@ -533,7 +526,7 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 	have := map[string]string{}
 	for _, e := range env {
 		// the names the tool fills itself (HUB_...) are never read from the environment
-		if k, v, ok := strings.Cut(e, "="); ok && v != "" && !strings.HasPrefix(k, "HUB_") {
+		if k, v, ok := strings.Cut(e, "="); ok && v != "" {
 			have[k] = v
 		}
 	}
@@ -542,13 +535,6 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 	}
 	// a name that plainText would change cannot be written as an identifier
 	// without making another name: no command is printed for it
-	for _, m := range bracesRe.FindAllStringSubmatch(note, -1) {
-		if sub := placeholderRe.FindStringSubmatch(m[1]); sub != nil && sub[2] != "" {
-			if v, ok := firstSet(have, sub[1]); ok && plainText(v) != v {
-				have["HUB_CONTROL"] = "yes"
-			}
-		}
-	}
 	note = sectionRe.ReplaceAllStringFunc(note, func(m string) string {
 		sub := sectionRe.FindStringSubmatch(m)
 		if condition(have, strings.TrimSpace(sub[2])) == (sub[1] == "if") {
@@ -557,7 +543,6 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 		return ""
 	})
 	// a removed section leaves its neighbours' spaces
-	note = strings.TrimSpace(spacesRe.ReplaceAllString(note, " "))
 	var b strings.Builder
 	for {
 		i := strings.IndexByte(note, '{')
@@ -602,9 +587,6 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 func fillValue(v string, ident bool) string {
 	p := plainText(v)
 	if ident {
-		if p != v {
-			return "<a name with control characters, to be quoted by hand>"
-		}
 		return sqlIdent(p)
 	}
 	return p
