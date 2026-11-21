@@ -33,7 +33,7 @@ type Required struct {
 
 	// EntrypointNote says what the entrypoint of the image does that the
 	// package of the hub does not do. Empty means that nothing is said.
-	EntrypointNote string `yaml:"entrypoint_note,omitempty"`
+	EntrypointNote string `yaml:"-"`
 }
 
 // ParseRequired reads the text of a table of required builds.

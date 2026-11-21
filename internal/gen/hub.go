@@ -303,9 +303,6 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
 	}
 	items = append(items, hubCredentials(u)...)
-	if u.EntrypointNote != "" {
-		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+u.EntrypointNote))
-	}
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
 	}
