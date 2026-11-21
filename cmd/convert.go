@@ -113,7 +113,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	inputs := map[string]gen.ServiceInput{}
 	var sysroots []string
 	defer func() {
-		for _, s := range append(sysroots, rs.undeleted...) {
+		for _, s := range sysroots {
 			a.RemoveAll(s)
 		}
 	}()
@@ -992,9 +992,6 @@ func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
 // service observed once more. They describe files of the image, which a package
 // of the hub used whole replaces, so such a service gets none.
 func retryBindNotes(si gen.ServiceInput, binds []string) []string {
-	if si.HubWhole {
-		return slices.DeleteFunc(slices.Clone(binds), gen.IsFileWarning)
-	}
 	return binds
 }
 

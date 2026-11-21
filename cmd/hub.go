@@ -244,10 +244,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 		}
 		return skip(fmt.Sprintf("the package %s %s could not be fetched or checked (%v), so it cannot be converted", pkg.Ref(), pkg.Version, err))
 	}
-	if err := a.RemoveAll(obs.Sysroot); err != nil {
-		fmt.Fprintf(a.Stderr, "%s: warning: the directory of the observed files %s could not be removed (%v); it is tried again at the end\n", name, obs.Sysroot, err)
-		rs.undeleted = append(rs.undeleted, obs.Sysroot)
-	}
+	a.RemoveAll(obs.Sysroot)
 	obs.Sysroot = dest
 	si.HubWhole = true
 	si.HubRestartNote = row.RestartNote

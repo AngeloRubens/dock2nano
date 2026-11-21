@@ -7,63 +7,35 @@
 # The row for postgres is active. It is proven by run 44887394014 of the
 # branch check/hub-try on the fork: the hub packages eyberg/postgresql 11.3.0
 # and francescolavra/postgres 16.2 both answered pg_isready with "accepting
-# connections", 2 of 2 for each of the two packages, alone, with no app.
-#
-# The text of entrypoint_note can hold {NAME}, {NAME|default}, {A,B} (the first
-# of A and B that is set), {NAME:ident} (a quoted identifier), {HUB_SUPERUSER}
-# (from superusers), and [[if TEST]]...[[end]] or [[unless TEST]]...[[end]]
-# with TEST as NAMES or NAMES!="text" or NAMES!=OTHER. A variable whose name
-# says PASSWORD, SECRET, TOKEN or KEY is never written.
+# connections, 2 of 2 for each of the two packages, alone, with no app.
 rows:
   - images: [postgres, postgresql]
     programs: [postgres]
     packages:
       - francescolavra/postgres
       - eyberg/postgresql
-    superusers:
-      francescolavra/postgres: postgres
-      eyberg/postgresql: eyberg
-    reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
-    restart_note: >-
-      A restart of the same disk was seen failing: after an unclean stop (the
-      first boot ended by SIGTERM to qemu) the second boot did not start
-      postgres (FATAL, pre-existing shared memory block is still in use; run
-      44910340290). A restart after a crash of the program is not measured
+    reason: postgres starts a process per connection (the observation of the image saw child processes) and nanos runs one process; the hub builds run it with threads
     entrypoint_note: >-
       POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_PASSWORD_FILE,
       POSTGRES_INITDB_ARGS and the files of /docker-entrypoint-initdb.d are
-      inputs of that entrypoint and are ignored, so they create no database,
-      user or password and run no script. Measured with
-      francescolavra/postgres 16.2 (run 44908630495): passing POSTGRES_DB did
-      not create the database, the database "example" did not exist after the
-      start, the backend of spring-postgres gave no answer and its console
-      said database "example" does not exist. After a CREATE DATABASE sent over
-      the network to the started package the same backend answered 200. The
-      connection needs the superuser of the package, here {HUB_SUPERUSER}
-      (the superuser of eyberg/postgresql 11.3.0 is eyberg and the role
-      postgres does not exist there, run 44909583390), and -d with an existing
-      database: postgres and template1 exist in both packages (list of
-      databases, run 44910340290); there is no database named like the
-      superuser, which psql uses by default.
-      [[if POSTGRES_DB,POSTGRES_USER!="postgres"]]To create the database, run
-      it by hand: psql -h <address of the db> -U {HUB_SUPERUSER} -d template1
-      -c 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident}'.[[end]]
-      [[unless POSTGRES_DB,POSTGRES_USER!="postgres"]]No database has to be
-      created: with neither POSTGRES_DB nor POSTGRES_USER set (or set to
-      postgres) the entrypoint would use the database postgres, which exists
-      in the package.[[end]]
-      [[if POSTGRES_USER!=HUB_SUPERUSER]]The role {POSTGRES_USER} is not
-      created either: psql -h <address of the db> -U {HUB_SUPERUSER} -d
-      template1 -c 'CREATE ROLE {POSTGRES_USER:ident} LOGIN'.[[end]]
-      These steps are not done by this tool. A second boot of the same disk
-      after an unclean stop (the first boot ended by SIGTERM to qemu, which
-      leaves postmaster.pid) did not start postgres: FATAL, pre-existing shared
-      memory block (key 5432001 for eyberg/postgresql 11.3.0, key 896 for
-      francescolavra/postgres 16.2) is still in use (run 44910340290, boot 2).
-      Whether the data is kept across a restart was not measured. ops compose
-      builds the image again at each up; whether the database exists after
-      that was not measured otherwise. The database has to exist before the
-      application connects: in run 44908630495 the backend connected about 43 s
-      after CREATE DATABASE (CREATE DATABASE at 13:29:34.95, HikariPool-1
-      starting at 13:30:17.893), and ops compose up starts all instances
-      together, so an application that connects sooner fails unless it retries
+      inputs of that entrypoint and are ignored, so they create no database, user or password and run no
+      script; measured with francescolavra/postgres 16.2 (run 44908630495):
+      passing POSTGRES_DB did not create the database, the database "example"
+      did not exist after the start, the backend of spring-postgres gave no
+      answer and its console said database "example" does not exist. After
+      CREATE DATABASE sent over the network to the started package (psql -h
+      <address of the db> -U postgres -d postgres -c 'CREATE DATABASE
+      {POSTGRES_DB}') the same backend answered 200. The connection needs -U
+      postgres, and -d with an existing database such as postgres or template1
+      (there is no database eyberg, which psql uses by default); the superuser
+      of eyberg/postgresql 11.3.0 is eyberg and the role postgres does not
+      exist there (run 44909583390); the list of databases seen is in run
+      44910340290. If {POSTGRES_USER|postgres} is not postgres, the role has to be
+      created too (CREATE ROLE {POSTGRES_USER|postgres} LOGIN). That step is not done by
+      this tool: it has to be done at every start, because the database is not
+      kept across a restart (run 44910340290, boot 2: ops exited early, no
+      response). It also has to be done before the application connects: in run
+      44908630495 the backend connected about 43 s after CREATE DATABASE
+      (CREATE DATABASE at 13:29:34.95, HikariPool-1 starting at 13:30:17.893),
+      and ops compose up starts all instances together, so an application that
+      connects sooner fails unless it retries

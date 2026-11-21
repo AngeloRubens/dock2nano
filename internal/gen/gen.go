@@ -534,9 +534,6 @@ func (g *generator) restart(s *compose.Service, si ServiceInput, m *plan.Manifes
 	case r == "always" || r == "unless-stopped" || strings.HasPrefix(r, "on-failure"):
 		m.RebootOnExit = true
 		msg := "restart " + r + " becomes RebootOnExit: the instance restarts whenever the program exits, whatever the exit code"
-		if si.HubWhole && si.HubRestartNote != "" {
-			msg += ". " + si.HubRestartNote
-		}
 		g.add(s.Name, plan.Approximated, "restart", msg)
 	default:
 		g.add(s.Name, plan.Unsupported, "restart", "the restart policy "+r+" is not known; it is not converted")
@@ -688,10 +685,6 @@ func numericUser(user string) (uid, gid int, ok bool) {
 }
 
 func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.Result, m *plan.Manifest) {
-	if si.HubWhole {
-		g.identityWhole(s, si, m)
-		return
-	}
 	composeNonRoot := nonRootUser(s.User)
 	// The file may say root while the entrypoint drops to another user, so the observed user wins
 	// when it is known. nanos reads uid and gid from the root of the manifest (nanovms/nanos#2189,

@@ -3,11 +3,9 @@ package gen
 import (
 	"fmt"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/AngeloRubens/dock2nano/internal/hub"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
@@ -42,9 +40,6 @@ type HubUse struct {
 	// there is none.
 	EntrypointNote string
 
-	// Superuser is the role the package has as its superuser, from the row of
-	// the required builds; empty when it is not known. The note of the row can
-	// name it as {HUB_SUPERUSER}.
 	Superuser string
 
 	// Recipe is what was read from the package.
@@ -91,7 +86,7 @@ func (u HubUse) versions() string {
 func ApplyHubRecipe(u HubUse, obs *observe.Result) []plan.Item {
 	items := []plan.Item{u.item(plan.Approximated, "hub", fmt.Sprintf("the hub of ops packages was consulted because %s. Package %s. The files of the image are the ones observed from your image. From the hub package only environment variables are taken; its arguments are reported, not applied. The directives that make the program run as one process come from hints/hub-tables.yaml of this tool, not from the package. Versions: %s", u.Why, u.source(), u.versions()))}
 	items = append(items, hubArgs(u)...)
-	envItems := hubEnv(u, obs, false)
+	envItems := hubEnv(u, obs)
 	envAdded := len(hubFindItems(envItems, plan.Approximated)) > 0
 	items = append(items, envItems...)
 	cfgItems, cfgDone := hubConfig(u, obs)
@@ -113,11 +108,8 @@ func hubArgs(u HubUse) []plan.Item {
 }
 
 // hubEnv adds the variables of the recipe that the image does not set. A
-// variable the image sets keeps its value. Only names are reported. For a
-// package used whole (whole) the files are those of the package, so a value
-// that names a path is checked against the package, and the image of the user
-// is not the place the paths are looked for.
-func hubEnv(u HubUse, obs *observe.Result, whole bool) []plan.Item {
+// variable the image sets keeps its value. Only names are reported.
+func hubEnv(u HubUse, obs *observe.Result) []plan.Item {
 	have := map[string]string{}
 	for _, e := range append(slices.Clone(u.ImageEnv), obs.Env...) {
 		if k, v, ok := strings.Cut(e, "="); ok {
@@ -134,7 +126,7 @@ func hubEnv(u HubUse, obs *observe.Result, whole bool) []plan.Item {
 		v := u.Recipe.Manifest.Env[k]
 		cur, ok := have[k]
 		switch {
-		case !ok && !whole && pathMissing(obs.Sysroot, v):
+		case !ok && pathMissing(obs.Sysroot, v):
 			// the value names a file of the layout of the hub package
 			elsewhere = append(elsewhere, k)
 		case !ok:
@@ -152,18 +144,13 @@ func hubEnv(u HubUse, obs *observe.Result, whole bool) []plan.Item {
 		items = append(items, u.item(plan.Note, "hub environment", "variables of the hub recipe whose value is a path that is not in your image, so they were not added: "+strings.Join(elsewhere, ", ")))
 	}
 	if len(differs) > 0 {
-		if whole {
-			items = append(items, u.item(plan.Note, "hub environment", "the hub recipe sets other values than your image for "+strings.Join(differs, ", ")+"; the package gets the values of your image, the ones of the recipe are not applied"))
-		} else {
-			items = append(items, u.item(plan.Note, "hub environment", "the hub recipe sets other values than your image for "+strings.Join(differs, ", ")+"; yours are kept"))
-		}
+		items = append(items, u.item(plan.Note, "hub environment", "the hub recipe sets other values than your image for "+strings.Join(differs, ", ")+"; yours are kept"))
 	}
 	return items
 }
 
 // hubNotApplied says what the recipe holds that is not applied because the
-// compose file decides it. For a package used whole (whole) the keys of the
-// root of the manifest are not read either, and the words say why.
+// compose file decides it.
 func hubNotApplied(u HubUse, whole bool) []plan.Item {
 	var items []plan.Item
 	rc := u.Recipe.Manifest.RunConfig
@@ -173,7 +160,7 @@ func hubNotApplied(u HubUse, whole bool) []plan.Item {
 	if keys := sortedKeys(u.Recipe.Manifest.ManifestPassthrough); len(keys) > 0 {
 		reasons := make([]string, len(keys))
 		for i, k := range keys {
-			reasons[i] = k + " " + hubKeyReason(k, whole)
+			reasons[i] = k + " " + hubKeyReason(k)
 		}
 		items = append(items, u.item(plan.Note, "hub manifest", "the hub recipe sets "+strings.Join(keys, ", ")+" at the root of the manifest; not applied: "+strings.Join(reasons, "; ")))
 	}
@@ -181,12 +168,9 @@ func hubNotApplied(u HubUse, whole bool) []plan.Item {
 }
 
 // hubKeyReason says why a key of the root of the recipe manifest is not applied.
-func hubKeyReason(key string, whole bool) string {
+func hubKeyReason(key string) string {
 	switch key {
 	case "cwd", "uid", "gid":
-		if whole {
-			return "is not read: the package of the hub runs as root in /, and the generator sets cwd / and no uid"
-		}
 		return "comes from the observation"
 	case "exec_wait_for_ip4_secs":
 		return "is set by the generator for a service that depends_on a converted service, and not otherwise"
@@ -314,30 +298,24 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		dropped = fmt.Sprintf(" The %d %s seen when your image was observed do not apply to this build.", obs.Children, plural(obs.Children, "child process", "child processes"))
 	}
 	obs.Children, obs.ChildCalls = 0, nil
-	obs.PassedOver, obs.NotRun, obs.ChildLaunchers = nil, nil, nil
 	obs.StoppedEarly = false
 	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
 	obs.Vanished = 0
 	obs.LocalNames = false
 	obs.Warnings = dropFileWarnings(obs.Warnings)
-	envItems := hubEnv(u, obs, true)
+	envItems := hubEnv(u, obs)
 	items := []plan.Item{
 		u.item(plan.Approximated, "hub package", fmt.Sprintf("this program must use the build of the hub whole (%s). The package is %s, with its own files, program and arguments; the files observed from your image are not in it.%s Versions: %s", u.Why, u.source(), dropped, u.versions())),
 		u.item(plan.Unsupported, "hub files", "the configuration, extensions and data of your image are not carried: the package holds the files of the hub build, so your configuration files do not apply to it"),
-		u.item(plan.Note, "hub result", "not run by this conversion; see the runs in the hub entrypoint item"),
+		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
 	}
-	if len(droppedArgs) > 0 && !slices.Equal(droppedArgs, argsAfterName(m.Args)) {
+	if len(droppedArgs) > 0 {
 		items = append(items, u.item(plan.Unsupported, "hub arguments", "the arguments of the program of your image and compose file are not used, the package starts with its own ("+strings.Join(m.Args, " ")+"); "+fmt.Sprintf("%d %s dropped, not printed: they can hold a secret", len(droppedArgs), plural(len(droppedArgs), "argument was", "arguments were"))))
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
-		fixed := map[string]string{}
-		if u.Superuser != "" {
-			fixed["HUB_SUPERUSER"] = u.Superuser
-		}
-		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, append(slices.Clone(u.ImageEnv), obs.Env...), fixed)))
+		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, append(slices.Clone(u.ImageEnv), obs.Env...), nil)))
 	}
-	items = append(items, hubNotApplied(u, true)...)
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
 	}
@@ -352,12 +330,19 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	return items
 }
 
-// argsAfterName is the arguments of a command line without its first word.
-func argsAfterName(args []string) []string {
-	if len(args) <= 1 {
-		return nil
-	}
-	return args[1:]
+// fileWarnings are the beginnings of the observe notes that describe files of
+// the image, which the package of the hub replaces.
+var fileWarnings = []string{
+	"the entrypoint made ",
+	"the program created these files while it ran",
+	"not carried ",
+	"the bind ",
+	"could not write the machine files",
+	"could not make /etc/hosts",
+	"the command line in /proc",
+	"the program had stopped before /proc could be read",
+	"could not read the user and group",
+	"the image runs as ",
 }
 
 // IsFileWarning tells whether an observe note describes the files of the image
@@ -365,13 +350,13 @@ func argsAfterName(args []string) []string {
 // of the hub used whole. Notes about the run itself (a stop with a status, the
 // services that ran beside it) are not.
 func IsFileWarning(w string) bool {
-	if strings.HasPrefix(w, observe.NoteMorePrefix) && strings.HasSuffix(w, observe.NoteMoreSuffix) {
+	if strings.HasPrefix(w, "and ") && strings.HasSuffix(w, " more paths were not carried") {
 		return true
 	}
-	if strings.Contains(w, observe.NoteObservedBeside) {
+	if strings.Contains(w, " was observed while this service was running; ") {
 		return true
 	}
-	for _, p := range observe.FileNotePrefixes {
+	for _, p := range fileWarnings {
 		if strings.HasPrefix(w, p) {
 			return true
 		}
@@ -389,103 +374,8 @@ func dropFileWarnings(ws []string) []string {
 	return out
 }
 
-// secretName tells whether the name of a variable says that it holds a secret.
-// The value of such a variable is never written into a note.
-func secretName(name string) bool {
-	u := strings.ToUpper(name)
-	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY"} {
-		if strings.Contains(u, w) {
-			return true
-		}
-	}
-	return false
-}
-
-// notShown stands in a note for the value of a variable that holds a secret.
-const notShown = "<not shown>"
-
-var (
-	// a placeholder: names joined by commas (the first one that is set is
-	// used), an optional :ident, an optional |default
-	placeholderRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*(?:,[A-Za-z_][A-Za-z0-9_]*)*)(:ident)?(?:\|(.*))?$`)
-	sectionRe     = regexp.MustCompile(`(?s)\[\[(if|unless) ([^\]]*)\]\](.*?)\[\[end\]\]`)
-)
-
-// firstSet is the value of the first of the names that is set. A name that
-// says a secret is never read.
-func firstSet(have map[string]string, names string) (string, bool) {
-	for _, n := range strings.Split(names, ",") {
-		n = strings.TrimSpace(n)
-		if secretName(n) {
-			continue
-		}
-		if v, ok := have[n]; ok {
-			return v, true
-		}
-	}
-	return "", false
-}
-
-// condition tells whether the test of a section holds: NAMES (one of them is
-// set) or NAMES!=OTHER (it is set and differs from the variable OTHER, or from
-// the text between quotes).
-func condition(have map[string]string, expr string) bool {
-	lhs, rhs, ne := strings.Cut(expr, "!=")
-	v, ok := firstSet(have, lhs)
-	if !ok {
-		return false
-	}
-	if !ne {
-		return true
-	}
-	rhs = strings.TrimSpace(rhs)
-	if len(rhs) >= 2 && strings.HasPrefix(rhs, `"`) && strings.HasSuffix(rhs, `"`) {
-		return v != rhs[1:len(rhs)-1]
-	}
-	return v != have[rhs]
-}
-
-// plainText makes a value safe to write in a note: a line break or another
-// control character would let a value fake a line of the report, so it is
-// written as an escape.
-func plainText(v string) string {
-	var b strings.Builder
-	for _, r := range v {
-		switch {
-		case r == '\n':
-			b.WriteString(`\n`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case r == '\t':
-			b.WriteString(`\t`)
-		case unicode.IsControl(r) || r == 0x2028 || r == 0x2029:
-			fmt.Fprintf(&b, `\u%04x`, r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// sqlIdent writes a value as the identifier of a command that is inside single
-// quotes of a shell: in double quotes, with the double quotes doubled, as the
-// entrypoint of the image does for the name of a database, and with a single
-// quote written as the shell needs it.
-func sqlIdent(v string) string {
-	q := `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
-	return strings.ReplaceAll(q, `'`, `'\''`)
-}
-
-// fillPlaceholders fills a note of a row of the table of required builds.
-// {NAME} and {NAME|default} are the value of the variable NAME in env, or the
-// default, or "<your NAME>"; {A,B} takes the first of A and B that is set;
-// {NAME:ident} writes the value as a quoted identifier. fixed holds variables
-// of the tool itself (they win over env). [[if TEST]]text[[end]] and
-// [[unless TEST]]text[[end]] keep the text when the test holds or does not;
-// TEST is NAMES or NAMES!=OTHER (see condition); sections do not nest. The
-// value of a variable whose name says PASSWORD, SECRET, TOKEN or KEY is never
-// written: the note says <not shown>. Values are written without line breaks
-// and control characters.
+// fillPlaceholders replaces {NAME} and {NAME|default} in a note with the value
+// of the variable NAME in env, or the default, or "<your NAME>".
 func fillPlaceholders(note string, env []string, fixed map[string]string) string {
 	have := map[string]string{}
 	for _, e := range env {
@@ -493,63 +383,26 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 			have[k] = v
 		}
 	}
-	for k, v := range fixed {
-		have[k] = v
-	}
-	note = sectionRe.ReplaceAllStringFunc(note, func(m string) string {
-		sub := sectionRe.FindStringSubmatch(m)
-		if condition(have, strings.TrimSpace(sub[2])) == (sub[1] == "if") {
-			return sub[3]
-		}
-		return ""
-	})
 	var b strings.Builder
 	for {
 		i := strings.IndexByte(note, '{')
-		if i < 0 {
+		j := strings.IndexByte(note, '}')
+		if i < 0 || j < i {
 			b.WriteString(note)
 			return b.String()
 		}
-		j := strings.IndexByte(note[i:], '}')
-		if j < 0 {
-			b.WriteString(note)
-			return b.String()
-		}
-		j += i
-		sub := placeholderRe.FindStringSubmatch(note[i+1 : j])
-		if sub == nil {
-			// not a placeholder: the brace is text
-			b.WriteString(note[:i+1])
-			note = note[i+1:]
-			continue
-		}
+		name, def, hasDef := strings.Cut(note[i+1:j], "|")
 		b.WriteString(note[:i])
-		names, ident, def, hasDef := sub[1], sub[2] != "", sub[3], strings.Contains(note[i+1:j], "|")
-		secret := false
-		for _, n := range strings.Split(names, ",") {
-			secret = secret || secretName(n)
-		}
-		v, ok := firstSet(have, names)
-		switch {
-		case secret:
-			b.WriteString(notShown)
+		switch v, ok := have[name]; {
 		case ok:
-			b.WriteString(fillValue(v, ident))
+			b.WriteString(v)
 		case hasDef:
-			b.WriteString(fillValue(def, ident))
+			b.WriteString(def)
 		default:
-			b.WriteString("<your " + strings.ReplaceAll(names, ",", " or ") + ">")
+			b.WriteString("<your " + name + ">")
 		}
 		note = note[j+1:]
 	}
-}
-
-func fillValue(v string, ident bool) string {
-	v = plainText(v)
-	if ident {
-		return sqlIdent(v)
-	}
-	return v
 }
 
 // plural gives the one form for 1 and the other for the rest.
