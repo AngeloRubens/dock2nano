@@ -572,7 +572,7 @@ func TestRequiredBuildRemovesTheObservedFilesAgainWhenTheFirstTryFailed(t *testi
 	calls := map[string]int{}
 	h.app.RemoveAll = func(p string) error {
 		calls[p]++
-		if calls[p] == 1 {
+		if calls[p] == 1 && len(h.made) > 0 && p == h.made[0] {
 			return errors.New("device busy")
 		}
 		return os.RemoveAll(p)
