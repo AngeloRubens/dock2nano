@@ -160,16 +160,35 @@ func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
 	}
 	n := rows[0].EntrypointNote
 	for _, want := range []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "CREATE DATABASE", "answered 200",
-		"{POSTGRES_DB}", "{POSTGRES_USER|postgres}", "CREATE ROLE", "POSTGRES_PASSWORD_FILE", "POSTGRES_INITDB_ARGS", "/docker-entrypoint-initdb.d",
-		"44909583390", "44910340290", "at every start", "13:30:17.893", "no database eyberg"} {
+		"{POSTGRES_DB,POSTGRES_USER:ident}", "{HUB_SUPERUSER}", "CREATE ROLE", "POSTGRES_PASSWORD_FILE", "POSTGRES_INITDB_ARGS", "/docker-entrypoint-initdb.d",
+		"44909583390", "44910340290", "13:30:17.893", "was not measured", "pre-existing shared memory block", "5432001"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the note does not say %q: %q", want, n)
 		}
 	}
-	if strings.Contains(n, "seen in a run alone") || strings.Contains(n, "needs -d template1") {
+	if strings.Contains(n, "seen in a run alone") || strings.Contains(n, "needs -d template1") || strings.Contains(n, "is not kept") || strings.Contains(n, "at every start") || strings.Contains(n, "If {POSTGRES_USER") {
 		t.Errorf("the note claims more than was seen: %q", n)
+	}
+	if strings.Contains(rows[0].Reason, "observation of the image") || strings.Contains(rows[0].Reason, "child processes") {
+		t.Errorf("the reason says what the row does not match on: %q", rows[0].Reason)
+	}
+	if got := rows[0].Superusers; got["francescolavra/postgres"] != "postgres" || got["eyberg/postgresql"] != "eyberg" || len(got) != 2 {
+		t.Errorf("superusers: %v", got)
+	}
+	if rn := rows[0].RestartNote; !strings.Contains(rn, "44910340290") || !strings.Contains(rn, "not measured") {
+		t.Errorf("restart note: %q", rn)
 	}
 	if strings.Contains(rows[0].Reason, "shmget") {
 		t.Errorf("the reason says something not measured: %q", rows[0].Reason)
+	}
+}
+
+func TestParseRequiredReadsSuperusersAndRefusesAForeignPackage(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows + "    superusers:\n      eyberg/postgresql: root\n    restart_note: a note\n"))
+	if err != nil || rows[0].Superusers["eyberg/postgresql"] != "root" || rows[0].RestartNote != "a note" {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	if _, err := ParseRequired([]byte(testRows + "    superusers:\n      someone/else: root\n")); err == nil {
+		t.Error("a superuser of a package that is not in the row was accepted")
 	}
 }

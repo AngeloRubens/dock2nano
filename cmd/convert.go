@@ -113,7 +113,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	inputs := map[string]gen.ServiceInput{}
 	var sysroots []string
 	defer func() {
-		for _, s := range sysroots {
+		for _, s := range append(sysroots, rs.undeleted...) {
 			a.RemoveAll(s)
 		}
 	}()
@@ -264,7 +264,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		if si.Observed != nil {
 			w := &si.Observed.Warnings
-			*w = append(*w, binds...)
+			*w = append(*w, retryBindNotes(si, binds)...)
 			if len(notRan) > 0 {
 				*w = append(*w, "these services were meant to run beside it for the second observation and did not: "+strings.Join(notRan, "; "))
 			}
@@ -315,7 +315,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// the services observed beside it did to it afterwards (a schema, rows, files) is not in it.
 	for name, by := range rs.served {
 		if si, ok := inputs[name]; ok && si.Observed != nil && !si.HubWhole {
-			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s was observed while this service was running; what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
+			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s"+observe.NoteObservedBeside+"what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
 		}
 	}
 
@@ -988,6 +988,16 @@ func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
 	return len(rs.candidates(s, false)) > 0
 }
 
+// retryBindNotes are the notes about the binds that go to the warnings of a
+// service observed once more. They describe files of the image, which a package
+// of the hub used whole replaces, so such a service gets none.
+func retryBindNotes(si gen.ServiceInput, binds []string) []string {
+	if si.HubWhole {
+		return slices.DeleteFunc(slices.Clone(binds), gen.IsFileWarning)
+	}
+	return binds
+}
+
 // resetBinds makes a new copy of each read-write bind of s that no other service mounts, so that
 // the second observation starts from the files of the user and not from what the first one wrote.
 // For a bind that another service mounts too it returns a note: that copy is kept.
@@ -1018,7 +1028,7 @@ func (rs *runState) resetBinds(a *App, p *compose.Project, dir string, s *compos
 			}
 		}
 		if shared != "" {
-			notes = append(notes, fmt.Sprintf("the bind %s is shared with %s: the second observation started from what the first one left there", host, shared))
+			notes = append(notes, fmt.Sprintf(observe.NoteBind+"%s is shared with %s: the second observation started from what the first one left there", host, shared))
 			continue
 		}
 		delete(rs.binds, host)
@@ -1083,6 +1093,11 @@ type runState struct {
 	// (the hub). It is kept apart from skipped, which refuses to start a service
 	// for the observation of the ones that need it.
 	late map[string]string
+
+	// undeleted holds the directories of observations that a package of the hub
+	// replaced and that could not be removed then; they are removed again at the
+	// end of the run.
+	undeleted []string
 	// staleSaid is set once the report has said that the list of the hub is an
 	// old copy, which is said for one service only.
 	staleSaid bool

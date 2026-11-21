@@ -34,6 +34,14 @@ type Required struct {
 	// EntrypointNote says what the entrypoint of the image does that the
 	// package of the hub does not do. Empty means that nothing is said.
 	EntrypointNote string `yaml:"entrypoint_note,omitempty"`
+
+	// Superusers is the superuser role of each package, by namespace/name; the
+	// note names it as {HUB_SUPERUSER}.
+	Superusers map[string]string `yaml:"superusers,omitempty"`
+
+	// RestartNote is added to the report of the restart policy of a service
+	// that uses a package of this row. Empty means nothing is added.
+	RestartNote string `yaml:"restart_note,omitempty"`
 }
 
 // ParseRequired reads the text of a table of required builds.
@@ -59,6 +67,10 @@ func ParseRequired(data []byte) ([]Required, error) {
 			ns, name, ok := strings.Cut(p, "/")
 			if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
 				return nil, fmt.Errorf("row %d of the table of required builds: the package %q is not namespace/name", i+1, p)
+		}
+		for p := range r.Superusers {
+			if !contains(r.Packages, p) {
+				return nil, fmt.Errorf("row %d of the table of required builds: superusers names %q, which is not one of its packages", i+1, p)
 			}
 		}
 	}

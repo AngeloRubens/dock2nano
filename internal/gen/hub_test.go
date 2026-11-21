@@ -475,7 +475,7 @@ func TestApplyHubWholeTakesTheProgramAndTheArgumentsOfTheHub(t *testing.T) {
 		t.Errorf("warnings: %v", obs.Warnings)
 	}
 	text := hubText(items)
-	for _, want := range []string{"francescolavra/postgres 16.2", "sha256 " + hubSum, "published by francescolavra", "the files observed from your image are not in it", "The 3 child processes", "configuration, extensions and data of your image are not carried", "not run on nanos", "same major series"} {
+	for _, want := range []string{"francescolavra/postgres 16.2", "sha256 " + hubSum, "published by francescolavra", "the files observed from your image are not in it", "The 3 child processes", "configuration, extensions and data of your image are not carried", "not run by this conversion", "same major series"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the report does not say %q:\n%s", want, text)
 		}

@@ -244,10 +244,14 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 		}
 		return skip(fmt.Sprintf("the package %s %s could not be fetched or checked (%v), so it cannot be converted", pkg.Ref(), pkg.Version, err))
 	}
-	a.RemoveAll(obs.Sysroot)
+	if err := a.RemoveAll(obs.Sysroot); err != nil {
+		fmt.Fprintf(a.Stderr, "%s: warning: the directory of the observed files %s could not be removed (%v); it is tried again at the end\n", name, obs.Sysroot, err)
+		rs.undeleted = append(rs.undeleted, obs.Sysroot)
+	}
 	obs.Sysroot = dest
 	si.HubWhole = true
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, EntrypointNote: row.EntrypointNote, Recipe: rec}
+	si.HubRestartNote = row.RestartNote
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
 	return nil
 }
