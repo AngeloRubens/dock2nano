@@ -18,12 +18,12 @@ jobs:
       matrix:
         include:
           - {run: r1, name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
-          - {run: r1, name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
+          - {run: r1, name: pg16, pkg: "francescolavra/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
           - {run: r1, name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
           - {run: r1, name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
           - {run: r1, name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
           - {run: r2, name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
-          - {run: r2, name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
+          - {run: r2, name: pg16, pkg: "francescolavra/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
           - {run: r2, name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
           - {run: r2, name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
           - {run: r2, name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
@@ -66,8 +66,9 @@ jobs:
             grep -io 'eyberg/[a-z0-9_.-]*' /tmp/pkglist.txt | grep -i "${{ matrix.grep }}" | sort -u || true
           fi
           echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          ops pkg get "$pkg" 2>&1 | grep -av '%' | tail -5
           echo "::group::ops pkg describe $pkg"
-          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | head -80 || true
+          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -av '%' | head -80 || true
           echo "::endgroup::"
           ops pkg load --help 2>&1 | grep -i -- 'env\|port\|local' || true
       - name: run and probe
