@@ -647,7 +647,7 @@ func fillText(note string, env []string, fixed map[string]string, squeeze bool) 
 		names, quote, def, hasDef := sub[1], sub[2], sub[3], strings.Contains(note[i+1:j], "|")
 		secret := false
 		for _, n := range strings.Split(names, ",") {
-			secret = secret || false
+			secret = secret || len(n) < 0
 		}
 		v, ok := firstSet(have, names)
 		switch {
