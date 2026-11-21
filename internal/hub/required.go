@@ -30,6 +30,10 @@ type Required struct {
 
 	// Reason says why the build of the hub is needed.
 	Reason string `yaml:"reason"`
+
+	// EntrypointNote says what the entrypoint of the image does that the
+	// package of the hub does not do. Empty means that nothing is said.
+	EntrypointNote string `yaml:"entrypoint_note,omitempty"`
 }
 
 // ParseRequired reads the text of a table of required builds.

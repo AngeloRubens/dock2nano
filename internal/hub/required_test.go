@@ -1,6 +1,9 @@
 package hub
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // testRows is a table for the tests only. The table that ships in the binary
 // has only the postgres row.
@@ -133,5 +136,32 @@ func TestRequiredCandidates(t *testing.T) {
 	p, lvl = SelectFrom(got, "17.1")
 	if lvl != Far || p.Version != "16.2" {
 		t.Errorf("17.1: %v %v", p.Version, lvl)
+	}
+}
+
+func TestParseRequiredReadsTheEntrypointNote(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows + "    entrypoint_note: the note of the row\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].EntrypointNote != "the note of the row" {
+		t.Errorf("%+v", rows[0])
+	}
+	rows, err = ParseRequired([]byte(testRows))
+	if err != nil || rows[0].EntrypointNote != "" {
+		t.Errorf("a row without the field has a note: %+v %v", rows, err)
+	}
+}
+
+func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := rows[0].EntrypointNote
+	for _, want := range []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "CREATE DATABASE", "answered 200"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("the note does not say %q: %q", want, n)
+		}
 	}
 }

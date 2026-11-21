@@ -246,7 +246,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 	}
 	a.RemoveAll(obs.Sysroot)
 	obs.Sysroot = dest
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, Recipe: rec}
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, EntrypointNote: row.EntrypointNote, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
 	return nil
 }

@@ -520,3 +520,20 @@ func TestApplyHubWholeSaysWhatWasNotWritten(t *testing.T) {
 		t.Errorf("nothing was left out: %+v", f)
 	}
 }
+
+func TestApplyHubWholeSaysTheEntrypointDoesNotRun(t *testing.T) {
+	u := hubWholeUse(hub.Exact, "16.2", "16.2")
+	u.EntrypointNote = "POSTGRES_DB does not create the database"
+	e := hubFind(ApplyHubWhole(u, hubWholeObs()), "hub entrypoint")
+	if len(e) != 1 || e[0].Kind != plan.Unsupported || e[0].Service != "db" ||
+		!strings.HasPrefix(e[0].Message, "the entrypoint of your image does not run with the package of the hub: ") ||
+		!strings.HasSuffix(e[0].Message, "POSTGRES_DB does not create the database") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestApplyHubWholeSaysNothingAboutTheEntrypointWhenTheRowHasNoNote(t *testing.T) {
+	if e := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), hubWholeObs()), "hub entrypoint"); len(e) != 0 {
+		t.Errorf("%+v", e)
+	}
+}

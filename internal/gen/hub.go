@@ -35,6 +35,11 @@ type HubUse struct {
 	// reason of the row that requires it.
 	Why string
 
+	// EntrypointNote is the note of the row of the required builds about what
+	// the entrypoint of the image does and the package does not; empty when
+	// there is none.
+	EntrypointNote string
+
 	// Recipe is what was read from the package.
 	Recipe *hub.Recipe
 }
@@ -298,6 +303,9 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
 	}
 	items = append(items, hubCredentials(u)...)
+	if u.EntrypointNote != "" {
+		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+u.EntrypointNote))
+	}
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
 	}

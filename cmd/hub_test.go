@@ -506,3 +506,24 @@ func TestTheShippedTableOfRequiredBuildsIsRead(t *testing.T) {
 		t.Errorf("%v %v", rows, err)
 	}
 }
+
+func TestRequiredBuildReportsTheEntrypointNoteOfTheRow(t *testing.T) {
+	for _, tc := range []struct {
+		note string
+		want bool
+	}{{"    entrypoint_note: the env of the entrypoint does nothing\n", true}, {"", false}} {
+		h := newHubHarness(t, "nginx:1.28.0", nginxObserved(0))
+		rows, err := hub.ParseRequired([]byte(hubTestRows + tc.note))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.app.HubRequired = rows
+		h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+		h.mustRun(0, "convert")
+		out := h.stdout.String()
+		got := strings.Contains(out, "the entrypoint of your image does not run with the package of the hub: the env of the entrypoint does nothing")
+		if got != tc.want || (!tc.want && strings.Contains(out, "hub entrypoint")) {
+			t.Errorf("note %q: reported %v, want %v:\n%s", tc.note, got, tc.want, out)
+		}
+	}
+}
