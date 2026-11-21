@@ -78,12 +78,13 @@ jobs:
           port=${{ matrix.port }}; kind=${{ matrix.kind }}
           envflag=""
           case "${{ matrix.name }}" in pg*) envflag="-e POSTGRES_PASSWORD=pw";; esac
-          ops pkg load "$pkg" -p $port $envflag > /tmp/console.log 2>&1 &
+          # port 80 needs root for the qemu host forward
+          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops pkg load "$pkg" -p $port $envflag > /tmp/console.log 2>&1 &
           opspid=$!
           result=no-answer
           for i in $(seq 1 24); do
             sleep 5
-            if ! kill -0 $opspid 2>/dev/null; then echo "ops exited early"; break; fi
+            if ! sudo kill -0 $opspid 2>/dev/null; then echo "ops exited early"; break; fi
             if [ "$kind" = none ]; then
               if grep -qi "PHP\|listening\|started" /tmp/console.log; then result=port-open; fi
               [ "$i" -ge 12 ] && break
@@ -107,7 +108,7 @@ jobs:
           echo "::group::console, last 200 lines"
           tail -200 /tmp/console.log | cut -c1-400
           echo "::endgroup::"
-          kill $opspid 2>/dev/null || true
+          sudo kill $opspid 2>/dev/null || true
           sudo pkill -f qemu-system 2>/dev/null || true
           echo "RESULT ${{ matrix.name }}-${{ matrix.run }}: $result"
       - name: artifacts
