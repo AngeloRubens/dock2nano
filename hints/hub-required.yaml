@@ -7,35 +7,24 @@
 # The row for postgres is active. It is proven by run 44887394014 of the
 # branch check/hub-try on the fork: the hub packages eyberg/postgresql 11.3.0
 # and francescolavra/postgres 16.2 both answered pg_isready with "accepting
-# connections, 2 of 2 for each of the two packages, alone, with no app.
+# connections", 4 of 4, alone, with no app.
 rows:
   - images: [postgres, postgresql]
     programs: [postgres]
     packages:
       - francescolavra/postgres
       - eyberg/postgresql
-    reason: postgres starts a process per connection (the observation of the image saw child processes) and nanos runs one process; the hub builds run it with threads
+    reason: postgres starts a process per connection and needs SysV shared memory (shmget), which nanos does not have; the hub builds run it with threads
     entrypoint_note: >-
-      POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_PASSWORD_FILE,
-      POSTGRES_INITDB_ARGS and the files of /docker-entrypoint-initdb.d are
-      inputs of that entrypoint and are ignored, so they create no database, user or password and run no
-      script; measured with francescolavra/postgres 16.2 (run 44908630495):
-      passing POSTGRES_DB did not create the database, the database "example"
-      did not exist after the start, the backend of spring-postgres gave no
-      answer and its console said database "example" does not exist. After
-      CREATE DATABASE sent over the network to the started package (psql -h
-      <address of the db> -U postgres -d postgres -c 'CREATE DATABASE
-      {POSTGRES_DB}') the same backend answered 200. The connection needs -U
-      postgres, and -d with an existing database such as postgres or template1
-      (there is no database eyberg, which psql uses by default); the superuser
-      of eyberg/postgresql 11.3.0 is eyberg and the role postgres does not
-      exist there (run 44909583390); the list of databases seen is in run
-      44910340290. If {POSTGRES_USER|postgres} is not postgres, the role has to be
-      created too (CREATE ROLE {POSTGRES_USER|postgres} LOGIN). That step is not done by
-      this tool: it has to be done at every start, because the database is not
-      kept across a restart (run 44910340290, boot 2: ops exited early, no
-      response). It also has to be done before the application connects: in run
-      44908630495 the backend connected about 43 s after CREATE DATABASE
-      (CREATE DATABASE at 13:29:34.95, HikariPool-1 starting at 13:30:17.893),
-      and ops compose up starts all instances together, so an application that
-      connects sooner fails unless it retries
+      POSTGRES_DB, POSTGRES_USER and POSTGRES_PASSWORD are read by that
+      entrypoint, so they create no database, user or password; measured with
+      francescolavra/postgres 16.2 (run 44908630495): passing POSTGRES_DB did not create the
+      database, the database "example" did not exist after the start, the
+      backend of spring-postgres gave no answer and its console said database
+      "example" does not exist. After CREATE DATABASE sent over the network to
+      the started package (psql -h <address of the db> -U postgres -c
+      'CREATE DATABASE example'; the superuser of eyberg/postgresql 11.3.0 is
+      eyberg and the connection needs -d template1, seen in a run alone, not
+      with an application) the same backend answered 200. That step is not
+      done by this tool: do it yourself after the start, before the
+      application connects

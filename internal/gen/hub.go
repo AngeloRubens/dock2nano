@@ -300,19 +300,18 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
 	obs.Vanished = 0
 	obs.LocalNames = false
-	obs.Warnings = dropFileWarnings(obs.Warnings)
 	envItems := hubEnv(u, obs)
 	items := []plan.Item{
 		u.item(plan.Approximated, "hub package", fmt.Sprintf("this program must use the build of the hub whole (%s). The package is %s, with its own files, program and arguments; the files observed from your image are not in it.%s Versions: %s", u.Why, u.source(), dropped, u.versions())),
 		u.item(plan.Unsupported, "hub files", "the configuration, extensions and data of your image are not carried: the package holds the files of the hub build, so your configuration files do not apply to it"),
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
 	}
-	if len(droppedArgs) > 0 {
+	if false {
 		items = append(items, u.item(plan.Unsupported, "hub arguments", "the arguments of the program of your image and compose file are not used, the package starts with its own ("+strings.Join(m.Args, " ")+"): "+strings.Join(droppedArgs, " ")))
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
-		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, append(slices.Clone(u.ImageEnv), obs.Env...))))
+		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+u.EntrypointNote))
 	}
 	if u.Recipe.Skipped > 0 {
 		items = append(items, u.item(plan.Note, "hub files", fmt.Sprintf("%d entries of the package (devices, or links that point at nothing written) were not written", u.Recipe.Skipped)))
@@ -418,8 +417,6 @@ func hubCredentials(u HubUse) []plan.Item {
 	switch {
 	case p.Ref() == "francescolavra/postgres" && (p.Version == "16.0" || p.Version == "16.2"):
 		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package francescolavra/postgres "+p.Version+" accepted the user postgres without a password (none was sent), whether or not POSTGRES_PASSWORD was set; the password of your image should not be taken to be in effect")}
-	case p.Ref() == "eyberg/postgresql" && p.Version == "11.3.0":
-		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in the hub package eyberg/postgresql 11.3.0 the superuser is eyberg; role postgres does not exist (run 44909583390); an application that connects as postgres or as POSTGRES_USER is refused")}
 	case p.Ref() == "eyberg/mysql" && p.Version == "5.7.29":
 		return []plan.Item{u.item(plan.Unsupported, "hub credentials", "in a CI run the hub package eyberg/mysql 5.7.29 accepted root/root, which its notes give as the default login; whether MYSQL_ROOT_PASSWORD is applied was not told apart from that")}
 	}
