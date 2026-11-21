@@ -94,7 +94,7 @@ jobs:
               result=port-open
               if [ "$kind" = http ]; then
                 code=$(curl -s -m 5 -o /tmp/body.txt -w '%{http_code}' "http://127.0.0.1:$port/" || true)
-                echo "http code: $code"; head -c 300 /tmp/body.txt 2>/dev/null; echo
+                echo "http code: $code"; { head -c 300 /tmp/body.txt 2>/dev/null; echo; } || true
                 case "$code" in 2*|3*|4*|5*) result=answered; break;; esac
               else
                 command -v pg_isready >/dev/null && pg_isready -h 127.0.0.1 -p $port || true
