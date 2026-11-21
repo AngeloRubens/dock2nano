@@ -67,6 +67,7 @@ func ParseRequired(data []byte) ([]Required, error) {
 			ns, name, ok := strings.Cut(p, "/")
 			if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
 				return nil, fmt.Errorf("row %d of the table of required builds: the package %q is not namespace/name", i+1, p)
+			}
 		}
 		for p := range r.Superusers {
 			if !contains(r.Packages, p) {
