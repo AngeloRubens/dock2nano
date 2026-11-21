@@ -17,12 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: pg16-e1, pkg: "francescolavra/postgres:16.2", exp: e1}
-          - {name: pg16-e2, pkg: "francescolavra/postgres:16.2", exp: e2}
-          - {name: pg16-e3env, pkg: "francescolavra/postgres:16.2", exp: e3env}
-          - {name: pg11-e1, pkg: "eyberg/postgresql:11.3.0", exp: e1}
-          - {name: pg11-e2, pkg: "eyberg/postgresql:11.3.0", exp: e2}
-          - {name: pg11-e3env, pkg: "eyberg/postgresql:11.3.0", exp: e3env}
+          - {name: pg11-users, pkg: "eyberg/postgresql:11.3.0", exp: users}
+          - {name: pg16-e3img, pkg: "francescolavra/postgres:16.2", exp: e3img}
+          - {name: pg11-e3img, pkg: "eyberg/postgresql:11.3.0", exp: e3img}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,38 +51,48 @@ jobs:
           d=$(find "$OPS_HOME/.ops/packages" -name package.manifest | head -1); d=$(dirname "$d")
           echo "package dir: $d"
           echo "--- manifest"; cat "$d/package.manifest"
-          echo "--- files"; (cd "$d" && find . -type f | grep -v '/lib/\|\.so' | head -150)
-          echo "--- config files"
-          for f in $(cd "$d" && find . -type f \( -name '*.conf' -o -name '*.sql' -o -name '*.sh' -o -name '*.json' \) | head -20); do
-            echo "== $f"; head -c 1500 "$d/$f"; echo
-          done
-          echo "--- ops pkg load --help"; ops pkg load --help 2>&1 | head -60
+          echo "--- files (not share/lib)"; (cd "$d" && find . -type f | grep -v 'share/\|/lib/\|\.so' | head -60)
+          echo "--- config.json"; cat "$d/config.json" 2>&1 | head -20
       - name: run and probe
         run: |
           pkg="${{ matrix.pkg }}"
-          envflag=""
-          [ "${{ matrix.exp }}" = e3env ] && envflag="-e POSTGRES_DB=example -e POSTGRES_USER=example -e POSTGRES_PASSWORD=pw"
-          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops pkg load "$pkg" -p 5432 $envflag > /tmp/console.log 2>&1 &
-          opspid=$!
-          for i in $(seq 1 24); do
-            sleep 5
-            sudo kill -0 $opspid 2>/dev/null || { echo "ops exited early"; break; }
-            pg_isready -h 127.0.0.1 -p 5432 2>&1 | grep -q accepting && break
-          done
-          pg_isready -h 127.0.0.1 -p 5432
-          echo "=== databases"
-          psql -h 127.0.0.1 -U postgres -w -l 2>&1 | head -15
-          if [ "${{ matrix.exp }}" = e2 ]; then
-            echo "=== create"; psql -h 127.0.0.1 -U postgres -w -c 'CREATE DATABASE example' 2>&1
-            echo "=== select"; psql -h 127.0.0.1 -U postgres -w -d example -c 'select 1' 2>&1
+          start() { # $1 = extra flags
+            sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops pkg load "$pkg" -p 5432 $1 > $2 2>&1 &
+            opspid=$!
+            for i in $(seq 1 24); do
+              sleep 5
+              sudo kill -0 $opspid 2>/dev/null || { echo "ops exited early"; break; }
+              pg_isready -h 127.0.0.1 -p 5432 2>&1 | grep -q accepting && break
+            done
+            pg_isready -h 127.0.0.1 -p 5432
+          }
+          stop() { sudo kill $opspid 2>/dev/null || true; sudo pkill -f qemu-system 2>/dev/null || true; sleep 5; }
+          if [ "${{ matrix.exp }}" = users ]; then
+            start "" /tmp/console.log
+            for u in postgres root eyberg ubuntu ops user admin nobody runner; do
+              echo "=== user $u"; psql -h 127.0.0.1 -U $u -w -d template1 -Atc 'select current_user' 2>&1 | head -2
+            done
+            echo "::group::console"; tail -40 /tmp/console.log | cut -c1-300; echo "::endgroup::"
+            stop
           fi
-          if [ "${{ matrix.exp }}" = e3env ]; then
-            echo "=== connect to example"; psql -h 127.0.0.1 -U postgres -w -d example -c 'select 1' 2>&1
-            echo "=== as user example"; PGPASSWORD=pw psql -h 127.0.0.1 -U example -d example -c 'select 1' 2>&1
+          if [ "${{ matrix.exp }}" = e3img ]; then
+            u=postgres
+            echo "=== boot 1: build the image as pkgimg, create the database"
+            start "-i pkgimg" /tmp/console.log
+            psql -h 127.0.0.1 -U $u -w -c 'CREATE DATABASE example' 2>&1
+            psql -h 127.0.0.1 -U $u -w -d example -c 'create table t(a int); insert into t values (42)' 2>&1
+            psql -h 127.0.0.1 -U $u -w -c 'CHECKPOINT' 2>&1
+            psql -h 127.0.0.1 -U $u -w -l 2>&1 | cut -c1-40 | head -8
+            stop
+            echo "=== images"; ls -la "$OPS_HOME"/.ops/images/ 2>&1 | head
+            echo "=== boot 2: same image, no build (-s)"
+            start "-i pkgimg -s" /tmp/console2.log
+            psql -h 127.0.0.1 -U $u -w -l 2>&1 | cut -c1-40 | head -8
+            psql -h 127.0.0.1 -U $u -w -d example -c 'select a from t' 2>&1
+            echo "::group::console 2"; tail -40 /tmp/console2.log | cut -c1-300; echo "::endgroup::"
+            stop
+            cp /tmp/console2.log /tmp/console.log.2 2>/dev/null || true
           fi
-          echo "::group::console, last 80 lines"; tail -80 /tmp/console.log | cut -c1-300; echo "::endgroup::"
-          sudo kill $opspid 2>/dev/null || true
-          sudo pkill -f qemu-system 2>/dev/null || true
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,7 +100,7 @@ jobs:
           name: pg-db-${{ matrix.name }}
           path: /tmp/console.log
   compose:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[pg-db]')
+    if: contains(github.event.head_commit.message, '[pg-db-compose]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
