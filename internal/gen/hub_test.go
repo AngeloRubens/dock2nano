@@ -415,7 +415,7 @@ func TestApplyHubRecipeSaysWhatItDoesNotApply(t *testing.T) {
 func TestHubNotAppliedGivesTheReasonPerKey(t *testing.T) {
 	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
 	u.Recipe.Manifest.ManifestPassthrough = map[string]any{"cwd": "/x", "uid": "5", "exec_wait_for_ip4_secs": "5", "klib": "y"}
-	p := hubFind(hubNotApplied(u), "hub manifest")
+	p := hubFind(hubNotApplied(u, false), "hub manifest")
 	if len(p) != 1 {
 		t.Fatalf("items: %+v", p)
 	}
