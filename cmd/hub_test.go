@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AngeloRubens/dock2nano/internal/docker"
+	"github.com/AngeloRubens/dock2nano/internal/gen"
 	"github.com/AngeloRubens/dock2nano/internal/hub"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/output"
@@ -504,5 +505,102 @@ func TestTheShippedTableOfRequiredBuildsIsRead(t *testing.T) {
 	}
 	if rows, err := hub.DefaultRequired(); err != nil || !reflect.DeepEqual(a.HubRequired, rows) {
 		t.Errorf("%v %v", rows, err)
+	}
+}
+
+func TestRequiredBuildReportsTheEntrypointNoteOfTheRow(t *testing.T) {
+	for _, tc := range []struct {
+		note string
+		want bool
+	}{{"    entrypoint_note: the env of the entrypoint does nothing\n", true}, {"", false}} {
+		h := newHubHarness(t, "nginx:1.28.0", nginxObserved(0))
+		rows, err := hub.ParseRequired([]byte(hubTestRows + tc.note))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.app.HubRequired = rows
+		h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+		h.mustRun(0, "convert")
+		out := h.stdout.String()
+		got := strings.Contains(out, "the entrypoint of your image does not run with the package of the hub: the env of the entrypoint does nothing")
+		if got != tc.want || (!tc.want && strings.Contains(out, "does not run with the package of the hub")) {
+			t.Errorf("note %q: reported %v, want %v:\n%s", tc.note, got, tc.want, out)
+		}
+	}
+}
+
+func TestRequiredBuildMatchesABuiltImageByTheNameOfTheProgram(t *testing.T) {
+	pgObserved := func(sysroot string) *observe.Result {
+		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres", "-c", "x=y"}, Env: []string{"POSTGRES_DB=shop"}, UID: -1, GID: -1}
+	}
+	h := newHubHarness(t, "postgres:16", pgObserved)
+	h.write("compose.yaml", "services:\n  db:\n    build: ./db\n")
+	h.write("db/Dockerfile", "FROM postgres:16\n")
+	rows, err := hub.DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
+	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
+	h.stub.args = []string{"./postgres", "-D", "db"}
+	h.mustRun(0, "convert")
+	if !reflect.DeepEqual(h.stub.calls, []string{"manifest", "whole francescolavra/postgres 16.2"}) {
+		t.Errorf("calls: %v", h.stub.calls)
+	}
+	out := h.stdout.String()
+	for _, want := range []string{"hub files", "hub entrypoint", `CREATE DATABASE "shop"`, "-U postgres -d template1", "hub arguments"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRequiredBuildRemovesTheObservedFilesAgainWhenTheFirstTryFailed(t *testing.T) {
+	pgObserved := func(sysroot string) *observe.Result {
+		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres"}, UID: -1, GID: -1}
+	}
+	h := newHubHarness(t, "postgres:16", pgObserved)
+	rows, err := hub.DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
+	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
+	h.stub.args = []string{"./postgres", "-D", "db"}
+	calls := map[string]int{}
+	h.app.RemoveAll = func(p string) error {
+		calls[p]++
+		if calls[p] == 1 && len(h.made) > 0 && p == h.made[0] {
+			return errors.New("device busy")
+		}
+		return os.RemoveAll(p)
+	}
+	h.mustRun(0, "convert")
+	if len(h.made) != 1 {
+		t.Fatalf("observations: %v", h.made)
+	}
+	if calls[h.made[0]] != 2 {
+		t.Errorf("the directory of the observation was removed %d times, want 2 (the first failed): %v", calls[h.made[0]], calls)
+	}
+	if !strings.Contains(h.stderr.String(), "could not be removed (device busy)") {
+		t.Errorf("stderr:\n%s", h.stderr)
+	}
+}
+
+func TestRetryBindNotesAreDroppedForAPackageUsedWhole(t *testing.T) {
+	binds := []string{
+		observe.NoteBind + "/data is shared with web: the second observation started from what the first one left there",
+		"something else",
+	}
+	if got := retryBindNotes(gen.ServiceInput{HubWhole: true}, binds); !reflect.DeepEqual(got, []string{"something else"}) {
+		t.Errorf("whole: %q", got)
+	}
+	if got := retryBindNotes(gen.ServiceInput{}, binds); !reflect.DeepEqual(got, binds) {
+		t.Errorf("not whole: %q", got)
+	}
+	if len(binds) != 2 {
+		t.Errorf("the input was changed: %q", binds)
 	}
 }

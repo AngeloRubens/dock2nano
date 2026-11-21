@@ -30,6 +30,23 @@ type Required struct {
 
 	// Reason says why the build of the hub is needed.
 	Reason string `yaml:"reason"`
+
+	// EntrypointNote says what the entrypoint of the image does that the
+	// package of the hub does not do. Empty means that nothing is said.
+	EntrypointNote string `yaml:"entrypoint_note,omitempty"`
+
+	// Superusers is the superuser role of each package, by namespace/name; the
+	// note names it as {HUB_SUPERUSER}. A note that names it needs an entry for
+	// every package of the row.
+	Superusers map[string]string `yaml:"superusers,omitempty"`
+
+	// PackageFacts says, by namespace/name, what was seen of that package that
+	// the note needs; the note names it as {HUB_FACTS}.
+	PackageFacts map[string]string `yaml:"package_facts,omitempty"`
+
+	// RestartNote is added to the report of the restart policy of a service
+	// that uses a package of this row. Empty means nothing is added.
+	RestartNote string `yaml:"restart_note,omitempty"`
 }
 
 // ParseRequired reads the text of a table of required builds.
@@ -55,6 +72,32 @@ func ParseRequired(data []byte) ([]Required, error) {
 			ns, name, ok := strings.Cut(p, "/")
 			if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
 				return nil, fmt.Errorf("row %d of the table of required builds: the package %q is not namespace/name", i+1, p)
+			}
+		}
+		for field, m := range map[string]map[string]string{"superusers": r.Superusers, "package_facts": r.PackageFacts} {
+			for p := range m {
+				if !contains(r.Packages, p) {
+					return nil, fmt.Errorf("row %d of the table of required builds: %s names %q, which is not one of its packages", i+1, field, p)
+				}
+			}
+		}
+		if r.EntrypointNote != "" {
+			if err := ValidateNote(r.EntrypointNote); err != nil {
+				return nil, fmt.Errorf("row %d of the table of required builds: entrypoint_note: %w", i+1, err)
+			}
+			for name, field := range NoteFixed {
+				if !NoteUses(r.EntrypointNote, name) {
+					continue
+				}
+				have := r.Superusers
+				if field == "package_facts" {
+					have = r.PackageFacts
+				}
+				for _, p := range r.Packages {
+					if have[p] == "" {
+						return nil, fmt.Errorf("row %d of the table of required builds: the note uses {%s}, so %s needs an entry for %q", i+1, name, field, p)
+					}
+				}
 			}
 		}
 	}

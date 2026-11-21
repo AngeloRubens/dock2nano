@@ -57,6 +57,17 @@ type ServiceInput struct {
 	// service (see ApplyHubRecipe); they are added to the report as they are.
 	HubItems []plan.Item
 
+	// HubWhole is set when the package of the hub was used whole: the files of
+	// the observed image are not in the package, so binds and secrets that were
+	// carried through its sysroot are not carried, and the program and its
+	// arguments are those of the package.
+	HubWhole bool
+
+	// HubRestartNote is what the row of the required builds says about a restart
+	// of the package; it is added to the restart item of a service with a
+	// restart policy. Empty when the row says nothing.
+	HubRestartNote string
+
 	// MinVolume is the least size of the writable volume the hub recipe for the
 	// program asks for ("200m"); empty when there is none.
 	MinVolume string
@@ -363,13 +374,17 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	if n := len(m.Args) - 1; n > 0 {
 		msg += fmt.Sprintf(" and %d arguments, which are in package.manifest", n)
 	}
-	g.add(s.Name, plan.Observed, "program", msg+" (observed from the image; the choice of the program is an estimate)")
+	if si.HubWhole {
+		g.add(s.Name, plan.Observed, "program", msg+" (those of the package of the hub, used whole; they were not observed from your image)")
+	} else {
+		g.add(s.Name, plan.Observed, "program", msg+" (observed from the image; the choice of the program is an estimate)")
+	}
 
 	g.replicas(s)
 	m.Env = g.env(s, si)
 	g.ports(s, si, &m, pkg)
 	g.volumes(s, si, &m)
-	g.restart(s, &m)
+	g.restart(s, si, &m)
 	g.dependencies(s, skipped)
 	g.healthcheck(s, si)
 	g.networks(s)
@@ -464,6 +479,8 @@ func (g *generator) volumes(s *compose.Service, si ServiceInput, m *plan.Manifes
 		switch {
 		case strings.Contains(v.Source, "$") || v.Type == "unresolved":
 			g.add(s.Name, plan.Unsupported, key, "the source holds a variable, so it is not known whether it is a bind mount or a named volume; it is not converted")
+		case v.Type == "bind" && si.HubWhole:
+			g.add(s.Name, plan.Unsupported, key, "not carried: the package of the hub is used whole; "+v.Target+" is not in it")
 		case v.Type == "bind":
 			g.bind(s.Name, key, v)
 		case v.Type == "volume" && v.Source == "":
@@ -511,12 +528,16 @@ func (g *generator) bind(service, key string, v compose.Volume) {
 	g.add(service, plan.Approximated, key, msg)
 }
 
-func (g *generator) restart(s *compose.Service, m *plan.Manifest) {
+func (g *generator) restart(s *compose.Service, si ServiceInput, m *plan.Manifest) {
 	switch r := s.Restart; {
 	case r == "" || r == "no":
 	case r == "always" || r == "unless-stopped" || strings.HasPrefix(r, "on-failure"):
 		m.RebootOnExit = true
-		g.add(s.Name, plan.Approximated, "restart", "restart "+r+" becomes RebootOnExit: the instance restarts whenever the program exits, whatever the exit code")
+		msg := "restart " + r + " becomes RebootOnExit: the instance restarts whenever the program exits, whatever the exit code"
+		if si.HubWhole && si.HubRestartNote != "" {
+			msg += ". " + si.HubRestartNote
+		}
+		g.add(s.Name, plan.Approximated, "restart", msg)
 	default:
 		g.add(s.Name, plan.Unsupported, "restart", "the restart policy "+r+" is not known; it is not converted")
 	}
@@ -667,6 +688,10 @@ func numericUser(user string) (uid, gid int, ok bool) {
 }
 
 func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.Result, m *plan.Manifest) {
+	if si.HubWhole {
+		g.identityWhole(s, si, m)
+		return
+	}
 	composeNonRoot := nonRootUser(s.User)
 	// The file may say root while the entrypoint drops to another user, so the observed user wins
 	// when it is known. nanos reads uid and gid from the root of the manifest (nanovms/nanos#2189,
@@ -727,6 +752,33 @@ func (g *generator) identity(s *compose.Service, si ServiceInput, obs *observe.R
 	default:
 		g.add(s.Name, plan.Approximated, "working_dir", "cwd "+cwd+" is set in the package manifest (the working directory of the image, as observed)")
 	}
+}
+
+// identityWhole says who the package of the hub runs as, and where. It is
+// root, in /, whatever the file or the image say: nothing about the user or the
+// directory was observed from the program of the package.
+func (g *generator) identityWhole(s *compose.Service, si ServiceInput, m *plan.Manifest) {
+	m.ManifestPassthrough = map[string]any{"cwd": "/"}
+	var dropped []string
+	if nonRootUser(s.User) {
+		dropped = append(dropped, "user "+s.User+" of the compose file")
+	}
+	if si.Image != nil {
+		if nonRootUser(si.Image.User) {
+			dropped = append(dropped, "the user "+si.Image.User+" of the image")
+		}
+		if wd := si.Image.WorkingDir; wd != "" && path.Clean(wd) != "/" {
+			dropped = append(dropped, "the working directory "+wd+" of the image")
+		}
+	}
+	if wd := s.WorkingDir; wd != "" && path.Clean(wd) != "/" {
+		dropped = append(dropped, "working_dir "+wd+" of the compose file")
+	}
+	if len(dropped) == 0 {
+		g.add(s.Name, plan.Note, "user", "the package of the hub runs as root in /; neither the compose file nor the image names another user or directory")
+		return
+	}
+	g.add(s.Name, plan.Unsupported, "user", "the package of the hub runs as root in /, as its recipe says; not applied: "+strings.Join(dropped, "; "))
 }
 
 // unknown reports what the parsers recorded as not modelled.

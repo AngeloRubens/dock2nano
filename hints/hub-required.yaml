@@ -4,15 +4,99 @@
 # that was observed, and a package of the hub is taken only if its namespace
 # and name are listed.
 #
-# No row is active yet. A row becomes active only after a CI run shows that
-# the package of the hub starts and answers on nanos. This is the row that
-# is waiting for that proof (postgres forks one process per connection,
-# nanos has no fork, and the hub builds use threads):
+# The row for postgres is active. It is proven by run 44887394014 of the
+# branch check/hub-try on the fork: the hub packages eyberg/postgresql 11.3.0
+# and francescolavra/postgres 16.2 both answered pg_isready with "accepting
+# connections", 2 of 2 for each of the two packages, alone, with no app.
 #
-#  - images: [postgres, postgresql]
-#    programs: [postgres]
-#    packages:
-#      - francescolavra/postgres
-#      - eyberg/postgresql
-#    reason: postgres starts a process per connection; the hub builds run it with threads
-rows: []
+# The text of entrypoint_note can hold {NAME}, {NAME|default}, {A,B} (the first
+# of A and B that is set), {NAME:ident} (a quoted identifier), {HUB_SUPERUSER}
+# (from superusers) and {HUB_FACTS} (from package_facts); both must have an
+# entry for every package of the row. [[if TEST]]...[[end]] and
+# [[unless TEST]]...[[end]] do not nest; TEST is terms joined by " and ", each
+# NAMES, NAMES!="text" or NAMES!=OTHER, with "not " before it. HUB_ENV_UNCERTAIN
+# (the environment of the service could not be read completely) and HUB_CONTROL
+# (a name holds control characters) are set by the tool. A variable whose name
+# says PASS, PWD, SECRET, TOKEN or KEY is never written. The text is checked
+# when the table is read.
+rows:
+  - images: [postgres, postgresql]
+    programs: [postgres]
+    packages:
+      - francescolavra/postgres
+      - eyberg/postgresql
+    superusers:
+      francescolavra/postgres: postgres
+      eyberg/postgresql: eyberg
+    package_facts:
+      francescolavra/postgres: >-
+        In francescolavra/postgres 16.2 a database named postgres exists, so
+        psql -U postgres without -d connects (run 44908630495 ran psql -U
+        postgres without -d; CREATE DATABASE worked).
+      eyberg/postgresql: >-
+        In eyberg/postgresql 11.3.0 there is no database named eyberg, which
+        psql uses by default for the user eyberg, so -d is needed (list of
+        databases, run 44910340290).
+    reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
+    restart_note: >-
+      A restart of the same disk was seen failing: after an unclean stop (the
+      first boot ended by SIGTERM to qemu) the second boot did not start
+      postgres (FATAL, pre-existing shared memory block is still in use; run
+      44910340290). A restart after a crash of the program is not measured
+    entrypoint_note: >-
+      POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_PASSWORD_FILE,
+      POSTGRES_INITDB_ARGS and the files of /docker-entrypoint-initdb.d are
+      ignored: no database, user, password or script. Run 44908630495
+      (francescolavra/postgres 16.2): the database "example" did not exist
+      after the start, the backend of spring-postgres gave no answer (console:
+      database "example" does not exist); after a CREATE DATABASE over the
+      network it answered 200. Connect as the superuser, here {HUB_SUPERUSER},
+      with -d to an existing database (postgres and template1 exist in both
+      packages, run 44910340290).
+      [[if HUB_CONTROL]]The name of the database or of the role holds a
+      control character (a line break, a tab or another one): no command is
+      printed for it, quote the name by hand.[[end]]
+      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]The role
+      {POSTGRES_USER:ident} is not created either. In the image POSTGRES_USER
+      is the superuser; to make it so, run by hand: psql -h <address of the
+      db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE ROLE
+      {POSTGRES_USER:ident} LOGIN SUPERUSER'. This command and the CREATE
+      DATABASE with OWNER below were NOT run in any CI run (no cited run
+      executes CREATE ROLE): do not take them to work.[[end]]
+      [[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]To create
+      the database, owned by that role as in the image, run by hand after the
+      role: psql -h <address of the db> -U {HUB_SUPERUSER} -d template1 -c
+      'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident} OWNER
+      {POSTGRES_USER:ident}'.[[end]]
+      [[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]To create
+      the database, run it by hand: psql -h <address of the db> -U
+      {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
+      {POSTGRES_DB,POSTGRES_USER:ident}'.[[end]]
+      [[if not HUB_ENV_UNCERTAIN and not POSTGRES_DB,POSTGRES_USER!="postgres"]]No database has to be
+      created: with neither POSTGRES_DB nor POSTGRES_USER set (or set to
+      postgres) the entrypoint would use the database postgres, which exists
+      in the package.[[end]]
+      [[if HUB_ENV_UNCERTAIN]]The environment of this service could not be
+      read completely (see the other items of the service), so the names of
+      POSTGRES_DB and POSTGRES_USER may differ from the ones shown.[[end]]
+      [[if HUB_ENV_UNCERTAIN and not POSTGRES_DB,POSTGRES_USER and not HUB_CONTROL]]POSTGRES_DB and
+      POSTGRES_USER are not known here. If POSTGRES_DB is set (else
+      POSTGRES_USER), create the database it names: psql -h <address of the
+      db> -U {HUB_SUPERUSER} -d template1 -c 'CREATE DATABASE
+      {POSTGRES_DB,POSTGRES_USER:ident}'; with neither set the entrypoint
+      would use the database postgres, which exists in the package.[[end]]
+      This tool does not do these steps.
+      {HUB_FACTS} The superuser of eyberg/postgresql 11.3.0 is eyberg, the role
+      postgres does not exist there (run 44909583390).
+      The database has to exist before the application connects: in run
+      44908630495 the backend connected about 43 s after CREATE DATABASE
+      (13:29:34.95; HikariPool-1 starting at 13:30:17.893) and ops compose up
+      starts all instances together, so a sooner connection fails unless the
+      application retries.
+      A second boot of the same disk after an unclean stop did not start
+      postgres: FATAL, pre-existing shared memory block (key 5432001 for
+      eyberg/postgresql 11.3.0, key 896 for francescolavra/postgres 16.2) is
+      still in use (run 44910340290, boot 2); it comes from the postmaster.pid
+      left by the first boot, the file itself was not seen. Data kept across a
+      restart was not measured, nor the database after ops compose builds the
+      image again at each up.

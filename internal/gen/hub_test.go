@@ -415,7 +415,7 @@ func TestApplyHubRecipeSaysWhatItDoesNotApply(t *testing.T) {
 func TestHubNotAppliedGivesTheReasonPerKey(t *testing.T) {
 	u := hubUse(hub.Exact, "1.28.3", "1.28.3")
 	u.Recipe.Manifest.ManifestPassthrough = map[string]any{"cwd": "/x", "uid": "5", "exec_wait_for_ip4_secs": "5", "klib": "y"}
-	p := hubFind(hubNotApplied(u), "hub manifest")
+	p := hubFind(hubNotApplied(u, false), "hub manifest")
 	if len(p) != 1 {
 		t.Fatalf("items: %+v", p)
 	}
@@ -475,7 +475,7 @@ func TestApplyHubWholeTakesTheProgramAndTheArgumentsOfTheHub(t *testing.T) {
 		t.Errorf("warnings: %v", obs.Warnings)
 	}
 	text := hubText(items)
-	for _, want := range []string{"francescolavra/postgres 16.2", "sha256 " + hubSum, "published by francescolavra", "the files observed from your image are not in it", "The 3 child processes", "configuration, extensions and data of your image are not carried", "not run on nanos", "same major series"} {
+	for _, want := range []string{"francescolavra/postgres 16.2", "sha256 " + hubSum, "published by francescolavra", "the files observed from your image are not in it", "The 3 child processes", "configuration, extensions and data of your image are not carried", "not run by this conversion", "same major series"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the report does not say %q:\n%s", want, text)
 		}
@@ -518,5 +518,136 @@ func TestApplyHubWholeSaysWhatWasNotWritten(t *testing.T) {
 	}
 	if f := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), hubWholeObs()), "hub files"); len(f) != 1 {
 		t.Errorf("nothing was left out: %+v", f)
+	}
+}
+
+func TestApplyHubWholeSaysTheEntrypointDoesNotRun(t *testing.T) {
+	u := hubWholeUse(hub.Exact, "16.2", "16.2")
+	u.EntrypointNote = "POSTGRES_DB does not create the database"
+	e := hubFind(ApplyHubWhole(u, hubWholeObs()), "hub entrypoint")
+	if len(e) != 1 || e[0].Kind != plan.Unsupported || e[0].Service != "db" ||
+		!strings.HasPrefix(e[0].Message, "the entrypoint of your image does not run with the package of the hub: ") ||
+		!strings.HasSuffix(e[0].Message, "POSTGRES_DB does not create the database") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestApplyHubWholeSaysNothingAboutTheEntrypointWhenTheRowHasNoNote(t *testing.T) {
+	if e := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), hubWholeObs()), "hub entrypoint"); len(e) != 0 {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestHubWholeSaysBindsAndSecretsAreNotCarried(t *testing.T) {
+	f := &fake{files: map[string]string{"/work/app/init.sql": "x", "/work/app/secret.txt": "y"}}
+	s := &compose.Service{Name: "db", Volumes: []compose.Volume{
+		{Type: "bind", Source: "./init.sql", Target: "/docker-entrypoint-initdb.d/init.sql"},
+		{Type: "bind", Source: "./secret.txt", Target: "/run/secrets/db-password", ReadOnly: true, Secret: true},
+	}}
+	in := newInput(f, s)
+	si := in.Services["db"]
+	si.HubWhole = true
+	in.Services["db"] = si
+	p := mustGen(t, in)
+	for i, target := range []string{"/docker-entrypoint-initdb.d/init.sql", "/run/secrets/db-password"} {
+		key := "volumes[" + string(rune('0'+i)) + "]"
+		want1(t, p, "db", plan.Unsupported, key, "not carried: the package of the hub is used whole; "+target+" is not in it")
+		if got := itemsOf(p, "db", plan.Approximated, key); len(got) != 0 {
+			t.Errorf("%s is still approximated: %+v", key, got)
+		}
+	}
+	for _, it := range p.Report {
+		if strings.Contains(it.Message, "is in the package") || strings.Contains(it.Message, "only the files the program opened") {
+			t.Errorf("the report says a file is carried: %+v", it)
+		}
+	}
+}
+
+func TestHubWholeSaysTheProgramIsTheOneOfThePackage(t *testing.T) {
+	in := newInput(&fake{}, &compose.Service{Name: "db"})
+	si := in.Services["db"]
+	si.HubWhole = true
+	in.Services["db"] = si
+	p := mustGen(t, in)
+	want1(t, p, "db", plan.Observed, "program", "not observed from your image")
+	if got := itemsOf(p, "db", plan.Observed, "program"); strings.Contains(got[0].Message, "observed from the image") {
+		t.Errorf("%+v", got)
+	}
+}
+
+func TestApplyHubWholeDropsTheNotesAboutTheFilesOfTheImage(t *testing.T) {
+	obs := hubWholeObs()
+	obs.Warnings = []string{
+		"the entrypoint made 3 files before the program started (the state): /a",
+		"the program created these files while it ran; they are carried: /b",
+		"not carried /c: too big",
+		"and 4 more paths were not carried",
+		"the bind /x: the special file /s (socket, fifo or device) is not copied",
+		"the container stopped with status 1 before the end of the observation; the program chosen is the last one",
+		"the service redis stopped while db was observed, so it is not counted as running",
+	}
+	ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
+	want := []string{
+		"the container stopped with status 1 before the end of the observation; the program chosen is the last one",
+		"the service redis stopped while db was observed, so it is not counted as running",
+	}
+	if !reflect.DeepEqual(obs.Warnings, want) {
+		t.Errorf("warnings: %q", obs.Warnings)
+	}
+	if !IsFileWarning("web was observed while this service was running; what web wrote into it (tables) is not in this package") {
+		t.Error("the note about the services observed beside it is not dropped")
+	}
+}
+
+func TestApplyHubWholeNamesTheArgumentsItDrops(t *testing.T) {
+	obs := hubWholeObs()
+	items := ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
+	a := hubFind(items, "hub arguments")
+	if len(a) != 1 || a[0].Kind != plan.Unsupported || !strings.Contains(a[0].Message, "2 arguments were dropped") || !strings.Contains(a[0].Message, "./postgres -D db") {
+		t.Errorf("%+v", a)
+	}
+	obs = hubWholeObs()
+	obs.Argv = []string{"postgres"}
+	if a := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs), "hub arguments"); len(a) != 0 {
+		t.Errorf("nothing was dropped: %+v", a)
+	}
+}
+
+func TestApplyHubWholeDoesNotPrintTheArgumentsItDrops(t *testing.T) {
+	obs := hubWholeObs()
+	obs.Argv = []string{"postgres", "--password=hunter2", "-c", "ssl_key_password=hunter2"}
+	items := ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
+	for _, it := range items {
+		if strings.Contains(it.Message, "hunter2") || strings.Contains(it.Key, "hunter2") {
+			t.Errorf("the report prints a secret from the command line: %s: %q", it.Key, it.Message)
+		}
+	}
+	if a := hubFind(items, "hub arguments"); len(a) != 1 || !strings.Contains(a[0].Message, "3 arguments were dropped") {
+		t.Errorf("the dropped arguments are still reported: %+v", a)
+	}
+}
+
+func TestApplyHubWholeSaysTheSuperuserOfPostgres11IsEyberg(t *testing.T) {
+	u := hubWholeUse(hub.Near, "12.1", "11.3.0")
+	u.Package.Namespace, u.Package.Name = "eyberg", "postgresql"
+	c := hubFind(ApplyHubWhole(u, hubWholeObs()), "hub credentials")
+	if len(c) != 1 || c[0].Kind != plan.Unsupported || !strings.Contains(c[0].Message, "the superuser is eyberg; role postgres does not exist") || !strings.Contains(c[0].Message, "44909583390") {
+		t.Errorf("%+v", c)
+	}
+}
+
+func TestApplyHubWholeFillsThePlaceholdersOfTheEntrypointNote(t *testing.T) {
+	u := hubWholeUse(hub.Exact, "16.2", "16.2")
+	u.EntrypointNote = "CREATE DATABASE {POSTGRES_DB}; role {POSTGRES_USER|postgres}; other {POSTGRES_DB|x} {NOPE}"
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_USER=app"}
+	e := hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 || !strings.HasSuffix(e[0].Message, "CREATE DATABASE shop; role app; other shop <your NOPE>") {
+		t.Errorf("%+v", e)
+	}
+	obs = hubWholeObs()
+	e = hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 || !strings.HasSuffix(e[0].Message, "CREATE DATABASE <your POSTGRES_DB>; role postgres; other x <your NOPE>") {
+		t.Errorf("%+v", e)
 	}
 }

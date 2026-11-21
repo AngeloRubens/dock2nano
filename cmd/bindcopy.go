@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/AngeloRubens/dock2nano/internal/observe"
 )
 
 // bindCopyMaxBytes is the most bytes of files that are copied. A bigger bind
@@ -92,7 +94,7 @@ func (rs *runState) bindMountOf(a *App, service, host string, ro bool) *bindMoun
 // mounted read-only.
 func (rs *runState) copyBind(host string) *bindMount {
 	readOnly := func(why string) *bindMount {
-		return &bindMount{path: host, readOnly: true, notes: []string{fmt.Sprintf("the bind %s is mounted read-only: %s; the program cannot write there as it would in a real run", host, why)}}
+		return &bindMount{path: host, readOnly: true, notes: []string{fmt.Sprintf(observe.NoteBind+"%s is mounted read-only: %s; the program cannot write there as it would in a real run", host, why)}}
 	}
 	src, err := filepath.EvalSymlinks(host)
 	if err != nil {
@@ -103,7 +105,7 @@ func (rs *runState) copyBind(host string) *bindMount {
 		return readOnly("it cannot be read for a copy (" + err.Error() + ")")
 	}
 	if !fi.IsDir() && !fi.Mode().IsRegular() {
-		return &bindMount{notes: []string{fmt.Sprintf("the bind %s is a special file (socket, fifo or device); it is not passed to the observation", host)}}
+		return &bindMount{notes: []string{fmt.Sprintf(observe.NoteBind+"%s is a special file (socket, fifo or device); it is not passed to the observation", host)}}
 	}
 	if err := measureTree(src); err != nil {
 		if errors.Is(err, errTooLarge) {
@@ -135,10 +137,10 @@ func (rs *runState) copyBind(host string) *bindMount {
 	m := &bindMount{path: mount}
 	for i, s := range skipped {
 		if i == 5 {
-			m.notes = append(m.notes, fmt.Sprintf("the bind %s: %d more special files were not copied", host, len(skipped)-5))
+			m.notes = append(m.notes, fmt.Sprintf(observe.NoteBind+"%s: %d more special files were not copied", host, len(skipped)-5))
 			break
 		}
-		m.notes = append(m.notes, fmt.Sprintf("the bind %s: the special file %s (socket, fifo or device) is not copied", host, s))
+		m.notes = append(m.notes, fmt.Sprintf(observe.NoteBind+"%s: the special file %s (socket, fifo or device) is not copied", host, s))
 	}
 	return m
 }

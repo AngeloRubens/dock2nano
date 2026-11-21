@@ -7,6 +7,7 @@ import (
 	"path"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
@@ -30,6 +31,12 @@ type hubCase struct {
 
 	// env is the environment of the image, with the observed one after it.
 	env []string
+
+	// composeEnv is what the compose file gives the service (environment and
+	// env_file), sorted by name; it wins over env in the note of a build used
+	// whole. envUncertain says that reading it left something to report.
+	composeEnv   []string
+	envUncertain bool
 
 	// wanted is the version the user runs, or "".
 	wanted string
@@ -80,6 +87,17 @@ func (a *App) hubStep(ctx context.Context, o *options, rs *runState, s *compose.
 		hc.env = slices.Clone(si.Image.Env)
 	}
 	hc.env = append(hc.env, obs.Env...)
+	if env, items := gen.ServiceEnv(s, rs.dir, a.LookupEnv, a.ReadFile); len(env) > 0 || len(items) > 0 {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			hc.composeEnv = append(hc.composeEnv, k+"="+env[k])
+		}
+		hc.envUncertain = len(items) > 0
+	}
 	stand := hub.ProgramName(obs.Program)
 	if !built {
 		hc.imageName, hc.imageRef = hub.ImageName(image), image
@@ -244,9 +262,14 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 		}
 		return skip(fmt.Sprintf("the package %s %s could not be fetched or checked (%v), so it cannot be converted", pkg.Ref(), pkg.Version, err))
 	}
-	a.RemoveAll(obs.Sysroot)
+	if err := a.RemoveAll(obs.Sysroot); err != nil {
+		fmt.Fprintf(a.Stderr, "%s: warning: the directory of the observed files %s could not be removed (%v); it is tried again at the end\n", name, obs.Sysroot, err)
+		rs.undeleted = append(rs.undeleted, obs.Sysroot)
+	}
 	obs.Sysroot = dest
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, Why: row.Reason, Recipe: rec}
+	si.HubWhole = true
+	si.HubRestartNote = row.RestartNote
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, ComposeEnv: hc.composeEnv, EnvUncertain: hc.envUncertain, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], PackageFacts: row.PackageFacts[pkg.Ref()], Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
 	return nil
 }
