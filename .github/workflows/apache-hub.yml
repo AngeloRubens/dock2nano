@@ -16,10 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: A-apache2458, pkg: "eyberg/apache:2.4.58", mode: inspect}
-          - {name: A-php81, pkg: "eyberg/php:8.1.27", mode: inspect}
-          - {name: E-wordpress, pkg: "eyberg/wordpress:6.6.1", mode: inspect}
-          - {name: A-ngxphp, pkg: "eyberg/ngx_php:0.0.28", mode: inspect}
+          - {name: B1-apache2458-8080, pkg: "eyberg/apache:2.4.58", port: 8080, cfg: "", args: ""}
+          - {name: B2-apache2448-8080, pkg: "eyberg/apache:2.4.48", port: 8080, cfg: "", args: ""}
+          - {name: C1-apache2458-mapdirs, pkg: "eyberg/apache:2.4.58", port: 8080, cfg: '{"MapDirs":{"app/*":"/usr/local/apache2/htdocs"}}', args: ""}
+          - {name: C2-apache2448-mapdirs, pkg: "eyberg/apache:2.4.48", port: 8080, cfg: '{"MapDirs":{"app/*":"/usr/local/apache2/htdocs"}}', args: ""}
+          - {name: D1-php81-builtin, pkg: "eyberg/php:8.1.27", port: 8080, cfg: '{"Dirs":["app"]}', args: "-S 0.0.0.0:8080 -t app"}
+          - {name: E-wordpress, pkg: "eyberg/wordpress:6.6.1", port: 8080, cfg: '{"BaseVolumeSz":"300m"}', args: ""}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,37 +45,45 @@ jobs:
             [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
           done
           sudo install /tmp/ops /usr/local/bin/ops
-      - name: describe and extract
+      - name: describe
         run: |
           pkg="${{ matrix.pkg }}"
-          ops pkg list 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > /tmp/pkglist.txt
-          grep -i "$(echo "${pkg%%:*}" | sed 's|.*/||')" /tmp/pkglist.txt | head -20 || true
-          ops pkg get "$pkg" 2>&1 | grep -av '%' | tail -5
+          ops pkg get "$pkg" 2>&1 | grep -av '%' | tail -3
           echo "::group::ops pkg describe $pkg"
-          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -av '%' | head -150 || true
-          echo "::endgroup::"
-          echo "::group::ops pkg load --help"
-          ops pkg load --help 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
-          echo "::endgroup::"
-          echo "::group::package files on disk"
-          find "$OPS_HOME/.ops/packages" "$OPS_HOME/.ops/local_packages" -maxdepth 3 2>&1 | head -30
+          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -av '%' | head -60 || true
           echo "::endgroup::"
           pd=$(find "$OPS_HOME/.ops/packages/amd64" -mindepth 2 -maxdepth 2 -type d | head -1)
-          [ -n "$pd" ] || pd=$(find "$OPS_HOME/.ops/packages" -mindepth 2 -maxdepth 2 -type d | head -1)
-          echo "package dir: $pd"
-          rm -rf /tmp/pkgx; ln -s "$pd" /tmp/pkgx
-          echo "::group::package tree"
-          find -L /tmp/pkgx -maxdepth 4 2>/dev/null | head -200
-          echo "::endgroup::"
-          for m in package.manifest manifest.json config.json; do
-            find -L /tmp/pkgx -maxdepth 2 -name "$m" -exec sh -c 'echo "=== $1"; head -c 6000 "$1"' _ {} \;
+          cat "$pd/package.manifest"
+      - name: run and probe
+        env:
+          CFG: ${{ matrix.cfg }}
+          ARGS: ${{ matrix.args }}
+        run: |
+          git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
+          cd /tmp/ac/apache-php
+          echo "::group::sample"; ls -R .; cat Dockerfile; cat app/index.php; echo "::endgroup::"
+          cfgflag=""
+          if [ -n "$CFG" ]; then echo "$CFG" > /tmp/ac/apache-php/cfg.json; cfgflag="-c /tmp/ac/apache-php/cfg.json"; echo "config.json: $CFG"; fi
+          argflags=""
+          for a in $ARGS; do argflags="$argflags -a $a"; done
+          port=${{ matrix.port }}
+          echo "CMD: ops pkg load ${{ matrix.pkg }} -p $port $cfgflag $argflags"
+          sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops pkg load "${{ matrix.pkg }}" -p $port $cfgflag $argflags > /tmp/console.log 2>&1 &
+          opspid=$!
+          result=none
+          for i in $(seq 1 20); do
+            sleep 5
+            if ! sudo kill -0 $opspid 2>/dev/null; then echo "ops exited early"; break; fi
+            code=$(curl -s --max-time 5 -o /tmp/body.txt -w '%{http_code}' "http://127.0.0.1:$port/" || true)
+            echo "probe $i: http $code"
+            case "$code" in 000|"") ;; *) result=$code; break;; esac
           done
-          echo "::group::conf"
-          for c in $(find -L /tmp/pkgx -name 'httpd.conf' -o -name 'nginx.conf' -o -name 'php.ini' -o -name 'wp-config*.php' | head -6); do
-            echo "=== $c"
-            grep -nEi '^\s*(Listen|DocumentRoot|ServerName|PidFile|ErrorLog|LoadModule|Include|User |Group |<Directory|mpm|listen|root |error_log|pid )' "$c" | head -80
-          done
+          echo "::group::body"; head -c 600 /tmp/body.txt; echo; echo "::endgroup::"
+          code2=$(curl -s --max-time 5 -o /tmp/body2.txt -w '%{http_code}' "http://127.0.0.1:$port/index.php" || true)
+          echo "index.php: http $code2"; head -c 600 /tmp/body2.txt; echo
+          echo "::group::console, last 200 lines"
+          tail -200 /tmp/console.log | cut -c1-400
           echo "::endgroup::"
-          echo "::group::docroot"
-          find -L /tmp/pkgx -type d \( -name htdocs -o -name html -o -name www \) -exec sh -c 'echo "== $1"; ls -la "$1" | head -20' _ {} \;
-          echo "::endgroup::"
+          sudo kill $opspid 2>/dev/null || true
+          sudo pkill -f qemu-system 2>/dev/null || true
+          echo "RESULT ${{ matrix.name }}: $result"
