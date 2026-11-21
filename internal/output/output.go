@@ -347,7 +347,6 @@ func removeOldScript(j *journal, path string) error {
 	if err := os.Rename(path, old); err != nil {
 		return err
 	}
-	j.onFail(func() { os.Rename(old, path) })
 	j.onOK(func() { os.Remove(old) })
 	return nil
 }

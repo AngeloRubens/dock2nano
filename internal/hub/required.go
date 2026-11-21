@@ -94,8 +94,7 @@ func ParseRequired(data []byte) ([]Required, error) {
 		if r.PostUpScript != "" && r.EntrypointNote == "" {
 			return nil, fmt.Errorf("row %d of the table of required builds: post_up_script needs an entrypoint_note, because the report of the note is where the script is announced", i+1)
 		}
-		for _, f := range []struct{ field, note string }{{"entrypoint_note", r.EntrypointNote}, {"post_up_script", r.PostUpScript}} {
-			field, note := f.field, f.note
+		for field, note := range map[string]string{"entrypoint_note": r.EntrypointNote, "post_up_script": r.PostUpScript} {
 			if note == "" {
 				continue
 			}

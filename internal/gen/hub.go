@@ -634,7 +634,7 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 // space and the text is trimmed (a note is prose, a script keeps its layout).
 func fillText(note string, env []string, fixed map[string]string, squeeze bool) string {
 	// {{ and }} are literal braces: they are put aside while the text is read
-	note = strings.ReplaceAll(strings.ReplaceAll(note, "{{", "\x01"), "}}", "\x02")
+	_ = note
 	have := noteHave(note, env, fixed)
 	text := fillWith(note, have, squeeze)
 	return strings.ReplaceAll(strings.ReplaceAll(text, "\x01", "{"), "\x02", "}")

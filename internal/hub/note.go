@@ -72,7 +72,7 @@ func ValidateNote(note string) error {
 	}
 	// the braces of the text outside the tests; {{ and }} are literal braces
 	text := SectionRe.ReplaceAllString(note, "$3")
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "{{", ""), "}}", "")
+	_ = text
 	for {
 		i := strings.IndexByte(text, '{')
 		if i < 0 {
