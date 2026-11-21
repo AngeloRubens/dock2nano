@@ -1,0 +1,79 @@
+name: apache-hub
+# Hub apache/php packages alone on nanos: inspect the package, then run with options. [apache-hub] or by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  try:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[apache-hub]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: A-apache2458, pkg: "eyberg/apache:2.4.58", mode: inspect}
+          - {name: A-php81, pkg: "eyberg/php:8.1.27", mode: inspect}
+          - {name: E-wordpress, pkg: "eyberg/wordpress:6.6.1", mode: inspect}
+          - {name: A-ngxphp, pkg: "eyberg/ngx_php:0.0.28", mode: inspect}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 netcat-openbsd curl >/dev/null
+      - name: ops from source (nanovms/ops master 2177c54)
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
+          cd /tmp/ops-src && go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          sudo install /tmp/ops /usr/local/bin/ops
+      - name: describe and extract
+        run: |
+          pkg="${{ matrix.pkg }}"
+          ops pkg list 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > /tmp/pkglist.txt
+          grep -i "$(echo "${pkg%%:*}" | sed 's|.*/||')" /tmp/pkglist.txt | head -20 || true
+          ops pkg get "$pkg" 2>&1 | grep -av '%' | tail -5
+          echo "::group::ops pkg describe $pkg"
+          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -av '%' | head -150 || true
+          echo "::endgroup::"
+          echo "::group::ops pkg load --help"
+          ops pkg load --help 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+          echo "::endgroup::"
+          echo "::group::package files on disk"
+          find "$OPS_HOME/.ops/packages" "$OPS_HOME/.ops/local_packages" -maxdepth 3 2>&1 | head -30
+          echo "::endgroup::"
+          mkdir -p /tmp/pkgx
+          f=$(find "$OPS_HOME/.ops/packages" -name '*.tar.gz' | head -1)
+          echo "archive: $f"
+          tar xzf "$f" -C /tmp/pkgx
+          echo "::group::package tree"
+          find /tmp/pkgx -maxdepth 4 | head -150
+          echo "::endgroup::"
+          for m in package.manifest manifest.json config.json; do
+            find /tmp/pkgx -maxdepth 2 -name "$m" -exec sh -c 'echo "=== $1"; cat "$1"' _ {} \;
+          done
+          echo "::group::conf"
+          for c in $(find /tmp/pkgx -name 'httpd.conf' -o -name 'nginx.conf' -o -name 'php.ini' -o -name 'wp-config*.php' | head -6); do
+            echo "=== $c"
+            grep -nEi '^\s*(Listen|DocumentRoot|ServerName|PidFile|ErrorLog|LoadModule|Include|User |Group |<Directory|mpm|listen|root |error_log|pid )' "$c" | head -80
+          done
+          echo "::endgroup::"
+          echo "::group::docroot"
+          find /tmp/pkgx -type d \( -name htdocs -o -name html -o -name www \) -exec sh -c 'echo "== $1"; ls -la "$1" | head -20' _ {} \;
+          echo "::endgroup::"
