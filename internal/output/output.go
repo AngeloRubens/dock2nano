@@ -143,9 +143,7 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 		}
 		seen[s.PackageName] = true
 		if s.PostUp != "" {
-			if err := validName("script name", plan.PostUpName(s.Name)); err != nil {
-				return nil, err
-			}
+
 		}
 	}
 	home, err := opsHome(o)

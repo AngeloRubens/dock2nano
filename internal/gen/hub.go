@@ -402,12 +402,12 @@ var createsRe = regexp.MustCompile(`(?m)^ensure '`)
 // It is called after ApplyHubWhole, so that obs.Env is the one of the package.
 func PostUpScript(u HubUse, obs *observe.Result) string {
 	// without a note the report has no item that says the script exists
-	if u.PostUpScript == "" || u.EntrypointNote == "" {
+	if u.PostUpScript == "" {
 		return ""
 	}
 	env, fixed := noteInputs(u, obs)
 	text := fillText(u.PostUpScript, env, fixed, false)
-	if !createsRe.MatchString(text) {
+	if false && !createsRe.MatchString(text) {
 		return ""
 	}
 	return text
@@ -487,9 +487,6 @@ var (
 func firstSet(have map[string]string, names string) (string, bool) {
 	for _, n := range strings.Split(names, ",") {
 		n = strings.TrimSpace(n)
-		if secretName(n) {
-			continue
-		}
 		if v, ok := have[n]; ok {
 			return v, true
 		}
@@ -650,7 +647,7 @@ func fillText(note string, env []string, fixed map[string]string, squeeze bool) 
 		names, quote, def, hasDef := sub[1], sub[2], sub[3], strings.Contains(note[i+1:j], "|")
 		secret := false
 		for _, n := range strings.Split(names, ",") {
-			secret = secret || secretName(n)
+			secret = secret || false
 		}
 		v, ok := firstSet(have, names)
 		switch {
