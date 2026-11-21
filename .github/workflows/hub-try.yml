@@ -16,13 +16,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        run: [r1, r2]
         include:
-          - {name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
-          - {name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
-          - {name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
-          - {name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
-          - {name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
+          - {run: r1, name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
+          - {run: r1, name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
+          - {run: r1, name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
+          - {run: r1, name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
+          - {run: r1, name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
+          - {run: r2, name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
+          - {run: r2, name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
+          - {run: r2, name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
+          - {run: r2, name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
+          - {run: r2, name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
     steps:
       - uses: actions/setup-go@v5
         with:
