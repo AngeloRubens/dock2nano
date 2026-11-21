@@ -58,22 +58,22 @@ jobs:
           echo "::group::package files on disk"
           find "$OPS_HOME/.ops/packages" "$OPS_HOME/.ops/local_packages" -maxdepth 3 2>&1 | head -30
           echo "::endgroup::"
-          mkdir -p /tmp/pkgx
-          f=$(find "$OPS_HOME/.ops/packages" -name '*.tar.gz' | head -1)
-          echo "archive: $f"
-          tar xzf "$f" -C /tmp/pkgx
+          pd=$(find "$OPS_HOME/.ops/packages/amd64" -mindepth 2 -maxdepth 2 -type d | head -1)
+          [ -n "$pd" ] || pd=$(find "$OPS_HOME/.ops/packages" -mindepth 2 -maxdepth 2 -type d | head -1)
+          echo "package dir: $pd"
+          rm -rf /tmp/pkgx; ln -s "$pd" /tmp/pkgx
           echo "::group::package tree"
-          find /tmp/pkgx -maxdepth 4 | head -150
+          find -L /tmp/pkgx -maxdepth 4 2>/dev/null | head -200
           echo "::endgroup::"
           for m in package.manifest manifest.json config.json; do
-            find /tmp/pkgx -maxdepth 2 -name "$m" -exec sh -c 'echo "=== $1"; cat "$1"' _ {} \;
+            find -L /tmp/pkgx -maxdepth 2 -name "$m" -exec sh -c 'echo "=== $1"; head -c 6000 "$1"' _ {} \;
           done
           echo "::group::conf"
-          for c in $(find /tmp/pkgx -name 'httpd.conf' -o -name 'nginx.conf' -o -name 'php.ini' -o -name 'wp-config*.php' | head -6); do
+          for c in $(find -L /tmp/pkgx -name 'httpd.conf' -o -name 'nginx.conf' -o -name 'php.ini' -o -name 'wp-config*.php' | head -6); do
             echo "=== $c"
             grep -nEi '^\s*(Listen|DocumentRoot|ServerName|PidFile|ErrorLog|LoadModule|Include|User |Group |<Directory|mpm|listen|root |error_log|pid )' "$c" | head -80
           done
           echo "::endgroup::"
           echo "::group::docroot"
-          find /tmp/pkgx -type d \( -name htdocs -o -name html -o -name www \) -exec sh -c 'echo "== $1"; ls -la "$1" | head -20' _ {} \;
+          find -L /tmp/pkgx -type d \( -name htdocs -o -name html -o -name www \) -exec sh -c 'echo "== $1"; ls -la "$1" | head -20' _ {} \;
           echo "::endgroup::"
