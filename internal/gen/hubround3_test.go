@@ -23,6 +23,7 @@ func shippedUse(t *testing.T, ns, name, version string) HubUse {
 	u.Package.Namespace, u.Package.Name = ns, name
 	u.EntrypointNote = rows[0].EntrypointNote
 	u.Superuser = rows[0].Superusers[ns+"/"+name]
+	u.PackageFacts = rows[0].PackageFacts[ns+"/"+name]
 	return u
 }
 
@@ -37,6 +38,9 @@ func entrypointText(t *testing.T, u HubUse, env ...string) string {
 	if strings.Contains(e[0].Message, "{") || strings.Contains(e[0].Message, "[[") {
 		t.Errorf("a placeholder or a section was left in the note: %q", e[0].Message)
 	}
+	if strings.Contains(e[0].Message, "  ") {
+		t.Errorf("a double space was left in the note: %q", e[0].Message)
+	}
 	return e[0].Message
 }
 
@@ -44,8 +48,8 @@ func TestEntrypointNoteQuotesTheDatabaseAndNamesTheSuperuser(t *testing.T) {
 	u := shippedUse(t, "francescolavra", "postgres", "16.2")
 	got := entrypointText(t, u, "POSTGRES_DB=shop", "POSTGRES_USER=app")
 	for _, want := range []string{
-		`-U postgres -d template1 -c 'CREATE DATABASE "shop"'`,
-		`-U postgres -d template1 -c 'CREATE ROLE "app" LOGIN'`,
+		`-U postgres -d template1 -c 'CREATE DATABASE "shop" OWNER "app"'`,
+		`-U postgres -d template1 -c 'CREATE ROLE "app" LOGIN SUPERUSER'`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the note does not say %q:\n%s", want, got)
@@ -64,7 +68,7 @@ func TestEntrypointNoteQuotesTheDatabaseAndNamesTheSuperuser(t *testing.T) {
 	}
 	// the database is POSTGRES_DB, else POSTGRES_USER
 	got = entrypointText(t, u, "POSTGRES_USER=app")
-	if !strings.Contains(got, `'CREATE DATABASE "app"'`) {
+	if !strings.Contains(got, `'CREATE DATABASE "app" OWNER "app"'`) {
 		t.Errorf("%s", got)
 	}
 	got = entrypointText(t, u, "POSTGRES_DB=shop", "POSTGRES_USER=app")
@@ -89,7 +93,7 @@ func TestEntrypointNoteSaysWhenNoDatabaseHasToBeCreated(t *testing.T) {
 func TestEntrypointNoteUsesTheSuperuserOfPostgres11(t *testing.T) {
 	u := shippedUse(t, "eyberg", "postgresql", "11.3.0")
 	got := entrypointText(t, u, "POSTGRES_DB=shop", "POSTGRES_USER=app")
-	for _, want := range []string{`-U eyberg -d template1 -c 'CREATE DATABASE "shop"'`, `-U eyberg -d template1 -c 'CREATE ROLE "app" LOGIN'`} {
+	for _, want := range []string{`-U eyberg -d template1 -c 'CREATE DATABASE "shop" OWNER "app"'`, `-U eyberg -d template1 -c 'CREATE ROLE "app" LOGIN SUPERUSER'`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the note does not say %q:\n%s", want, got)
 		}
@@ -102,7 +106,7 @@ func TestEntrypointNoteUsesTheSuperuserOfPostgres11(t *testing.T) {
 		t.Errorf("%s", got)
 	}
 	// postgres is not the superuser here, so it is a role to create
-	if got := entrypointText(t, u, "POSTGRES_DB=shop", "POSTGRES_USER=postgres"); !strings.Contains(got, `'CREATE ROLE "postgres" LOGIN'`) {
+	if got := entrypointText(t, u, "POSTGRES_DB=shop", "POSTGRES_USER=postgres"); !strings.Contains(got, `'CREATE ROLE "postgres" LOGIN SUPERUSER'`) {
 		t.Errorf("%s", got)
 	}
 }
@@ -110,7 +114,7 @@ func TestEntrypointNoteUsesTheSuperuserOfPostgres11(t *testing.T) {
 func fill(note string, env ...string) string { return fillPlaceholders(note, env, nil) }
 
 func TestFillPlaceholdersNeverWritesASecret(t *testing.T) {
-	for _, name := range []string{"POSTGRES_PASSWORD", "API_KEY", "GITHUB_TOKEN", "DB_SECRET", "POSTGRES_PASSWORD_FILE", "db_password"} {
+	for _, name := range []string{"POSTGRES_PASSWORD", "API_KEY", "GITHUB_TOKEN", "DB_SECRET", "POSTGRES_PASSWORD_FILE", "db_password", "DB_PASS", "ADMIN_PWD"} {
 		env := name + "=hunter2"
 		if got := fill("x {"+name+"} y", env); got != "x <not shown> y" {
 			t.Errorf("%s: %q", name, got)

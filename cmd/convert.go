@@ -80,7 +80,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{dir: dir, noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -114,7 +114,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	var sysroots []string
 	defer func() {
 		for _, s := range append(sysroots, rs.undeleted...) {
-			a.RemoveAll(s)
+			if err := a.RemoveAll(s); err != nil {
+				fmt.Fprintf(a.Stderr, "%s: warning: the directory %s could not be removed (%v)\n", ToolName, s, err)
+			}
 		}
 	}()
 	arch, archOwner := "", ""
@@ -1098,6 +1100,9 @@ type runState struct {
 	// replaced and that could not be removed then; they are removed again at the
 	// end of the run.
 	undeleted []string
+
+	// dir is the directory of the compose file, for env_file.
+	dir string
 	// staleSaid is set once the report has said that the list of the hub is an
 	// old copy, which is said for one service only.
 	staleSaid bool

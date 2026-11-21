@@ -178,6 +178,14 @@ func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
 	if rn := rows[0].RestartNote; !strings.Contains(rn, "44910340290") || !strings.Contains(rn, "not measured") {
 		t.Errorf("restart note: %q", rn)
 	}
+	if !strings.Contains(n, "comes from the postmaster.pid that it leaves") || !strings.Contains(n, "the file itself was not seen") || strings.Contains(n, "which leaves postmaster.pid") {
+		t.Errorf("the note says the postmaster.pid was seen: %q", n)
+	}
+	for ref, run := range map[string]string{"francescolavra/postgres": "44908630495", "eyberg/postgresql": "44910340290"} {
+		if !strings.Contains(rows[0].PackageFacts[ref], run) {
+			t.Errorf("the facts of %s do not cite run %s: %q", ref, run, rows[0].PackageFacts[ref])
+		}
+	}
 	if strings.Contains(rows[0].Reason, "shmget") {
 		t.Errorf("the reason says something not measured: %q", rows[0].Reason)
 	}
@@ -190,5 +198,64 @@ func TestParseRequiredReadsSuperusersAndRefusesAForeignPackage(t *testing.T) {
 	}
 	if _, err := ParseRequired([]byte(testRows + "    superusers:\n      someone/else: root\n")); err == nil {
 		t.Error("a superuser of a package that is not in the row was accepted")
+	}
+	// the note needs a superuser for every package of the row, and a template that closes
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"-U {HUB_SUPERUSER}\"\n")); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted without superusers")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '[[if A]]x'\n")); err == nil {
+		t.Error("a section that is not closed was accepted")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    package_facts:\n      someone/else: x\n")); err == nil {
+		t.Error("facts of a package that is not in the row were accepted")
+	}
+}
+
+func TestParseRequiredRequiresTheFactsOfEveryPackageThatTheNoteNames(t *testing.T) {
+	rows := "    entrypoint_note: \"-U {HUB_SUPERUSER}\"\n"
+	if _, err := ParseRequired([]byte(testRows + rows)); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted without superusers")
+	}
+	// the condition names it too
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"[[if A!=HUB_SUPERUSER]]x[[end]]\"\n")); err == nil {
+		t.Error("a test that names HUB_SUPERUSER was accepted without superusers")
+	}
+	if _, err := ParseRequired([]byte(testRows + rows + "    superusers:\n      eyberg/postgresql: root\n")); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted with a superuser for some of the packages only")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"{HUB_FACTS}\"\n")); err == nil {
+		t.Error("a note that names {HUB_FACTS} was accepted without package_facts")
+	}
+	all := "    superusers:\n"
+	for _, p := range []string{"francescolavra/postgres", "eyberg/postgresql"} {
+		all += "      " + p + ": root\n"
+	}
+	if _, err := ParseRequired([]byte(testRows + rows + all)); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredChecksTheTemplateOfTheNote(t *testing.T) {
+	for _, bad := range []string{
+		"[[if A]]x",
+		"x[[end]]",
+		"[[if A]]x[[if B]]y[[end]][[end]]",
+		"[[if A!=]]x[[end]]",
+		"[[if A or B]]x[[end]]",
+		"[[iff A]]x[[end]]",
+		"{A:upper}",
+	} {
+		if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '" + bad + "'\n")); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	for _, ok := range []string{
+		"plain text",
+		"[[if A and not B]]x {A|d e}[[end]] [[unless A!=\"q\"]]y[[end]]",
+		"a { b } c",
+	} {
+		if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '" + ok + "'\n")); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
 	}
 }

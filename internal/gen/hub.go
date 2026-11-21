@@ -33,6 +33,20 @@ type HubUse struct {
 	// program may have overwritten; it is read together with the observed one.
 	ImageEnv []string
 
+	// ComposeEnv is the environment that the compose file gives the service
+	// (environment and env_file, as ServiceEnv reads them); it wins over the
+	// image and the observed one when the note is filled.
+	ComposeEnv []string
+
+	// EnvUncertain says that ServiceEnv had something to report for the
+	// service (a variable it could not expand or leave set, a file it could
+	// not read), so the environment above may not be the one of the service.
+	EnvUncertain bool
+
+	// PackageFacts is what was seen of this package that the note needs, from
+	// the row; the note names it as {HUB_FACTS}.
+	PackageFacts string
+
 	// Why says why the hub was consulted: what the observation showed, or the
 	// reason of the row that requires it.
 	Why string
@@ -331,11 +345,21 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
-		fixed := map[string]string{}
+		fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package"}
 		if u.Superuser != "" {
 			fixed["HUB_SUPERUSER"] = u.Superuser
 		}
-		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, append(slices.Clone(u.ImageEnv), obs.Env...), fixed)))
+		if u.PackageFacts != "" {
+			fixed["HUB_FACTS"] = u.PackageFacts
+		}
+		if u.EnvUncertain {
+			fixed["HUB_ENV_UNCERTAIN"] = "yes"
+		}
+		// the image first, the observed environment over it, what the compose file
+		// gives the service over both: the order in which the manifest gets them
+		env := append(slices.Clone(u.ImageEnv), obs.Env...)
+		env = append(env, u.ComposeEnv...)
+		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, env, fixed)))
 	}
 	items = append(items, hubNotApplied(u, true)...)
 	if u.Recipe.Skipped > 0 {
@@ -393,7 +417,7 @@ func dropFileWarnings(ws []string) []string {
 // The value of such a variable is never written into a note.
 func secretName(name string) bool {
 	u := strings.ToUpper(name)
-	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY"} {
+	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "PASS", "PWD"} {
 		if strings.Contains(u, w) {
 			return true
 		}
@@ -405,10 +429,10 @@ func secretName(name string) bool {
 const notShown = "<not shown>"
 
 var (
-	// a placeholder: names joined by commas (the first one that is set is
-	// used), an optional :ident, an optional |default
-	placeholderRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*(?:,[A-Za-z_][A-Za-z0-9_]*)*)(:ident)?(?:\|(.*))?$`)
-	sectionRe     = regexp.MustCompile(`(?s)\[\[(if|unless) ([^\]]*)\]\](.*?)\[\[end\]\]`)
+	placeholderRe = hub.PlaceholderRe
+	sectionRe     = hub.SectionRe
+	spacesRe      = regexp.MustCompile(` {2,}`)
+	bracesRe      = regexp.MustCompile(`\{([^{}]*)\}`)
 )
 
 // firstSet is the value of the first of the names that is set. A name that
@@ -426,10 +450,25 @@ func firstSet(have map[string]string, names string) (string, bool) {
 	return "", false
 }
 
-// condition tells whether the test of a section holds: NAMES (one of them is
-// set) or NAMES!=OTHER (it is set and differs from the variable OTHER, or from
-// the text between quotes).
+// condition tells whether the test of a section holds: terms joined by " and ",
+// all of which must hold. A term is NAMES (one of them is set) or
+// NAMES!=OTHER (it is set and differs from the variable OTHER, or from the
+// text between quotes), and "not " before it turns it round.
 func condition(have map[string]string, expr string) bool {
+	for _, t := range strings.Split(expr, " and ") {
+		t = strings.TrimSpace(t)
+		neg := strings.HasPrefix(t, "not ")
+		if neg {
+			t = strings.TrimSpace(strings.TrimPrefix(t, "not "))
+		}
+		if term(have, t) == neg {
+			return false
+		}
+	}
+	return true
+}
+
+func term(have map[string]string, expr string) bool {
 	lhs, rhs, ne := strings.Cut(expr, "!=")
 	v, ok := firstSet(have, lhs)
 	if !ok {
@@ -441,6 +480,10 @@ func condition(have map[string]string, expr string) bool {
 	rhs = strings.TrimSpace(rhs)
 	if len(rhs) >= 2 && strings.HasPrefix(rhs, `"`) && strings.HasSuffix(rhs, `"`) {
 		return v != rhs[1:len(rhs)-1]
+	}
+	if secretName(rhs) {
+		// the value of a secret is not read, so it cannot be compared
+		return false
 	}
 	return v != have[rhs]
 }
@@ -489,12 +532,22 @@ func sqlIdent(v string) string {
 func fillPlaceholders(note string, env []string, fixed map[string]string) string {
 	have := map[string]string{}
 	for _, e := range env {
-		if k, v, ok := strings.Cut(e, "="); ok && v != "" {
+		// the names the tool fills itself (HUB_...) are never read from the environment
+		if k, v, ok := strings.Cut(e, "="); ok && v != "" && !strings.HasPrefix(k, "HUB_") {
 			have[k] = v
 		}
 	}
 	for k, v := range fixed {
 		have[k] = v
+	}
+	// a name that plainText would change cannot be written as an identifier
+	// without making another name: no command is printed for it
+	for _, m := range bracesRe.FindAllStringSubmatch(note, -1) {
+		if sub := placeholderRe.FindStringSubmatch(m[1]); sub != nil && sub[2] != "" {
+			if v, ok := firstSet(have, sub[1]); ok && plainText(v) != v {
+				have["HUB_CONTROL"] = "yes"
+			}
+		}
 	}
 	note = sectionRe.ReplaceAllStringFunc(note, func(m string) string {
 		sub := sectionRe.FindStringSubmatch(m)
@@ -503,6 +556,8 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 		}
 		return ""
 	})
+	// a removed section leaves its neighbours' spaces
+	note = strings.TrimSpace(spacesRe.ReplaceAllString(note, " "))
 	var b strings.Builder
 	for {
 		i := strings.IndexByte(note, '{')
@@ -545,11 +600,14 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 }
 
 func fillValue(v string, ident bool) string {
-	v = plainText(v)
+	p := plainText(v)
 	if ident {
-		return sqlIdent(v)
+		if p != v {
+			return "<a name with control characters, to be quoted by hand>"
+		}
+		return sqlIdent(p)
 	}
-	return v
+	return p
 }
 
 // plural gives the one form for 1 and the other for the rest.
