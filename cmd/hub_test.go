@@ -523,7 +523,7 @@ func TestRequiredBuildReportsTheEntrypointNoteOfTheRow(t *testing.T) {
 		h.mustRun(0, "convert")
 		out := h.stdout.String()
 		got := strings.Contains(out, "the entrypoint of your image does not run with the package of the hub: the env of the entrypoint does nothing")
-		if got != tc.want || (!tc.want && strings.Contains(out, "hub entrypoint")) {
+		if got != tc.want || (!tc.want && strings.Contains(out, "does not run with the package of the hub")) {
 			t.Errorf("note %q: reported %v, want %v:\n%s", tc.note, got, tc.want, out)
 		}
 	}
@@ -575,7 +575,7 @@ func TestRequiredBuildRemovesTheObservedFilesAgainWhenTheFirstTryFailed(t *testi
 		if calls[p] == 1 {
 			return errors.New("device busy")
 		}
-		return nil
+		return os.RemoveAll(p)
 	}
 	h.mustRun(0, "convert")
 	if len(h.made) != 1 {
