@@ -65,7 +65,14 @@ jobs:
             done
             pg_isready -h 127.0.0.1 -p 5432
           }
-          stop() { sudo kill $opspid 2>/dev/null || true; sudo pkill -f qemu-system 2>/dev/null || true; sleep 5; }
+          stop() {
+            echo "--- qemu command line"; ps -eo args | grep '[q]emu-system' | cut -c1-700
+            if [ "${{ matrix.exp }}" = e3img ] && [ "$1" = soft ]; then
+              echo "--- soft stop: SIGTERM to qemu, then wait up to 30 s"
+              sudo pkill -TERM -f qemu-system || true
+              for i in $(seq 1 15); do pgrep -f qemu-system >/dev/null || { echo "qemu gone after $((i*2)) s"; break; }; sleep 2; done
+            fi
+            sudo kill $opspid 2>/dev/null || true; sudo pkill -f qemu-system 2>/dev/null || true; sleep 5; }
           if [ "${{ matrix.exp }}" = users ]; then
             start "" /tmp/console.log
             for u in postgres root eyberg ubuntu ops user admin nobody runner; do
@@ -78,16 +85,17 @@ jobs:
             u=${{ matrix.dbuser || 'postgres' }}
             echo "=== boot 1: build the image as pkgimg, create the database"
             start "-i pkgimg" /tmp/console.log
-            psql -h 127.0.0.1 -U $u -w -c 'CREATE DATABASE example' 2>&1
+            psql -h 127.0.0.1 -U $u -w -d template1 -c 'CREATE DATABASE example' 2>&1
             psql -h 127.0.0.1 -U $u -w -d example -c 'create table t(a int); insert into t values (42)' 2>&1
-            psql -h 127.0.0.1 -U $u -w -c 'CHECKPOINT' 2>&1
-            psql -h 127.0.0.1 -U $u -w -l 2>&1 | cut -c1-40 | head -8
-            stop
+            psql -h 127.0.0.1 -U $u -w -d template1 -c 'CHECKPOINT' 2>&1
+            psql -h 127.0.0.1 -U $u -w -d template1 -l 2>&1 | cut -c1-40 | head -8
+            stop soft
+            echo "::group::console 1 tail"; tail -15 /tmp/console.log | cut -c1-250; echo "::endgroup::"
             echo "=== images"; ls -la "$OPS_HOME"/.ops/images/ 2>&1 | head
             echo "=== boot 2: same image, no build (-s)"
             start "-i pkgimg -s" /tmp/console2.log || true
             echo "::group::ops output of boot 2"; head -40 /tmp/console2.log | cut -c1-300; echo "::endgroup::"
-            psql -h 127.0.0.1 -U $u -w -l 2>&1 | cut -c1-40 | head -8
+            psql -h 127.0.0.1 -U $u -w -d template1 -l 2>&1 | cut -c1-40 | head -8
             psql -h 127.0.0.1 -U $u -w -d example -c 'select a from t' 2>&1
             echo "::group::console 2"; tail -40 /tmp/console2.log | cut -c1-300; echo "::endgroup::"
             stop
