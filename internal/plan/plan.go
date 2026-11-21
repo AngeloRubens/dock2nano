@@ -49,15 +49,25 @@ type Service struct {
 	// Manifest is written as package.manifest.
 	Manifest Manifest
 	// PostUp is the text of a shell script that the user runs after "ops compose
-	// up", or empty. The writer puts it next to compose.yaml, as PostUpName says,
+	// up", or empty. The writer puts it next to compose.yaml, named PostUpFile,
 	// with mode 0755. Nothing runs it but the user.
 	PostUp string
+	// PostUpFile is the file name of the script of this service, as PostUpName
+	// gives it for the pkg name of compose.yaml. It is set for every service,
+	// also when there is no script, so that the writer can remove the script of
+	// an earlier run (see PostUpMarker).
+	PostUpFile string
 }
 
+// PostUpMarker is a phrase that every script of the tool holds. The writer
+// removes an old script of the same name when forced only if it holds it, so a
+// file of the user with that name is never removed.
+const PostUpMarker = "Written by dock2nano"
+
 // PostUpName is the file name of the script that the user runs after "ops
-// compose up" for a service.
-func PostUpName(service string) string {
-	return "post-up-" + service + ".sh"
+// compose up" for the package of compose.yaml named pkg.
+func PostUpName(pkg string) string {
+	return "post-up-" + pkg + ".sh"
 }
 
 // Manifest is the part of the ops configuration (types.Config) that a package

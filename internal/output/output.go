@@ -142,8 +142,8 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 			return nil, fmt.Errorf("output: package name %q used twice", s.PackageName)
 		}
 		seen[s.PackageName] = true
-		if s.PostUp != "" {
-			if err := validName("script name", plan.PostUpName(s.Name)); err != nil {
+		if s.PostUp != "" || s.PostUpFile != "" {
+			if err := validName("script name", s.PostUpFile); err != nil {
 				return nil, err
 			}
 		}
@@ -158,7 +158,7 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 	}
 	base := filepath.Join(home, ".ops", "local_packages", p.Arch)
 	scriptPath := func(s plan.Service) string {
-		return filepath.Join(filepath.Dir(composePath), plan.PostUpName(s.Name))
+		return filepath.Join(filepath.Dir(composePath), s.PostUpFile)
 	}
 	if !o.Force {
 		if exists(composePath) {
@@ -206,6 +206,11 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 	written = append(written, composePath)
 	for _, s := range p.Services {
 		if s.PostUp == "" {
+			if o.Force && s.PostUpFile != "" {
+				if err = removeOldScript(&j, scriptPath(s)); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		if err = writeFileAtomic(&j, scriptPath(s), []byte(s.PostUp), 0o755, o.Force); err != nil {
@@ -324,6 +329,29 @@ func writeCompose(j *journal, path string, c plan.ComposeFile, force bool) error
 	return writeFileAtomic(j, path, buf.Bytes(), 0o644, force)
 }
 
+// removeOldScript takes away the script that an earlier run left at path, when
+// there is one and it is a script of this tool (it holds plan.PostUpMarker): the
+// new plan has none for the service, and the old one would be run by mistake.
+// It is moved aside, and put back when the call fails, and removed when it
+// succeeds. A file that is not ours is left alone.
+func removeOldScript(j *journal, path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(data, []byte(plan.PostUpMarker)) {
+		return nil
+	}
+	old := fmt.Sprintf("%s.stale-%d", path, os.Getpid())
+	if err := os.Rename(path, old); err != nil {
+		return err
+	}
+	j.onFail(func() { os.Rename(old, path) })
+	j.onOK(func() { os.Remove(old) })
+	return nil
+}
+
 // writeFileAtomic writes data to path through a temporary file in the same
 // folder, with the given mode. A file that exists is replaced only with force;
 // on failure of the call the new file is removed and the old one put back.
@@ -355,6 +383,8 @@ func writeFileAtomic(j *journal, path string, data []byte, mode fs.FileMode, for
 	if err := f.Close(); err != nil {
 		return err
 	}
+	// the mode is set with Chmod and not given to the creation of the file, so
+	// that the umask of the process does not take the execute bits of a script
 	if err := os.Chmod(tmp, mode); err != nil {
 		return err
 	}

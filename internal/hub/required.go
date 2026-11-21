@@ -48,7 +48,8 @@ type Required struct {
 	// "ops compose up" and that does what the entrypoint of the image does and
 	// the package does not. It is written with the same placeholders and
 	// sections as entrypoint_note, with :lit and :sh besides :ident, and with
-	// {HUB_SERVICE}. The script has one line that starts with "ensure '" for each
+	// {HUB_INSTANCE} (the name of the instance, which is the pkg name of
+	// compose.yaml). {{ and }} stand for literal braces. The script has one line that starts with "ensure '" for each
 	// thing it creates; when the text filled for a service has none, no script
 	// is written. Empty means there is no script.
 	PostUpScript string `yaml:"post_up_script,omitempty"`
@@ -90,7 +91,11 @@ func ParseRequired(data []byte) ([]Required, error) {
 				}
 			}
 		}
-		for field, note := range map[string]string{"entrypoint_note": r.EntrypointNote, "post_up_script": r.PostUpScript} {
+		if r.PostUpScript != "" && r.EntrypointNote == "" {
+			return nil, fmt.Errorf("row %d of the table of required builds: post_up_script needs an entrypoint_note, because the report of the note is where the script is announced", i+1)
+		}
+		for _, f := range []struct{ field, note string }{{"entrypoint_note", r.EntrypointNote}, {"post_up_script", r.PostUpScript}} {
+			field, note := f.field, f.note
 			if note == "" {
 				continue
 			}
@@ -100,7 +105,18 @@ func ParseRequired(data []byte) ([]Required, error) {
 			if field == "post_up_script" && !strings.HasPrefix(note, "#!/bin/sh\n") {
 				return nil, fmt.Errorf("row %d of the table of required builds: post_up_script must start with the line #!/bin/sh", i+1)
 			}
-			for name, src := range NoteFixed {
+			if field == "post_up_script" {
+				if err := ScriptPlaceholders(note); err != nil {
+					return nil, fmt.Errorf("row %d of the table of required builds: post_up_script: %w", i+1, err)
+				}
+			}
+			fixedNames := make([]string, 0, len(NoteFixed))
+			for name := range NoteFixed {
+				fixedNames = append(fixedNames, name)
+			}
+			slices.Sort(fixedNames)
+			for _, name := range fixedNames {
+				src := NoteFixed[name]
 				if !NoteUses(note, name) {
 					continue
 				}

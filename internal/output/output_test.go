@@ -931,6 +931,7 @@ const postUpText = "#!/bin/sh\necho hi\n"
 func postUpPlan(sys string) *plan.Plan {
 	p := onePlan(sys)
 	p.Services[0].PostUp = postUpText
+	p.Services[0].PostUpFile = "post-up-web.sh"
 	return p
 }
 
@@ -984,10 +985,14 @@ func TestWriteRefusesToReplaceAScriptWithoutForceAndTouchesNothing(t *testing.T)
 	put(t, script, "mine\n", 0o644)
 	src := filepath.Join(dir, "src")
 	put(t, filepath.Join(src, "web"), "b", 0o755)
+	renames := countRename(t)
 
 	_, err := Write(postUpPlan(src), Options{OpsHome: home, ComposePath: composePath})
 	if err == nil || !strings.Contains(err.Error(), script) || !strings.Contains(err.Error(), "force") {
 		t.Fatalf("error = %v", err)
+	}
+	if *renames != 0 {
+		t.Errorf("the sysroot was moved %d times before the refusal, want 0: the refusal came late", *renames)
 	}
 	if exists(home) || exists(composePath) || read(t, script) != "mine\n" || !exists(filepath.Join(src, "web")) {
 		t.Errorf("something was touched: home %v compose %v script %q", exists(home), exists(composePath), read(t, script))
@@ -1024,8 +1029,9 @@ func TestWriteRollbackRemovesTheScriptWhenALaterStepFails(t *testing.T) {
 	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
 	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
 	p.Services[0].PostUp = postUpText
+	p.Services[0].PostUpFile = "post-up-web.sh"
 	// the name of the second script is too long for the file system: it fails after the first one was written
-	p.Services[1].Name = strings.Repeat("a", 250)
+	p.Services[1].PostUpFile = "post-up-" + strings.Repeat("a", 250) + ".sh"
 	p.Services[1].PostUp = postUpText
 
 	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
@@ -1048,11 +1054,89 @@ func TestWriteRefusesAScriptNameWithASeparator(t *testing.T) {
 	src := filepath.Join(dir, "src")
 	put(t, filepath.Join(src, "web"), "b", 0o755)
 	p := postUpPlan(src)
-	p.Services[0].Name = "../x"
+	p.Services[0].PostUpFile = "../x"
 	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err == nil || !strings.Contains(err.Error(), "script name") {
 		t.Fatalf("error = %v", err)
 	}
 	if exists(filepath.Join(dir, "home")) || exists(filepath.Join(dir, "compose.yaml")) {
 		t.Error("something was written")
+	}
+}
+
+func TestWriteForceRemovesTheScriptOfAnEarlierRunWhenThereIsNone(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarker+"\n", 0o755)
+	mine := filepath.Join(dir, "post-up-other.sh")
+	put(t, mine, "#!/bin/sh\necho mine\n", 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	p2 := onePlan(filepath.Join(dir, "src2"))
+	put(t, filepath.Join(dir, "src2", "web"), "b", 0o755)
+	p2.Services[0].PostUpFile = "post-up-other.sh"
+
+	written, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists(stale) {
+		t.Error("the script of the earlier run is still there")
+	}
+	for _, w := range written {
+		if strings.Contains(w, "post-up") {
+			t.Errorf("a script is listed as written: %v", written)
+		}
+	}
+	for _, n := range names(t, dir) {
+		if strings.Contains(n, "stale") {
+			t.Errorf("a moved-aside file is left: %s", n)
+		}
+	}
+	// a file that is not ours is never removed
+	if _, err := Write(p2, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, mine) != "#!/bin/sh\necho mine\n" {
+		t.Error("a script of the user was removed")
+	}
+}
+
+func TestWriteWithoutForceLeavesTheOldScript(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarker+"\n", 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(stale) {
+		t.Error("the old script was removed without force")
+	}
+}
+
+func TestWriteRollbackPutsTheOldScriptBack(t *testing.T) {
+	dir := t.TempDir()
+	src1, src2 := filepath.Join(dir, "src1"), filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	old := "#!/bin/sh\n# " + plan.PostUpMarker + "\n"
+	put(t, stale, old, 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	p.Services[1].PostUpFile = "post-up-" + strings.Repeat("a", 250) + ".sh"
+	p.Services[1].PostUp = postUpText
+
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err == nil {
+		t.Fatal("no error")
+	}
+	if read(t, stale) != old {
+		t.Errorf("the old script was not put back: %v", names(t, dir))
 	}
 }
