@@ -308,7 +308,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Note, "hub result", "it was not run on nanos here: it is not known whether the package starts and answers"),
 	}
 	if len(droppedArgs) > 0 {
-		items = append(items, u.item(plan.Unsupported, "hub arguments", "the arguments of the program of your image and compose file are not used, the package starts with its own ("+strings.Join(m.Args, " ")+"); "+fmt.Sprintf("%d %s dropped, not printed: they can hold a secret", len(droppedArgs), plural(len(droppedArgs), "argument was", "arguments were"))))
+		items = append(items, u.item(plan.Unsupported, "hub arguments", "the arguments of the program of your image and compose file are not used, the package starts with its own ("+strings.Join(m.Args, " ")+"): "+strings.Join(droppedArgs, " ")))
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
