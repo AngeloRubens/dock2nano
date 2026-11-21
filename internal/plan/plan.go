@@ -48,6 +48,16 @@ type Service struct {
 	Sysroot string
 	// Manifest is written as package.manifest.
 	Manifest Manifest
+	// PostUp is the text of a shell script that the user runs after "ops compose
+	// up", or empty. The writer puts it next to compose.yaml, as PostUpName says,
+	// with mode 0755. Nothing runs it but the user.
+	PostUp string
+}
+
+// PostUpName is the file name of the script that the user runs after "ops
+// compose up" for a service.
+func PostUpName(service string) string {
+	return "post-up-" + service + ".sh"
 }
 
 // Manifest is the part of the ops configuration (types.Config) that a package

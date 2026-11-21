@@ -44,6 +44,15 @@ type Required struct {
 	// the note needs; the note names it as {HUB_FACTS}.
 	PackageFacts map[string]string `yaml:"package_facts,omitempty"`
 
+	// PostUpScript is the text of a POSIX shell script that the user runs after
+	// "ops compose up" and that does what the entrypoint of the image does and
+	// the package does not. It is written with the same placeholders and
+	// sections as entrypoint_note, with :lit and :sh besides :ident, and with
+	// {HUB_SERVICE}. The script has one line that starts with "ensure '" for each
+	// thing it creates; when the text filled for a service has none, no script
+	// is written. Empty means there is no script.
+	PostUpScript string `yaml:"post_up_script,omitempty"`
+
 	// RestartNote is added to the report of the restart policy of a service
 	// that uses a package of this row. Empty means nothing is added.
 	RestartNote string `yaml:"restart_note,omitempty"`
@@ -81,21 +90,27 @@ func ParseRequired(data []byte) ([]Required, error) {
 				}
 			}
 		}
-		if r.EntrypointNote != "" {
-			if err := ValidateNote(r.EntrypointNote); err != nil {
-				return nil, fmt.Errorf("row %d of the table of required builds: entrypoint_note: %w", i+1, err)
+		for field, note := range map[string]string{"entrypoint_note": r.EntrypointNote, "post_up_script": r.PostUpScript} {
+			if note == "" {
+				continue
 			}
-			for name, field := range NoteFixed {
-				if !NoteUses(r.EntrypointNote, name) {
+			if err := ValidateNote(note); err != nil {
+				return nil, fmt.Errorf("row %d of the table of required builds: %s: %w", i+1, field, err)
+			}
+			if field == "post_up_script" && !strings.HasPrefix(note, "#!/bin/sh\n") {
+				return nil, fmt.Errorf("row %d of the table of required builds: post_up_script must start with the line #!/bin/sh", i+1)
+			}
+			for name, src := range NoteFixed {
+				if !NoteUses(note, name) {
 					continue
 				}
 				have := r.Superusers
-				if field == "package_facts" {
+				if src == "package_facts" {
 					have = r.PackageFacts
 				}
 				for _, p := range r.Packages {
 					if have[p] == "" {
-						return nil, fmt.Errorf("row %d of the table of required builds: the note uses {%s}, so %s needs an entry for %q", i+1, name, field, p)
+						return nil, fmt.Errorf("row %d of the table of required builds: %s uses {%s}, so %s needs an entry for %q", i+1, field, name, src, p)
 					}
 				}
 			}

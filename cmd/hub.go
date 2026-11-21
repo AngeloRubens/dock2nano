@@ -272,8 +272,9 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 		si.HubItems = append(si.HubItems, hubNote(name, "command", "the package of the hub does not run the command of --command"))
 	}
 	si.HubRestartNote = row.RestartNote
-	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, ComposeEnv: hc.composeEnv, EnvUncertain: hc.envUncertain, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], PackageFacts: row.PackageFacts[pkg.Ref()], Recipe: rec}
+	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, ComposeEnv: hc.composeEnv, EnvUncertain: hc.envUncertain, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], PackageFacts: row.PackageFacts[pkg.Ref()], PostUpScript: row.PostUpScript, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
+	si.PostUp = gen.PostUpScript(use, obs)
 	return nil
 }
 
