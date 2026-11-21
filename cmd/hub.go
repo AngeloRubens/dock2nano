@@ -6,8 +6,8 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/AngeloRubens/dock2nano/internal/compose"
