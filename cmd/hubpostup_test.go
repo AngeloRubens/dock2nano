@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,30 +9,39 @@ import (
 	"testing"
 
 	"github.com/AngeloRubens/dock2nano/internal/output"
+	"github.com/AngeloRubens/dock2nano/internal/plan"
 )
 
+// The compose name of the service differs from its package name (my_db is the
+// package my-db), because ops names the instance after the package.
+const myDB = "services:\n  my_db:\n    image: postgres:16\n    environment:\n"
+
 func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testing.T) {
-	h := pgWhole(t, "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_DB: example\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: hunter2\n", nil)
+	h := pgWhole(t, myDB+"      POSTGRES_DB: example\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: hunter2\n", nil)
 	if len(h.plan.Services) != 1 {
 		t.Fatalf("services: %+v", h.plan.Services)
 	}
-	script := h.plan.Services[0].PostUp
-	for _, want := range []string{"#!/bin/sh\n", `'CREATE ROLE "app" LOGIN SUPERUSER'`, `'CREATE DATABASE "example" OWNER "app"'`, "service='db'", "-U 'postgres'"} {
+	svc := h.plan.Services[0]
+	script := svc.PostUp
+	for _, want := range []string{"#!/bin/sh\n", `'CREATE ROLE "app" LOGIN SUPERUSER'`, `'CREATE DATABASE "example" OWNER "app"'`, "instance='my-db'", "ops instance logs \"$instance\"", "-U 'postgres'", plan.PostUpMarker} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q:\n%s", want, script)
 		}
 	}
-	if strings.Contains(script, "hunter2") {
-		t.Errorf("the password is in the script:\n%s", script)
+	if strings.Contains(script, "my_db") || strings.Contains(script, "hunter2") {
+		t.Errorf("the compose name or the password is in the script:\n%s", script)
+	}
+	if svc.PostUpFile != "post-up-my-db.sh" {
+		t.Errorf("file name %q", svc.PostUpFile)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"post-up-db.sh", "ops compose up does NOT run it", "run it yourself after ops compose up", "without a password", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand"} {
+	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "hunter2") {
-		t.Errorf("the password is in the report:\n%s", out)
+	if strings.Contains(out, "hunter2") || strings.Contains(out, "was written") {
+		t.Errorf("the report has the password, or says a file was written before it was:\n%s", out)
 	}
 
 	// the real writer puts it next to compose.yaml, executable
@@ -48,7 +58,7 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "post-up-db.sh")
+	path := filepath.Join(dir, "post-up-my-db.sh")
 	if len(written) != 3 || written[2] != path {
 		t.Fatalf("written: %v", written)
 	}
@@ -63,22 +73,47 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 	}
 }
 
+func TestPostUpScriptIsNotAnnouncedAsWrittenWhenTheWriterFails(t *testing.T) {
+	h := pgWholeStatus(t, myDB+"      POSTGRES_DB: example\n", func(h *hubHarness) {
+		h.app.Write = func(p *plan.Plan, o output.Options) ([]string, error) {
+			return nil, errors.New("disk full")
+		}
+	}, 1)
+	out := h.stdout.String()
+	if strings.Contains(out, "was written") || strings.Contains(out, "Written:") || strings.Contains(out, "then, once") {
+		t.Errorf("the output says a file was written:\n%s", out)
+	}
+	if !strings.Contains(out, "is written next to compose.yaml") {
+		t.Errorf("the report does not announce the script in the future tense:\n%s", out)
+	}
+}
+
 func TestPostgresServiceWithANameWithControlCharactersGetsNoScript(t *testing.T) {
-	h := pgWhole(t, "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_DB: \"a\\nb\"\n", nil)
+	h := pgWhole(t, myDB+"      POSTGRES_DB: \"a\\nb\"\n", nil)
 	if got := h.plan.Services[0].PostUp; got != "" {
 		t.Errorf("a script was made:\n%s", got)
 	}
-	if out := h.stdout.String(); !strings.Contains(out, "No script (post-up-db.sh) was written") || !strings.Contains(out, "control character") {
-		t.Errorf("the report does not say that no script was written:\n%s", out)
+	if out := h.stdout.String(); !strings.Contains(out, "No script is written for it: a name holds a control") || strings.Contains(out, "then, once") {
+		t.Errorf("the report does not say that no script is written:\n%s", out)
 	}
 }
 
 func TestPostgresServiceWithNothingToCreateGetsNoScript(t *testing.T) {
-	h := pgWhole(t, "services:\n  db:\n    image: postgres:16\n", nil)
+	h := pgWhole(t, "services:\n  my_db:\n    image: postgres:16\n", nil)
 	if got := h.plan.Services[0].PostUp; got != "" {
 		t.Errorf("a script was made:\n%s", got)
 	}
-	if out := h.stdout.String(); !strings.Contains(out, "No script (post-up-db.sh) was written") {
+	if out := h.stdout.String(); !strings.Contains(out, "No script is written for it: the names this tool knows give nothing to create") {
+		t.Errorf("%s", out)
+	}
+}
+
+func TestPostgresServiceWithAnEnvironmentThatIsNotCertainGetsNoScript(t *testing.T) {
+	h := pgWhole(t, myDB+"      POSTGRES_DB: example\n    env_file: missing.env\n", nil)
+	if got := h.plan.Services[0].PostUp; got != "" {
+		t.Errorf("a script was made:\n%s", got)
+	}
+	if out := h.stdout.String(); !strings.Contains(out, "No script is written for it: the environment of the service could not be read completely") {
 		t.Errorf("%s", out)
 	}
 }

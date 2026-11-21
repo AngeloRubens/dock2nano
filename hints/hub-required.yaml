@@ -16,15 +16,19 @@
 # [[unless TEST]]...[[end]] do not nest; TEST is terms joined by " and ", each
 # NAMES, NAMES!="text" or NAMES!=OTHER, with "not " before it. HUB_ENV_UNCERTAIN
 # (the environment of the service could not be read completely) and HUB_CONTROL
-# (a name holds control characters) are set by the tool. post_up_script is a
-# shell script written with the same syntax, with {NAME:lit} (a SQL string
-# literal), {NAME:sh} (a word of a shell) and {HUB_SERVICE} (the compose name
-# of the service) besides; it is written next to compose.yaml for the user to
-# run after ops compose up, and only if it holds a line that starts with
-# "ensure '". Shell code in it must not use braces except for a function body
-# with a space after the opening brace. A variable whose name
-# says PASS, PWD, SECRET, TOKEN or KEY is never written. The text is checked
-# when the table is read.
+# (a name holds control or format characters or is not UTF-8) are set by the
+# tool, and so is HUB_TOOLONG (a quoted name is longer than 63 bytes).
+# post_up_script is a shell script written with the same syntax, with
+# {NAME:lit} (a SQL string literal), {NAME:sh} (a word of a shell) and
+# {HUB_INSTANCE} (the name of the instance, the pkg name of compose.yaml)
+# besides, and {{ and }} for literal braces. A brace of shell code that is not a
+# placeholder must have a space or a line break after it (a function body); any
+# other brace is written {{ or }}. No placeholder of the script may name a
+# secret or have a fallback. It is written next to compose.yaml for the user to
+# run after ops compose up, only if it holds a line that starts with "ensure '",
+# and the row needs an entrypoint_note, which announces it. A variable whose
+# name says PASS, PWD, SECRET, TOKEN or KEY is never written. The text is
+# checked when the table is read.
 rows:
   - images: [postgres, postgresql]
     programs: [postgres]
@@ -47,40 +51,52 @@ rows:
       #!/bin/sh
       # Written by dock2nano, to be run by you after "ops compose up": ops compose
       # does not run it. Read it before you run it.
-      # It does what the entrypoint of the postgres image would have done and the
-      # hub package does not: it creates the database named by POSTGRES_DB (and
-      # the role POSTGRES_USER, when that is not the superuser of the package).
-      # It assumes: psql is installed on this machine; the hub package accepts
-      # the superuser {HUB_SUPERUSER:sh} with no password (trust authentication, as measured in
-      # CI for both packages); the database is reachable at the address of the
-      # instance. It writes no password and sends none. A role is created WITHOUT
-      # a password. CREATE ROLE and OWNER were not run in any CI run.
-      # Usage: post-up-service.sh [address of the database]
-      # Without an address it uses the variable DB_HOST, and then the last
-      # "assigned" address in the output of: ops instance logs <service>
+      # It does NOT do all that the entrypoint of the postgres image does (the
+      # password and the files of /docker-entrypoint-initdb.d are not handled). It
+      # creates, each one only if it is absent:
+      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the role POSTGRES_USER, with LOGIN SUPERUSER and WITHOUT a password
+      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the database POSTGRES_DB (else POSTGRES_USER), owned by that role
+      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the database POSTGRES_DB (else POSTGRES_USER)
+      [[end]]# It assumes: psql is installed on this machine, and the server accepts
+      # the superuser {HUB_SUPERUSER:sh} without a password (psql is run with -w: it
+      # fails instead of asking). This script sets no password, ignores PGPASSWORD
+      # and ~/.pgpass, and the statements CREATE ROLE and OWNER were never run
+      # against the package in any CI run.
+      # Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
+      # Without an address it uses PGHOST, and then the last "assigned" address in
+      # the output of: ops instance logs {HUB_INSTANCE}
+      # POSTUP_TRIES is the number of tries to connect, 5 seconds apart (12).
       set -eu
 
-      service={HUB_SERVICE:sh}
+      PGPASSFILE=/dev/null
+      export PGPASSFILE
+      unset PGPASSWORD
+
+      instance={HUB_INSTANCE:sh}
       if [ "$#" -ge 1 ] && [ -n "$1" ]; then
         host=$1
       else
-        host=$(printenv DB_HOST || true)
+        host=${{PGHOST:-}}
       fi
       if [ -z "$host" ]; then
         if ! command -v ops >/dev/null 2>&1; then
-          echo "no address: give it as the first argument or in DB_HOST (ops is not installed here, so it cannot be read from ops instance logs)" >&2
+          echo "no address: give it as the first argument or in PGHOST (ops is not installed here, so it cannot be read from ops instance logs)" >&2
           exit 1
         fi
-        host=$(ops instance logs "$service" 2>/dev/null | grep -o 'assigned [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | tail -n 1 | awk '{print $2}' || true)
+        host=$(ops instance logs "$instance" 2>/dev/null | grep -o 'assigned [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | tail -n 1 | awk '{print $2}' || true)
       fi
       if [ -z "$host" ]; then
-        echo "no address: the console of $service has no assigned address (is it up? ops needs the same OPS_HOME and user as for ops compose up); give the address as the first argument or in DB_HOST" >&2
+        echo "no address: the console of $instance has no assigned address (is it up? ops needs the same OPS_HOME and user as for ops compose up); give the address as the first argument or in PGHOST" >&2
         exit 1
       fi
       if ! command -v psql >/dev/null 2>&1; then
         echo "psql is not installed on this machine: install the client of postgres and run this again" >&2
         exit 1
       fi
+      tries=${{POSTUP_TRIES:-12}}
+      case "$tries" in
+        ''|*[!0-9]*|0) tries=12 ;;
+      esac
 
       psql_su() {
         psql -X -h "$host" -U {HUB_SUPERUSER:sh} -d template1 -w -tA -v ON_ERROR_STOP=1 "$@"
@@ -89,37 +105,47 @@ rows:
       echo "waiting for the database at $host"
       i=0
       ready=0
-      while [ "$i" -lt 12 ]; do
+      while [ "$i" -lt "$tries" ]; do
         if psql_su -c 'SELECT 1' >/dev/null 2>&1; then
           ready=1
           break
         fi
         i=$((i + 1))
-        echo "no answer yet ($i of 12)" >&2
-        if [ "$i" -lt 12 ]; then
+        echo "no answer yet ($i of $tries)" >&2
+        if [ "$i" -lt "$tries" ]; then
           sleep 5
         fi
       done
       if [ "$ready" != 1 ]; then
-        echo "the database at $host did not answer after 12 tries, 5 seconds apart; last answer:" >&2
+        echo "the database at $host did not answer after $tries tries, 5 seconds apart; last answer:" >&2
         psql_su -c 'SELECT 1' 2>&1 | tail -n 3 >&2 || true
         exit 1
       fi
 
-      # ensure WHAT CHECK CREATE: runs CREATE only when CHECK finds nothing
+      # ensure WHAT CHECK CREATE: runs CREATE only when CHECK finds nothing; when
+      # CREATE fails it looks again, and an object that is there now is a success
       ensure() {
         found=$(psql_su -c "$2") || { echo "failed: could not look for the $1" >&2; exit 1; }
         if [ "$found" = 1 ]; then
           echo "the $1 exists already, nothing done"
           return 0
         fi
-        psql_su -c "$3" >/dev/null || { echo "failed: could not create the $1" >&2; exit 1; }
-        echo "created the $1"
+        if psql_su -c "$3" >/dev/null; then
+          echo "created the $1"
+          return 0
+        fi
+        found=$(psql_su -c "$2" 2>/dev/null) || found=
+        if [ "$found" = 1 ]; then
+          echo "the $1 exists now, nothing more to do"
+          return 0
+        fi
+        echo "failed: could not create the $1" >&2
+        exit 1
       }
 
-      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]ensure 'role' 'SELECT 1 FROM pg_roles WHERE rolname = {POSTGRES_USER:lit}' 'CREATE ROLE {POSTGRES_USER:ident} LOGIN SUPERUSER'
-      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident} OWNER {POSTGRES_USER:ident}'
-      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident}'
+      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]ensure 'role' 'SELECT 1 FROM pg_roles WHERE rolname = {POSTGRES_USER:lit}' 'CREATE ROLE {POSTGRES_USER:ident} LOGIN SUPERUSER'
+      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident} OWNER {POSTGRES_USER:ident}'
+      [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident}'
       [[end]]
       echo "done"
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads

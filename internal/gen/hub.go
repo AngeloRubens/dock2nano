@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/AngeloRubens/dock2nano/internal/hub"
 	"github.com/AngeloRubens/dock2nano/internal/observe"
@@ -65,6 +66,10 @@ type HubUse struct {
 	// "ops compose up", from the row of the required builds; empty when the row
 	// has none.
 	PostUpScript string
+
+	// Instance is the name of the instance that ops gives the service: the pkg
+	// name of compose.yaml. Empty means the compose name of the service.
+	Instance string
 
 	// Recipe is what was read from the package.
 	Recipe *hub.Recipe
@@ -353,7 +358,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		env, fixed := noteInputs(u, obs)
 		msg := "the entrypoint of your image does not run with the package of the hub: " + fillPlaceholders(u.EntrypointNote, env, fixed)
 		if u.PostUpScript != "" {
-			msg += " " + postUpSaid(u, PostUpScript(u, obs))
+			msg += " " + postUpSaid(u, obs)
 		}
 		items = append(items, u.item(plan.Unsupported, "hub entrypoint", msg))
 	}
@@ -375,7 +380,11 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 // noteInputs are the environment and the fixed variables a note or a script of
 // the row is filled with.
 func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
-	fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package", "HUB_SERVICE": u.Service}
+	instance := u.Instance
+	if instance == "" {
+		instance = u.Service
+	}
+	fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package", "HUB_INSTANCE": instance}
 	if u.Superuser != "" {
 		fixed["HUB_SUPERUSER"] = u.Superuser
 	}
@@ -393,34 +402,70 @@ func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
 }
 
 // createsRe finds the lines of a filled script that create something.
-var createsRe = regexp.MustCompile(`(?m)^ensure '`)
+var createsRe = regexp.MustCompile(`(?m)^ensure '(role|database)'`)
 
-// PostUpScript is the script that the user runs after "ops compose up": the
-// template of the row filled for the service. It is empty when the row has no
-// template, or when the names of the environment give nothing to create (or a
-// name holds a control character, which is not quoted for a shell or for SQL).
-// It is called after ApplyHubWhole, so that obs.Env is the one of the package.
-func PostUpScript(u HubUse, obs *observe.Result) string {
+// postUp fills the script of the row for the service and says why there is
+// none: the second result is "" when there is a script, or when the row has
+// none (nothing is said then), and the reason otherwise. The instance is the
+// name of the package in compose.yaml, which ops gives the instance.
+func postUp(u HubUse, obs *observe.Result) (script, why string) {
 	// without a note the report has no item that says the script exists
 	if u.PostUpScript == "" || u.EntrypointNote == "" {
-		return ""
+		return "", ""
+	}
+	if u.Superuser == "" {
+		return "", "the superuser of the package is not known"
+	}
+	if u.EnvUncertain {
+		return "", "the environment of the service could not be read completely (see the other items), so the names of the database and the role are not certain"
 	}
 	env, fixed := noteInputs(u, obs)
-	text := fillText(u.PostUpScript, env, fixed, false)
-	if !createsRe.MatchString(text) {
-		return ""
+	have := noteHave(u.PostUpScript, env, fixed)
+	switch {
+	case have["HUB_BADUTF8"] != "":
+		return "", "a name is not valid UTF-8, and quoting it would make another name"
+	case have["HUB_CONTROL"] != "":
+		return "", "a name holds a control or format character (a line break, a tab, a right-to-left mark), and quoting it would make another name"
+	case have["HUB_TOOLONG"] != "":
+		return "", "a name is longer than 63 bytes, which postgres would cut to another name"
 	}
-	return text
+	text := fillText(u.PostUpScript, env, fixed, false)
+	for _, bad := range []string{"<your ", notShown, "<a name with control"} {
+		if strings.Contains(text, bad) {
+			return "", "the script needs a value that is not set here (or is a secret, which is never written)"
+		}
+	}
+	if !createsRe.MatchString(text) {
+		return "", "the names this tool knows give nothing to create"
+	}
+	return text, ""
 }
 
-// postUpSaid is what the entrypoint item says of the script. The tool does not
-// run it and ops compose does not either.
-func postUpSaid(u HubUse, script string) string {
-	name := plan.PostUpName(u.Service)
+// PostUpScript is the script that the user runs after "ops compose up": the
+// template of the row filled for the service (see postUp), "" when there is
+// none. u.Instance is the name of the instance. It is called after
+// ApplyHubWhole, so that obs.Env is the one of the package.
+func PostUpScript(u HubUse, obs *observe.Result) string {
+	s, _ := postUp(u, obs)
+	return s
+}
+
+// postUpSaid is what the entrypoint item says of the script. It does not say
+// that a file was written: the items are made before the files are, and the
+// list of the written files is what says it.
+func postUpSaid(u HubUse, obs *observe.Result) string {
+	script, why := postUp(u, obs)
 	if script == "" {
-		return "No script (" + name + ") was written for it: either there is nothing to create from the names this tool knows, or a name holds a control character."
+		return "No script is written for it: " + why + "."
 	}
-	return "A script was written next to compose.yaml, " + name + ", which creates what the entrypoint would have created (the database, and the role when POSTGRES_USER is not the superuser). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up (the address of the instance is taken from ops instance logs, or pass it as the first argument or in DB_HOST). It needs psql on your machine, asks for no password and writes none, and creates the role without a password. It was not run against the package by this tool."
+	var what []string
+	if strings.Contains(script, "\nensure 'role'") {
+		what = append(what, "the role POSTGRES_USER, without a password")
+	}
+	if strings.Contains(script, "\nensure 'database'") {
+		what = append(what, "the database")
+	}
+	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the password, the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up. It needs psql on your machine, and sets no password. It was not run against the package by this tool."
 }
 
 // argsAfterName is the arguments of a command line without its first word.
@@ -462,15 +507,7 @@ func dropFileWarnings(ws []string) []string {
 
 // secretName tells whether the name of a variable says that it holds a secret.
 // The value of such a variable is never written into a note.
-func secretName(name string) bool {
-	u := strings.ToUpper(name)
-	for _, w := range []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "PASS", "PWD"} {
-		if strings.Contains(u, w) {
-			return true
-		}
-	}
-	return false
-}
+func secretName(name string) bool { return hub.SecretName(name) }
 
 // notShown stands in a note for the value of a variable that holds a secret.
 const notShown = "<not shown>"
@@ -548,7 +585,7 @@ func plainText(v string) string {
 			b.WriteString(`\r`)
 		case r == '\t':
 			b.WriteString(`\t`)
-		case unicode.IsControl(r) || r == 0x2028 || r == 0x2029:
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029:
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
@@ -596,25 +633,60 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 // fillText is fillPlaceholders; squeeze says whether runs of spaces become one
 // space and the text is trimmed (a note is prose, a script keeps its layout).
 func fillText(note string, env []string, fixed map[string]string, squeeze bool) string {
+	// {{ and }} are literal braces: they are put aside while the text is read
+	note = strings.ReplaceAll(strings.ReplaceAll(note, "{{", "\x01"), "}}", "\x02")
+	have := noteHave(note, env, fixed)
+	text := fillWith(note, have, squeeze)
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\x01", "{"), "\x02", "}")
+}
+
+// maxIdent is the longest name that postgres keeps (63 bytes); a longer one is
+// cut, and the cut name is another name.
+const maxIdent = 63
+
+// noteHave is the variables a note is filled from: the environment (the last
+// entry of a name wins, and an empty value unsets the name, as the entrypoint
+// of the image reads it), then the fixed ones. It also sets the flags of the
+// tool: HUB_CONTROL (a name that is quoted holds a control or format character
+// or is not UTF-8, so quoting it would make another name), HUB_BADUTF8 (the
+// last case) and HUB_TOOLONG (a quoted name longer than 63 bytes).
+func noteHave(note string, env []string, fixed map[string]string) map[string]string {
 	have := map[string]string{}
 	for _, e := range env {
 		// the names the tool fills itself (HUB_...) are never read from the environment
-		if k, v, ok := strings.Cut(e, "="); ok && v != "" && !strings.HasPrefix(k, "HUB_") {
-			have[k] = v
+		if k, v, ok := strings.Cut(e, "="); ok && !strings.HasPrefix(k, "HUB_") {
+			if v == "" {
+				delete(have, k)
+			} else {
+				have[k] = v
+			}
 		}
 	}
 	for k, v := range fixed {
 		have[k] = v
 	}
-	// a name that plainText would change cannot be written as an identifier
-	// without making another name: no command is printed for it
 	for _, m := range bracesRe.FindAllStringSubmatch(note, -1) {
 		if sub := placeholderRe.FindStringSubmatch(m[1]); sub != nil && sub[2] != "" {
-			if v, ok := firstSet(have, sub[1]); ok && plainText(v) != v {
+			v, ok := firstSet(have, sub[1])
+			if !ok {
+				continue
+			}
+			if !utf8.ValidString(v) {
+				have["HUB_BADUTF8"] = "yes"
 				have["HUB_CONTROL"] = "yes"
+			} else if plainText(v) != v {
+				have["HUB_CONTROL"] = "yes"
+			}
+			if len(v) > maxIdent {
+				have["HUB_TOOLONG"] = "yes"
 			}
 		}
 	}
+	return have
+}
+
+// fillWith is the second half of fillText.
+func fillWith(note string, have map[string]string, squeeze bool) string {
 	note = sectionRe.ReplaceAllStringFunc(note, func(m string) string {
 		sub := sectionRe.FindStringSubmatch(m)
 		if condition(have, strings.TrimSpace(sub[2])) == (sub[1] == "if") {

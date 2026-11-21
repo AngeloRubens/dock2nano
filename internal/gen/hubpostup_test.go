@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/AngeloRubens/dock2nano/internal/hub"
+	"github.com/AngeloRubens/dock2nano/internal/plan"
 )
 
 // postUpUse is the use of a package with the note, the superuser and the script
@@ -56,8 +57,8 @@ func syntaxOK(t *testing.T, script string) {
 func TestPostUpScriptCreatesTheDatabaseAsTheSuperuserOfFrancescolavra(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
 	for _, want := range []string{
-		"#!/bin/sh\n", "set -eu\n", "Written by dock2nano", "-U 'postgres' -d template1 -w", "[ \"$i\" -lt 12 ]", "sleep 5",
-		"\n  host=$1\n", "command -v psql", "ops instance logs \"$service\"", "service='db'",
+		"#!/bin/sh\n", "set -eu\n", "Written by dock2nano", "-U 'postgres' -d template1 -w", "[ \"$i\" -lt \"$tries\" ]", "sleep 5",
+		"\n  host=$1\n", "command -v psql", "ops instance logs \"$instance\"", "instance='db'", "PGPASSFILE=/dev/null", "unset PGPASSWORD", "host=${PGHOST:-}", "tries=${POSTUP_TRIES:-12}", plan.PostUpMarker,
 		`ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = '\''shop'\''' 'CREATE DATABASE "shop"'` + "\n",
 	} {
 		if !strings.Contains(s, want) {
@@ -132,7 +133,7 @@ func TestPostUpScriptIsNotWrittenForANameWithControlCharacters(t *testing.T) {
 			t.Errorf("%q: a script was written:\n%s", env, s)
 		}
 		e := hubFind(items, "hub entrypoint")
-		if len(e) != 1 || !strings.Contains(e[0].Message, "No script (post-up-db.sh) was written") {
+		if len(e) != 1 || !strings.Contains(e[0].Message, "No script is written for it: a name holds a control") {
 			t.Errorf("%q: the report does not say that no script was written: %+v", env, e)
 		}
 	}
@@ -162,7 +163,14 @@ func TestPostUpScriptIsNotWrittenWhenTheRowHasNoTemplateOrNoNote(t *testing.T) {
 func TestPostUpScriptNeverWritesTheValueOfASecretName(t *testing.T) {
 	u := postUpUse(t, "francescolavra", "postgres", "16.2")
 	u.PostUpScript = "#!/bin/sh\necho {POSTGRES_PASSWORD} {DB_TOKEN:sh} {POSTGRES_PASSWORD,POSTGRES_DB}\nensure 'x' {POSTGRES_DB:lit} y\n"
-	s := postUpFor(t, u, "POSTGRES_DB=shop", "POSTGRES_PASSWORD=hunter2", "DB_TOKEN=tok3n")
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD=hunter2", "DB_TOKEN=tok3n"}
+	env, fixed := noteInputs(u, obs)
+	s := fillText(u.PostUpScript, env, fixed, false)
+	// a script that holds a secret placeholder is not written at all
+	if PostUpScript(u, obs) != "" {
+		t.Error("a script with a secret placeholder was written")
+	}
 	if strings.Contains(s, "hunter2") || strings.Contains(s, "tok3n") || strings.Count(s, notShown) != 3 {
 		t.Errorf("%s", s)
 	}
@@ -176,7 +184,7 @@ func TestEntrypointItemSaysTheScriptIsRunByTheUserAndNotByOps(t *testing.T) {
 	if len(e) != 1 {
 		t.Fatalf("%+v", e)
 	}
-	for _, want := range []string{"post-up-db.sh", "next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "without a password", `CREATE DATABASE "shop"`} {
+	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
 		if !strings.Contains(e[0].Message, want) {
 			t.Errorf("the item lacks %q: %s", want, e[0].Message)
 		}
@@ -212,10 +220,12 @@ func fakes(t *testing.T) (bin, log string) {
 	}
 	psql := `#!/bin/sh
 printf '%s\n' "psql $*" >> "$LOG"
+printf '%s\n' "env PGPASSFILE=${PGPASSFILE-} PGPASSWORD=${PGPASSWORD-unset}" >> "$LOG"
 if [ -n "${FAKE_FAIL-}" ]; then echo "connection refused" >&2; exit 2; fi
 for a in "$@"; do
   case "$a" in
-    "SELECT 1 FROM"*) if [ -n "${FAKE_FOUND-}" ]; then echo 1; fi ;;
+    "SELECT 1 FROM"*) if [ -n "${FAKE_FOUND-}" ] || [ -e "$LOG.made" ]; then echo 1; fi ;;
+    CREATE*) if [ -n "${FAKE_CREATE_FAILS-}" ]; then : > "$LOG.made"; echo "already exists" >&2; exit 1; fi ;;
   esac
 done
 exit 0
@@ -281,8 +291,8 @@ func TestPostUpScriptTakesTheLastAddressOfTheConsoleWhenNoneIsGiven(t *testing.T
 	if !strings.Contains(log, "ops instance logs db\n") || !strings.Contains(log, "psql -X -h 192.168.33.9 ") || strings.Contains(log, "192.168.33.5") {
 		t.Errorf("%s", log)
 	}
-	// the variable DB_HOST comes before the console
-	_, log, err = runScript(t, s, "", []string{"FAKE_LOGS=assigned 192.168.33.9", "DB_HOST=10.1.1.1"})
+	// the variable PGHOST comes before the console
+	_, log, err = runScript(t, s, "", []string{"FAKE_LOGS=assigned 192.168.33.9", "PGHOST=10.1.1.1"})
 	if err != nil || !strings.Contains(log, "psql -X -h 10.1.1.1 ") || strings.Contains(log, "ops instance") {
 		t.Errorf("%v\n%s", err, log)
 	}
@@ -317,7 +327,118 @@ func TestPostUpScriptTries12TimesAndThenFails(t *testing.T) {
 	if n := strings.Count(log, "sleep 5\n"); n != 11 {
 		t.Errorf("%d sleeps of 5 seconds, want 11:\n%s", n, log)
 	}
+	// POSTUP_TRIES changes the number of tries; a value that is not a number is not used
+	_, log, _ = runScript(t, s, "", []string{"FAKE_FAIL=1", "POSTUP_TRIES=3"}, "10.0.0.7")
+	if n := strings.Count(log, "-c SELECT 1\n"); n != 4 {
+		t.Errorf("POSTUP_TRIES=3: psql asked %d times, want 4:\n%s", n, log)
+	}
+	_, log, _ = runScript(t, s, "", []string{"FAKE_FAIL=1", "POSTUP_TRIES=x"}, "10.0.0.7")
+	if n := strings.Count(log, "-c SELECT 1\n"); n != 13 {
+		t.Errorf("POSTUP_TRIES=x: psql asked %d times, want 13:\n%s", n, log)
+	}
 	if strings.Contains(log, "CREATE") {
 		t.Errorf("%s", log)
+	}
+}
+
+func TestPostUpScriptTakesAnObjectThatAppearedDuringTheCreateAsDone(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	out, log, err := runScript(t, s, "", []string{"FAKE_CREATE_FAILS=1"}, "10.0.0.7")
+	if err != nil || !strings.Contains(out, "exists now") {
+		t.Errorf("%v\n%s\n%s", err, out, log)
+	}
+}
+
+func TestPostUpScriptFailsWhenTheCreateFailsAndTheObjectIsNotThere(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	// the fake that fails the create and never shows the object
+	sh := needSh(t)
+	bin, log := fakes(t)
+	if err := os.WriteFile(filepath.Join(bin, "psql"), []byte("#!/bin/sh\ncase \"$*\" in *CREATE*) exit 1;; esac\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "p.sh")
+	os.WriteFile(f, []byte(s), 0o755)
+	cmd := exec.Command(sh, f, "10.0.0.7")
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "LOG=" + log}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "could not create the database") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestPostUpScriptIgnoresThePasswordOfTheEnvironmentAndTheFileOfPasswords(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	out, log, err := runScript(t, s, "", []string{"PGPASSWORD=hunter2", "PGPASSFILE=/home/me/.pgpass"}, "10.0.0.7")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(log, "env PGPASSFILE=/dev/null PGPASSWORD=unset") || strings.Contains(log, "hunter2") || strings.Contains(log, ".pgpass") {
+		t.Errorf("%s", log)
+	}
+}
+
+func TestPostUpScriptUsesTheNameOfTheInstanceAndNotTheComposeName(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.Service, u.Instance = "my_db", "my-db"
+	s := postUpFor(t, u, "POSTGRES_DB=shop")
+	if !strings.Contains(s, "instance='my-db'") || strings.Contains(s, "my_db") || !strings.Contains(s, "# Usage: post-up-my-db.sh ") {
+		t.Errorf("%s", s)
+	}
+}
+
+func TestPostUpScriptIsNotWrittenForANameThatIsTooLongOrNotAName(t *testing.T) {
+	for _, c := range []struct{ env, say string }{
+		{"POSTGRES_DB=" + strings.Repeat("a", 64), "longer than 63 bytes"},
+		{"POSTGRES_USER=" + strings.Repeat("é", 32), "longer than 63 bytes"},
+		{"POSTGRES_DB=a\u202eb", "control or format character"},
+		{"POSTGRES_DB=a\u200bb", "control or format character"},
+		{"POSTGRES_DB=a\xffb", "not valid UTF-8"},
+	} {
+		u := postUpUse(t, "francescolavra", "postgres", "16.2")
+		obs := hubWholeObs()
+		obs.Env = []string{c.env}
+		items := ApplyHubWhole(u, obs)
+		if s := PostUpScript(u, obs); s != "" {
+			t.Errorf("%q: a script was made:\n%s", c.env, s)
+		}
+		e := hubFind(items, "hub entrypoint")
+		if len(e) != 1 || !strings.Contains(e[0].Message, "No script is written for it: ") || !strings.Contains(e[0].Message, c.say) {
+			t.Errorf("%q: %+v", c.env, e)
+		}
+	}
+	// 63 bytes is the longest name that is kept
+	if s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB="+strings.Repeat("a", 63)); s == "" {
+		t.Error("a name of 63 bytes was refused")
+	}
+}
+
+func TestPostUpScriptReadsAnEmptyValueOfTheComposeFileAsUnset(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.ImageEnv = []string{"POSTGRES_DB=foo"}
+	u.ComposeEnv = []string{"POSTGRES_DB=", "POSTGRES_USER=app"}
+	s := postUpFor(t, u)
+	if !strings.Contains(s, `'CREATE DATABASE "app" OWNER "app"'`) || strings.Contains(s, "foo") {
+		t.Errorf("%s", s)
+	}
+}
+
+func TestPostUpScriptIsNotWrittenWhenTheEnvironmentIsNotCertain(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.EnvUncertain = true
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop"}
+	items := ApplyHubWhole(u, obs)
+	if s := PostUpScript(u, obs); s != "" {
+		t.Errorf("a script was made:\n%s", s)
+	}
+	if e := hubFind(items, "hub entrypoint"); len(e) != 1 || !strings.Contains(e[0].Message, "No script is written for it: the environment of the service could not be read completely") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestFillTextKeepsLiteralBraces(t *testing.T) {
+	if got := fillText("a ${{X:-}} {{b}} {A}", []string{"A=1"}, nil, false); got != "a ${X:-} {b} 1" {
+		t.Errorf("%q", got)
 	}
 }

@@ -274,7 +274,7 @@ func (a *App) hubWhole(ctx context.Context, o *options, rs *runState, hc hubCase
 	si.HubRestartNote = row.RestartNote
 	use := gen.HubUse{Service: name, Package: pkg, Level: level, Wanted: hc.wanted, ImageEnv: hc.env, ComposeEnv: hc.composeEnv, EnvUncertain: hc.envUncertain, Why: row.Reason, EntrypointNote: row.EntrypointNote, Superuser: row.Superusers[pkg.Ref()], PackageFacts: row.PackageFacts[pkg.Ref()], PostUpScript: row.PostUpScript, Recipe: rec}
 	si.HubItems = append(si.HubItems, gen.ApplyHubWhole(use, obs)...)
-	si.PostUp = gen.PostUpScript(use, obs)
+	si.PostUpUse = &use
 	return nil
 }
 
