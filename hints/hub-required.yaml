@@ -35,7 +35,8 @@ rows:
         postgres without -d; CREATE DATABASE worked).
       eyberg/postgresql: >-
         In eyberg/postgresql 11.3.0 there is no database named eyberg, which
-        psql uses by default for the user eyberg, so -d is needed.
+        psql uses by default for the user eyberg, so -d is needed (list of
+        databases, run 44910340290).
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
     restart_note: >-
       A restart of the same disk was seen failing: after an unclean stop (the
