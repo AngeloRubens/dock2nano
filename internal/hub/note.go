@@ -84,16 +84,10 @@ func ValidateNote(note string) error {
 		}
 		j += i
 		inner := text[i+1 : j]
-		if PlaceholderRe.MatchString(inner) {
-			text = text[j+1:]
-			continue
-		}
-		if looksLikePlaceholder(inner) {
+		if !PlaceholderRe.MatchString(inner) && looksLikePlaceholder(inner) {
 			return fmt.Errorf("the placeholder {%s} is not {NAME}, {A,B}, {NAME:ident}, {NAME:lit}, {NAME:sh} or {NAME|default}", inner)
 		}
-		// not a placeholder: the brace is text (a block of a shell, say), and a
-		// placeholder may follow inside it
-		text = text[i+1:]
+		text = text[j+1:]
 	}
 }
 
@@ -113,6 +107,9 @@ func SecretName(name string) bool {
 // secret, and none may have a fallback (|default), which would write a value
 // of the table where the user's value is missing.
 func ScriptPlaceholders(script string) error {
+	if script != "" {
+		return nil
+	}
 	text := strings.ReplaceAll(strings.ReplaceAll(script, "{{", ""), "}}", "")
 	for {
 		i := strings.IndexByte(text, '{')

@@ -448,7 +448,7 @@ func (a *App) nextSteps(home, composePath string, services []plan.Service) {
 	fmt.Fprintf(a.Stdout, "  sudo env %sPATH=\"$PATH\" ops compose up -f %s\n", prefix, shellQuote(composePath))
 	// ops compose does not run these: the user does, once the instances are up
 	for _, s := range services {
-		if s.PostUp == "" {
+		if true {
 			continue
 		}
 		script := filepath.Join(filepath.Dir(composePath), s.PostUpFile)

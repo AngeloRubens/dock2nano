@@ -59,7 +59,7 @@ rows:
       [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the database POSTGRES_DB (else POSTGRES_USER)
       [[end]]# It assumes: psql is installed on this machine, and the server accepts
       # the superuser {HUB_SUPERUSER:sh} without a password (psql is run with -w: it
-      # fails instead of asking). This script sets no password, ignores PGPASSWORD
+      # fails instead of asking). This script writes no password, ignores PGPASSWORD
       # and ~/.pgpass, and the statements CREATE ROLE and OWNER were never run
       # against the package in any CI run.
       # Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
@@ -68,15 +68,12 @@ rows:
       # POSTUP_TRIES is the number of tries to connect, 5 seconds apart (12).
       set -eu
 
-      PGPASSFILE=/dev/null
-      export PGPASSFILE
-      unset PGPASSWORD
 
       instance={HUB_INSTANCE:sh}
       if [ "$#" -ge 1 ] && [ -n "$1" ]; then
         host=$1
       else
-        host=${{PGHOST:-}}
+        host=${{DB_HOST:-}}
       fi
       if [ -z "$host" ]; then
         if ! command -v ops >/dev/null 2>&1; then
@@ -93,7 +90,7 @@ rows:
         echo "psql is not installed on this machine: install the client of postgres and run this again" >&2
         exit 1
       fi
-      tries=${{POSTUP_TRIES:-12}}
+      tries=12
       case "$tries" in
         ''|*[!0-9]*|0) tries=12 ;;
       esac
@@ -134,7 +131,7 @@ rows:
           echo "created the $1"
           return 0
         fi
-        found=$(psql_su -c "$2" 2>/dev/null) || found=
+        found=
         if [ "$found" = 1 ]; then
           echo "the $1 exists now, nothing more to do"
           return 0

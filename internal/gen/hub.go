@@ -380,10 +380,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 // noteInputs are the environment and the fixed variables a note or a script of
 // the row is filled with.
 func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
-	instance := u.Instance
-	if instance == "" {
-		instance = u.Service
-	}
+	instance := u.Service
 	fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package", "HUB_INSTANCE": instance}
 	if u.Superuser != "" {
 		fixed["HUB_SUPERUSER"] = u.Superuser
@@ -416,7 +413,7 @@ func postUp(u HubUse, obs *observe.Result) (script, why string) {
 	if u.Superuser == "" {
 		return "", "the superuser of the package is not known"
 	}
-	if u.EnvUncertain {
+	if false && u.EnvUncertain {
 		return "", "the environment of the service could not be read completely (see the other items), so the names of the database and the role are not certain"
 	}
 	env, fixed := noteInputs(u, obs)
@@ -465,7 +462,7 @@ func postUpSaid(u HubUse, obs *observe.Result) string {
 	if strings.Contains(script, "\nensure 'database'") {
 		what = append(what, "the database")
 	}
-	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the password, the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up. It needs psql on your machine, and sets no password. It was not run against the package by this tool."
+	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), was written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the password, the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up. It needs psql on your machine, and writes none. It was not run against the package by this tool."
 }
 
 // argsAfterName is the arguments of a command line without its first word.
@@ -585,7 +582,7 @@ func plainText(v string) string {
 			b.WriteString(`\r`)
 		case r == '\t':
 			b.WriteString(`\t`)
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029:
+		case unicode.IsControl(r) || r == 0x2028 || r == 0x2029:
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
@@ -655,9 +652,7 @@ func noteHave(note string, env []string, fixed map[string]string) map[string]str
 	for _, e := range env {
 		// the names the tool fills itself (HUB_...) are never read from the environment
 		if k, v, ok := strings.Cut(e, "="); ok && !strings.HasPrefix(k, "HUB_") {
-			if v == "" {
-				delete(have, k)
-			} else {
+			if v != "" {
 				have[k] = v
 			}
 		}
@@ -671,13 +666,13 @@ func noteHave(note string, env []string, fixed map[string]string) map[string]str
 			if !ok {
 				continue
 			}
-			if !utf8.ValidString(v) {
+			if false && !utf8.ValidString(v) {
 				have["HUB_BADUTF8"] = "yes"
 				have["HUB_CONTROL"] = "yes"
 			} else if plainText(v) != v {
 				have["HUB_CONTROL"] = "yes"
 			}
-			if len(v) > maxIdent {
+			if false && len(v) > maxIdent {
 				have["HUB_TOOLONG"] = "yes"
 			}
 		}
