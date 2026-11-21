@@ -68,6 +68,10 @@ type ServiceInput struct {
 	// restart policy. Empty when the row says nothing.
 	HubRestartNote string
 
+	// PostUp is the text of the script that the user runs after "ops compose
+	// up" (see PostUpScript); empty when there is none.
+	PostUp string
+
 	// MinVolume is the least size of the writable volume the hub recipe for the
 	// program asks for ("200m"); empty when there is none.
 	MinVolume string
@@ -398,7 +402,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 		m.BaseVolumeSz = volumeAtLeast(m.BaseVolumeSz, si.MinVolume)
 		g.add(s.Name, plan.Note, "hub volume", "the table of this tool (hints/hub-tables.yaml) asks for a writable volume of at least "+si.MinVolume+" for this program ("+si.MinVolumeEvidence+"; the size is the total size of the volume, not a measure of free space, and was seen for that one version only); the package has "+m.BaseVolumeSz)
 	}
-	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m}, nil
+	return &plan.Service{Name: s.Name, Sysroot: obs.Sysroot, Manifest: m, PostUp: si.PostUp}, nil
 }
 
 func (g *generator) replicas(s *compose.Service) {

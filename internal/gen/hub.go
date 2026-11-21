@@ -61,6 +61,11 @@ type HubUse struct {
 	// name it as {HUB_SUPERUSER}.
 	Superuser string
 
+	// PostUpScript is the template of the script that the user runs after
+	// "ops compose up", from the row of the required builds; empty when the row
+	// has none.
+	PostUpScript string
+
 	// Recipe is what was read from the package.
 	Recipe *hub.Recipe
 }
@@ -345,21 +350,12 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	}
 	items = append(items, hubCredentials(u)...)
 	if u.EntrypointNote != "" {
-		fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package"}
-		if u.Superuser != "" {
-			fixed["HUB_SUPERUSER"] = u.Superuser
+		env, fixed := noteInputs(u, obs)
+		msg := "the entrypoint of your image does not run with the package of the hub: " + fillPlaceholders(u.EntrypointNote, env, fixed)
+		if u.PostUpScript != "" {
+			msg += " " + postUpSaid(u, PostUpScript(u, obs))
 		}
-		if u.PackageFacts != "" {
-			fixed["HUB_FACTS"] = u.PackageFacts
-		}
-		if u.EnvUncertain {
-			fixed["HUB_ENV_UNCERTAIN"] = "yes"
-		}
-		// the image first, the observed environment over it, what the compose file
-		// gives the service over both: the order in which the manifest gets them
-		env := append(slices.Clone(u.ImageEnv), obs.Env...)
-		env = append(env, u.ComposeEnv...)
-		items = append(items, u.item(plan.Unsupported, "hub entrypoint", "the entrypoint of your image does not run with the package of the hub: "+fillPlaceholders(u.EntrypointNote, env, fixed)))
+		items = append(items, u.item(plan.Unsupported, "hub entrypoint", msg))
 	}
 	items = append(items, hubNotApplied(u, true)...)
 	if u.Recipe.Skipped > 0 {
@@ -374,6 +370,57 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		items = append(items, u.item(plan.Unsupported, "hub data", "DATA VOLUMES ARE NOT COMPATIBLE: this build is the nearest of the hub, and its version is in another major series than the one of your image ("+u.versions()+"); data written by your version cannot be read by it"))
 	}
 	return items
+}
+
+// noteInputs are the environment and the fixed variables a note or a script of
+// the row is filled with.
+func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
+	fixed := map[string]string{"HUB_SUPERUSER": "the superuser of the package (not known)", "HUB_FACTS": "nothing was recorded of the databases of this package", "HUB_SERVICE": u.Service}
+	if u.Superuser != "" {
+		fixed["HUB_SUPERUSER"] = u.Superuser
+	}
+	if u.PackageFacts != "" {
+		fixed["HUB_FACTS"] = u.PackageFacts
+	}
+	if u.EnvUncertain {
+		fixed["HUB_ENV_UNCERTAIN"] = "yes"
+	}
+	// the image first, the observed environment over it, what the compose file
+	// gives the service over both: the order in which the manifest gets them
+	env := append(slices.Clone(u.ImageEnv), obs.Env...)
+	env = append(env, u.ComposeEnv...)
+	return env, fixed
+}
+
+// createsRe finds the lines of a filled script that create something.
+var createsRe = regexp.MustCompile(`(?m)^ensure '`)
+
+// PostUpScript is the script that the user runs after "ops compose up": the
+// template of the row filled for the service. It is empty when the row has no
+// template, or when the names of the environment give nothing to create (or a
+// name holds a control character, which is not quoted for a shell or for SQL).
+// It is called after ApplyHubWhole, so that obs.Env is the one of the package.
+func PostUpScript(u HubUse, obs *observe.Result) string {
+	// without a note the report has no item that says the script exists
+	if u.PostUpScript == "" || u.EntrypointNote == "" {
+		return ""
+	}
+	env, fixed := noteInputs(u, obs)
+	text := fillText(u.PostUpScript, env, fixed, false)
+	if !createsRe.MatchString(text) {
+		return ""
+	}
+	return text
+}
+
+// postUpSaid is what the entrypoint item says of the script. The tool does not
+// run it and ops compose does not either.
+func postUpSaid(u HubUse, script string) string {
+	name := plan.PostUpName(u.Service)
+	if script == "" {
+		return "No script (" + name + ") was written for it: either there is nothing to create from the names this tool knows, or a name holds a control character."
+	}
+	return "A script was written next to compose.yaml, " + name + ", which creates what the entrypoint would have created (the database, and the role when POSTGRES_USER is not the superuser). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up (the address of the instance is taken from ops instance logs, or pass it as the first argument or in DB_HOST). It needs psql on your machine, asks for no password and writes none, and creates the role without a password. It was not run against the package by this tool."
 }
 
 // argsAfterName is the arguments of a command line without its first word.
@@ -519,6 +566,19 @@ func sqlIdent(v string) string {
 	return strings.ReplaceAll(q, `'`, `'\''`)
 }
 
+// sqlLiteral writes a value as a string literal of SQL (a single quote doubled)
+// for a command that is inside single quotes of a shell, with each single
+// quote written as the shell needs it.
+func sqlLiteral(v string) string {
+	q := `'` + strings.ReplaceAll(v, `'`, `''`) + `'`
+	return strings.ReplaceAll(q, `'`, `'\''`)
+}
+
+// shellWord writes a value as one word of a shell, in single quotes.
+func shellWord(v string) string {
+	return `'` + strings.ReplaceAll(v, `'`, `'\''`) + `'`
+}
+
 // fillPlaceholders fills a note of a row of the table of required builds.
 // {NAME} and {NAME|default} are the value of the variable NAME in env, or the
 // default, or "<your NAME>"; {A,B} takes the first of A and B that is set;
@@ -530,6 +590,12 @@ func sqlIdent(v string) string {
 // written: the note says <not shown>. Values are written without line breaks
 // and control characters.
 func fillPlaceholders(note string, env []string, fixed map[string]string) string {
+	return fillText(note, env, fixed, true)
+}
+
+// fillText is fillPlaceholders; squeeze says whether runs of spaces become one
+// space and the text is trimmed (a note is prose, a script keeps its layout).
+func fillText(note string, env []string, fixed map[string]string, squeeze bool) string {
 	have := map[string]string{}
 	for _, e := range env {
 		// the names the tool fills itself (HUB_...) are never read from the environment
@@ -557,7 +623,9 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 		return ""
 	})
 	// a removed section leaves its neighbours' spaces
-	note = strings.TrimSpace(spacesRe.ReplaceAllString(note, " "))
+	if squeeze {
+		note = strings.TrimSpace(spacesRe.ReplaceAllString(note, " "))
+	}
 	var b strings.Builder
 	for {
 		i := strings.IndexByte(note, '{')
@@ -579,7 +647,7 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 			continue
 		}
 		b.WriteString(note[:i])
-		names, ident, def, hasDef := sub[1], sub[2] != "", sub[3], strings.Contains(note[i+1:j], "|")
+		names, quote, def, hasDef := sub[1], sub[2], sub[3], strings.Contains(note[i+1:j], "|")
 		secret := false
 		for _, n := range strings.Split(names, ",") {
 			secret = secret || secretName(n)
@@ -589,9 +657,9 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 		case secret:
 			b.WriteString(notShown)
 		case ok:
-			b.WriteString(fillValue(v, ident))
+			b.WriteString(fillValue(v, quote))
 		case hasDef:
-			b.WriteString(fillValue(def, ident))
+			b.WriteString(fillValue(def, quote))
 		default:
 			b.WriteString("<your " + strings.ReplaceAll(names, ",", " or ") + ">")
 		}
@@ -599,13 +667,18 @@ func fillPlaceholders(note string, env []string, fixed map[string]string) string
 	}
 }
 
-func fillValue(v string, ident bool) string {
+func fillValue(v, quote string) string {
 	p := plainText(v)
-	if ident {
-		if p != v {
-			return "<a name with control characters, to be quoted by hand>"
-		}
+	if quote != "" && p != v {
+		return "<a name with control characters, to be quoted by hand>"
+	}
+	switch quote {
+	case ":ident":
 		return sqlIdent(p)
+	case ":lit":
+		return sqlLiteral(p)
+	case ":sh":
+		return shellWord(p)
 	}
 	return p
 }

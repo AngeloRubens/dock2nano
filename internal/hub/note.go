@@ -9,8 +9,9 @@ import (
 var (
 	// PlaceholderRe is a placeholder of a note of a row, without its braces:
 	// names joined by commas (the first one that is set is used), an optional
-	// :ident, an optional |default.
-	PlaceholderRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*(?:,[A-Za-z_][A-Za-z0-9_]*)*)(:ident)?(?:\|(.*))?$`)
+	// :ident (a quoted SQL identifier), :lit (a SQL string literal) or :sh (a
+	// word of a shell), an optional |default.
+	PlaceholderRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*(?:,[A-Za-z_][A-Za-z0-9_]*)*)(:ident|:lit|:sh)?(?:\|(.*))?$`)
 
 	// SectionRe is a conditional section of a note: [[if TEST]]text[[end]] or
 	// [[unless TEST]]text[[end]].
@@ -83,7 +84,7 @@ func ValidateNote(note string) error {
 		j += i
 		inner := text[i+1 : j]
 		if !PlaceholderRe.MatchString(inner) && looksLikePlaceholder(inner) {
-			return fmt.Errorf("the placeholder {%s} is not {NAME}, {A,B}, {NAME:ident} or {NAME|default}", inner)
+			return fmt.Errorf("the placeholder {%s} is not {NAME}, {A,B}, {NAME:ident}, {NAME:lit}, {NAME:sh} or {NAME|default}", inner)
 		}
 		text = text[j+1:]
 	}

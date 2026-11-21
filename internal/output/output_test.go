@@ -925,3 +925,134 @@ func TestComposeFileWritesDNSSearchOnlyWhenSet(t *testing.T) {
 		t.Errorf("without: %q", b)
 	}
 }
+
+const postUpText = "#!/bin/sh\necho hi\n"
+
+func postUpPlan(sys string) *plan.Plan {
+	p := onePlan(sys)
+	p.Services[0].PostUp = postUpText
+	return p
+}
+
+func TestWriteWritesThePostUpScriptNextToComposeWithMode0755(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "out", "compose.yaml")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	written, err := Write(postUpPlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "out", "post-up-web.sh")
+	want := []string{filepath.Join(home, ".ops", "local_packages", "amd64", "web"), composePath, script}
+	if !reflect.DeepEqual(written, want) {
+		t.Fatalf("written = %v, want %v", written, want)
+	}
+	if got := read(t, script); got != postUpText {
+		t.Errorf("script = %q", got)
+	}
+	fi, err := os.Stat(script)
+	if err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %v (%v), want 0755", fi.Mode().Perm(), err)
+	}
+	if got := names(t, filepath.Join(dir, "out")); !reflect.DeepEqual(got, []string{"compose.yaml", "post-up-web.sh"}) {
+		t.Errorf("the folder holds %v", got)
+	}
+}
+
+func TestWriteWritesNoScriptForAServiceWithout(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(onePlan(src), Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(dir, "post-up-web.sh")) {
+		t.Error("a script was written")
+	}
+}
+
+func TestWriteRefusesToReplaceAScriptWithoutForceAndTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	script := filepath.Join(dir, "post-up-web.sh")
+	put(t, script, "mine\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+
+	_, err := Write(postUpPlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err == nil || !strings.Contains(err.Error(), script) || !strings.Contains(err.Error(), "force") {
+		t.Fatalf("error = %v", err)
+	}
+	if exists(home) || exists(composePath) || read(t, script) != "mine\n" || !exists(filepath.Join(src, "web")) {
+		t.Errorf("something was touched: home %v compose %v script %q", exists(home), exists(composePath), read(t, script))
+	}
+}
+
+func TestWriteForceReplacesTheScript(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "post-up-web.sh")
+	put(t, script, "mine\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(postUpPlan(src), Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(script)
+	if err != nil || read(t, script) != postUpText || fi.Mode().Perm() != 0o755 {
+		t.Errorf("script %q, %v, %v", read(t, script), fi.Mode(), err)
+	}
+	for _, n := range names(t, dir) {
+		if strings.Contains(n, ".tmp-") {
+			t.Errorf("a temporary file is left: %s", n)
+		}
+	}
+}
+
+func TestWriteRollbackRemovesTheScriptWhenALaterStepFails(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	src1, src2 := filepath.Join(dir, "src1"), filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	p.Services[0].PostUp = postUpText
+	// the name of the second script is too long for the file system: it fails after the first one was written
+	p.Services[1].Name = strings.Repeat("a", 250)
+	p.Services[1].PostUp = postUpText
+
+	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if written != nil {
+		t.Fatalf("written = %v", written)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"src1", "src2"}) {
+		t.Errorf("left behind: %v", got)
+	}
+	if got := read(t, filepath.Join(src1, "web")); got != "b" {
+		t.Errorf("sysroot not given back: %q", got)
+	}
+}
+
+func TestWriteRefusesAScriptNameWithASeparator(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	p := postUpPlan(src)
+	p.Services[0].Name = "../x"
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err == nil || !strings.Contains(err.Error(), "script name") {
+		t.Fatalf("error = %v", err)
+	}
+	if exists(filepath.Join(dir, "home")) || exists(filepath.Join(dir, "compose.yaml")) {
+		t.Error("something was written")
+	}
+}

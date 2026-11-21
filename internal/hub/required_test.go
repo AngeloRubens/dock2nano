@@ -259,3 +259,64 @@ func TestParseRequiredChecksTheTemplateOfTheNote(t *testing.T) {
 		}
 	}
 }
+
+const postUpRow = `
+rows:
+  - images: [postgres]
+    programs: [postgres]
+    packages: [a/b, c/d]
+    superusers:
+      a/b: postgres
+      c/d: eyberg
+    reason: r
+    post_up_script: |
+      #!/bin/sh
+      psql -U {HUB_SUPERUSER:sh}
+      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}
+      [[end]]
+`
+
+func TestParseRequiredReadsAndChecksThePostUpScript(t *testing.T) {
+	rows, err := ParseRequired([]byte(postUpRow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rows[0].PostUpScript, "#!/bin/sh\n") || !strings.Contains(rows[0].PostUpScript, "{POSTGRES_DB:lit}") {
+		t.Errorf("%q", rows[0].PostUpScript)
+	}
+	bad := [][2]string{
+		{"a section that is not closed", "#!/bin/sh\n[[if A]]x\n"},
+		{"a placeholder that is not one", "#!/bin/sh\necho {A:nope}\n"},
+		{"no #!/bin/sh line", "echo hi\n"},
+		{"a test that is not a test", "#!/bin/sh\n[[if A ~ B]]x[[end]]\n"},
+		{"a note of the package the row does not give", "#!/bin/sh\n[[if A]]{HUB_FACTS}[[end]]\n"},
+		{"sections inside a section", "#!/bin/sh\n[[if A]][[if B]]x[[end]][[end]]\n"},
+	}
+	for _, b := range bad {
+		why, script := b[0], b[1]
+		text := strings.Replace(postUpRow, "      #!/bin/sh\n      psql -U {HUB_SUPERUSER:sh}\n      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}\n      [[end]]\n", "      "+strings.ReplaceAll(strings.TrimRight(script, "\n"), "\n", "\n      ")+"\n", 1)
+		if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script") {
+			t.Errorf("%s: accepted or wrong error: %v", why, err)
+		}
+	}
+}
+
+func TestParseRequiredPostUpScriptNeedsTheSuperuserOfEveryPackageWhenItNamesIt(t *testing.T) {
+	text := strings.Replace(postUpRow, "      c/d: eyberg\n", "", 1)
+	if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script uses {HUB_SUPERUSER}") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestTheTableThatShipsHasAPostUpScriptForPostgres(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := rows[0].PostUpScript
+	for _, want := range []string{"#!/bin/sh\n", "set -eu", "{HUB_SUPERUSER:sh}", "{HUB_SERVICE:sh}", "ensure 'database'", "ensure 'role'", "command -v psql", "-d template1 -w"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the shipped script lacks %q", want)
+		}
+	}
+}
