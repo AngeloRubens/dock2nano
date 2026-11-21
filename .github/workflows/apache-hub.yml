@@ -61,7 +61,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/docker/awesome-compose /tmp/ac
           cd /tmp/ac/apache-php
-          echo "::group::sample"; ls -R .; cat Dockerfile; cat app/index.php; echo "::endgroup::"
+          echo "::group::sample"; ls -R .; cat app/Dockerfile; cat app/index.php; cat compose.yaml; echo "::endgroup::"
           cfgflag=""
           if [ -n "$CFG" ]; then echo "$CFG" > /tmp/ac/apache-php/cfg.json; cfgflag="-c /tmp/ac/apache-php/cfg.json"; echo "config.json: $CFG"; fi
           argflags=""
