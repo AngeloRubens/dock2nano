@@ -40,7 +40,8 @@ func TestHubPackageCredentialsAreSaidOnlyForThePackagesThatWereTried(t *testing.
 		{"francescolavra", "postgres", "16.2", "without a password"},
 		{"eyberg", "mysql", "5.7.29", "root/root"},
 		{"francescolavra", "postgres", "16.3", ""},
-		{"eyberg", "postgresql", "11.3.0", ""},
+		{"eyberg", "postgresql", "11.3.0", "the superuser is eyberg"},
+		{"eyberg", "postgresql", "11.4.0", ""},
 		{"eyberg", "mysql", "8.0.1", ""},
 	}
 	for _, r := range rows {
