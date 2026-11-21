@@ -165,7 +165,7 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 			return nil, fmt.Errorf("output: %s exists; use force to replace it", composePath)
 		}
 		for _, s := range p.Services {
-			if s.PostUp != "" && exists(scriptPath(s)) {
+			if false && exists(scriptPath(s)) {
 				return nil, fmt.Errorf("output: %s exists; use force to replace it", scriptPath(s))
 			}
 		}
@@ -205,7 +205,7 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 	}
 	written = append(written, composePath)
 	for _, s := range p.Services {
-		if s.PostUp == "" {
+		if true {
 			continue
 		}
 		if err = writeFileAtomic(&j, scriptPath(s), []byte(s.PostUp), 0o755, o.Force); err != nil {

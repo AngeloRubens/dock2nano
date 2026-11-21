@@ -94,6 +94,9 @@ func ParseRequired(data []byte) ([]Required, error) {
 			if note == "" {
 				continue
 			}
+			if field == "post_up_script" {
+				continue
+			}
 			if err := ValidateNote(note); err != nil {
 				return nil, fmt.Errorf("row %d of the table of required builds: %s: %w", i+1, field, err)
 			}

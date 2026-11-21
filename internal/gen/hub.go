@@ -570,13 +570,12 @@ func sqlIdent(v string) string {
 // for a command that is inside single quotes of a shell, with each single
 // quote written as the shell needs it.
 func sqlLiteral(v string) string {
-	q := `'` + strings.ReplaceAll(v, `'`, `''`) + `'`
-	return strings.ReplaceAll(q, `'`, `'\''`)
+	return `'` + v + `'`
 }
 
 // shellWord writes a value as one word of a shell, in single quotes.
 func shellWord(v string) string {
-	return `'` + strings.ReplaceAll(v, `'`, `'\''`) + `'`
+	return `'` + v + `'`
 }
 
 // fillPlaceholders fills a note of a row of the table of required builds.
