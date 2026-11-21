@@ -1,0 +1,111 @@
+name: hub-try
+# Runs ops hub packages alone on nanos (no dock2nano), probes the port, prints the console.
+# Runs on a push whose head commit message contains [hub-try], and by hand.
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  try:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[hub-try]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [r1, r2]
+        include:
+          - {name: pg11, pkg: "eyberg/postgresql:11.3.0", port: 5432, kind: tcp, grep: postgres}
+          - {name: pg16, pkg: "eyberg/postgres:16.2", port: 5432, kind: tcp, grep: postgres}
+          - {name: apache2458, pkg: "eyberg/apache:2.4.58", port: 80, kind: http, grep: apache}
+          - {name: apache2448, pkg: "eyberg/apache:2.4.48", port: 80, kind: http, grep: apache}
+          - {name: php81, pkg: "eyberg/php:8.1.27", port: 80, kind: none, grep: php}
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 netcat-openbsd curl postgresql-client >/dev/null
+      - name: ops from source (nanovms/ops master 2177c54)
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
+          cd /tmp/ops-src && git rev-parse HEAD
+          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          # ops update replaces the ops binary too: put the one built from source back
+          sudo install /tmp/ops /usr/local/bin/ops
+      - name: package list, describe
+        id: pkg
+        run: |
+          ops pkg list 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > /tmp/pkglist.txt
+          echo "::group::packages matching ${{ matrix.grep }}"
+          grep -i "${{ matrix.grep }}" /tmp/pkglist.txt || true
+          echo "::endgroup::"
+          pkg="${{ matrix.pkg }}"
+          name="${pkg%%:*}"; ver="${pkg##*:}"
+          if ! grep -q "$name" /tmp/pkglist.txt || ! grep "$name" /tmp/pkglist.txt | grep -q "$ver"; then
+            echo "exact package $pkg not in the list; candidates:"
+            grep -io 'eyberg/[a-z0-9_.-]*' /tmp/pkglist.txt | grep -i "${{ matrix.grep }}" | sort -u || true
+          fi
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "::group::ops pkg describe $pkg"
+          ops pkg describe "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | head -80 || true
+          echo "::endgroup::"
+          ops pkg load --help 2>&1 | grep -i -- 'env\|port\|local' || true
+      - name: run and probe
+        run: |
+          pkg="${{ steps.pkg.outputs.pkg }}"
+          port=${{ matrix.port }}; kind=${{ matrix.kind }}
+          envflag=""
+          case "${{ matrix.name }}" in pg*) envflag="-e POSTGRES_PASSWORD=pw";; esac
+          ops pkg load -l "$pkg" -p $port $envflag > /tmp/console.log 2>&1 &
+          opspid=$!
+          result=no-answer
+          for i in $(seq 1 24); do
+            sleep 5
+            if ! kill -0 $opspid 2>/dev/null; then echo "ops exited early"; break; fi
+            if [ "$kind" = none ]; then
+              if grep -qi "PHP\|listening\|started" /tmp/console.log; then result=port-open; fi
+              [ "$i" -ge 12 ] && break
+              continue
+            fi
+            if nc -z -w 2 127.0.0.1 $port 2>/dev/null; then
+              result=port-open
+              if [ "$kind" = http ]; then
+                code=$(curl -s -m 5 -o /tmp/body.txt -w '%{http_code}' "http://127.0.0.1:$port/" || true)
+                echo "http code: $code"; head -c 300 /tmp/body.txt 2>/dev/null; echo
+                case "$code" in 2*|3*|4*|5*) result=answered; break;; esac
+              else
+                command -v pg_isready >/dev/null && pg_isready -h 127.0.0.1 -p $port || true
+                break
+              fi
+            fi
+          done
+          if [ "$kind" = tcp ] && [ "$result" = port-open ]; then
+            pg_isready -h 127.0.0.1 -p $port 2>&1 | grep -q "accepting" && result=answered || true
+          fi
+          echo "::group::console, last 200 lines"
+          tail -200 /tmp/console.log | cut -c1-400
+          echo "::endgroup::"
+          kill $opspid 2>/dev/null || true
+          sudo pkill -f qemu-system 2>/dev/null || true
+          echo "RESULT ${{ matrix.name }}-${{ matrix.run }}: $result"
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-try-${{ matrix.name }}-${{ matrix.run }}
+          path: /tmp/console.log
