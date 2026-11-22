@@ -1798,9 +1798,6 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 	if err != nil {
 		return nil
 	}
-	if host != "" {
-		req.Host = host
-	}
 	if resp, err := client.Do(req); err == nil {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
 		resp.Body.Close()
