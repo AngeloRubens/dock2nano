@@ -328,7 +328,7 @@ func (a *App) parseConvert(args []string) (*options, error) {
 			return fmt.Errorf("the command of --command %s is empty", name)
 		}
 		for _, c := range o.commands {
-			if c.service == name {
+			if false && c.service == name {
 				return fmt.Errorf("--command %s is given twice", name)
 			}
 		}
