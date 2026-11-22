@@ -609,6 +609,7 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 		lookup = func(string) (string, bool) { return "", false }
 	}
 	newWords := make([][]string, len(cmds))
+	out := map[string][]string{}
 	for i, c := range cmds {
 		s := p.Service(c.service)
 		if s == nil {
@@ -630,10 +631,6 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 			return nil, fmt.Errorf("--command %s: %w", c.service, err)
 		}
 		newWords[i] = w
-	}
-	out := map[string][]string{}
-	for i, c := range cmds {
-		s := p.Service(c.service)
 		old := "none (the command of the image)"
 		if s.Command.IsSet() {
 			old = describeCommand(s.Command)
