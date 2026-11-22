@@ -332,7 +332,6 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 
 	for name, why := range rs.late {
 		if len(cmdNotes[name]) > 0 {
-			why += "; its command was replaced by --command for the observation, and the package of the hub does not run it"
 		}
 		skipped[name] = why
 	}
