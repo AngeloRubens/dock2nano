@@ -618,6 +618,45 @@ func TestObserveShebangNeedsTheScriptToBeArgvZero(t *testing.T) {
 	})
 }
 
+func TestObserveShebangWithAnInterpreterArgument(t *testing.T) {
+	s := newScene(t)
+	// #!/usr/bin/python3 -u: the kernel puts the interpreter, its argument, then the script
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/local/bin/tool", ["tool", "--x"]`, 1)
+	s.d.files["/usr/local/bin/tool"] = entry{data: "#!/usr/bin/python3 -u\n", mode: 0755}
+	s.d.files["/usr/bin/python3"] = entry{data: "py", mode: 0755}
+	s.d.exec["cat /proc/11/cmdline"] = "/usr/bin/python3\x00-u\x00/usr/local/bin/tool\x00--x\x00"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "argv", res.Argv, []string{"/usr/bin/python3", "-u", "/usr/local/bin/tool", "--x"})
+}
+
+func TestObserveShebangScriptIsTheFileOfExecveNotArgvZero(t *testing.T) {
+	s := newScene(t)
+	// execve("/app/run.sh", ["myapp", "--x"]): the kernel writes /app/run.sh, not myapp
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/app/run.sh", ["myapp", "--x"]`, 1)
+	s.d.files["/app/run.sh"] = entry{data: "#!/bin/sh\n", mode: 0755}
+	s.d.files["/bin/sh"] = entry{data: "sh", mode: 0755}
+	s.d.exec["cat /proc/11/cmdline"] = "/bin/sh\x00/app/run.sh\x00--x\x00"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "argv", res.Argv, []string{"/bin/sh", "/app/run.sh", "--x"})
+}
+
+func TestObserveTrailingEmptyArgumentIsNotADifference(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/bin/app", ["app", "--serve", ""]`, 1)
+	s.d.exec["cat /proc/11/cmdline"] = "app\x00--serve\x00\x00"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings", res.Warnings, []string(nil))
+}
+
 func TestObserveNginxRewritesItsCommandLine(t *testing.T) {
 	s := newScene(t)
 	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/sbin/nginx", ["nginx", "-g", "daemon off;"]`, 1)

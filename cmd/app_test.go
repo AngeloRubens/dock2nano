@@ -1681,7 +1681,7 @@ func TestApplyWithAddsTheDependencyExceptWhereItIsACycle(t *testing.T) {
 }
 
 func TestApplyWithRefusesWhatIsNotThere(t *testing.T) {
-	p := &compose.Project{Services: []*compose.Service{{Name: "a"}, {Name: "b"}}}
+	p := &compose.Project{Services: []*compose.Service{{Name: "a", Image: "i"}, {Name: "b", Image: "i"}}}
 	if _, err := applyWith(p, []string{"nope"}, nil); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("unknown: %v", err)
 	}
@@ -2582,38 +2582,38 @@ func TestCommandFlagParse(t *testing.T) {
 
 func TestApplyCommandsReplacesTheCommandAndKeepsTheEntrypoint(t *testing.T) {
 	p := &compose.Project{Services: []*compose.Service{
-		{Name: "web", Command: compose.Command{Exec: []string{"gunicorn", "app:app"}, Set: true}},
-		{Name: "job", Entrypoint: compose.Command{Exec: []string{"/entry.sh"}, Set: true}},
-		{Name: "plain"},
+		{Name: "web", Image: "i", Command: compose.Command{Exec: []string{"gunicorn", "app:app"}, Set: true}},
+		{Name: "job", Image: "i", Entrypoint: compose.Command{Exec: []string{"/entry.sh"}, Set: true}},
+		{Name: "plain", Image: "i"},
 	}}
-	out, err := applyCommands(p, []commandOverride{{"web", "uvicorn app:app --port 8000"}, {"job", "run it"}, {"plain", "x"}}, nil)
+	out, err := applyCommands(p, []commandOverride{{"web", "uvicorn app:app --port 8000"}, {"job", "run it"}, {"plain", "x"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := p.Service("web").Command; !reflect.DeepEqual(got, compose.Command{Shell: "uvicorn app:app --port 8000", Set: true}) {
 		t.Errorf("web command %+v", got)
 	}
-	if len(out["web"]) != 1 || !strings.Contains(out["web"][0], `command of service web replaced by --command, from "gunicorn app:app" to "uvicorn app:app --port 8000"`) || !strings.Contains(out["web"][0], "must be reviewed") {
+	if len(out["web"]) != 1 || !strings.Contains(out["web"][0], `command of service web replaced by --command, from "gunicorn" with 1 argument to "uvicorn" with 3 arguments`) || !strings.Contains(out["web"][0], "must be reviewed") {
 		t.Errorf("web notes %q", out["web"])
 	}
 	if got := p.Service("job").Entrypoint; !reflect.DeepEqual(got, compose.Command{Exec: []string{"/entry.sh"}, Set: true}) {
 		t.Errorf("job entrypoint changed: %+v", got)
 	}
-	if len(out["job"]) != 2 || !strings.Contains(out["job"][1], "entrypoint (/entry.sh): it still runs and receives the command") {
+	if len(out["job"]) != 2 || !strings.Contains(out["job"][1], `entrypoint ("/entry.sh" with 0 arguments): it still runs and receives the command`) {
 		t.Errorf("job notes %q", out["job"])
 	}
-	if len(out["plain"]) != 1 || !strings.Contains(out["plain"][0], `from "none (the command of the image)"`) {
+	if len(out["plain"]) != 1 || !strings.Contains(out["plain"][0], `from none (the command of the image)`) {
 		t.Errorf("plain notes %q", out["plain"])
 	}
 }
 
 func TestApplyCommandsRefusesWhatIsNotThere(t *testing.T) {
-	p := &compose.Project{Services: []*compose.Service{{Name: "a"}, {Name: "b"}}}
-	_, err := applyCommands(p, []commandOverride{{"nope", "x"}}, nil)
+	p := &compose.Project{Services: []*compose.Service{{Name: "a", Image: "i"}, {Name: "b", Image: "i"}}}
+	_, err := applyCommands(p, []commandOverride{{"nope", "x"}}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "--command nope") || !strings.Contains(err.Error(), "a, b") {
 		t.Errorf("unknown: %v", err)
 	}
-	if _, err := applyCommands(p, []commandOverride{{"b", "x"}}, map[string]bool{"a": true}); err == nil || !strings.Contains(err.Error(), "--service") {
+	if _, err := applyCommands(p, []commandOverride{{"b", "x"}}, map[string]bool{"a": true}, nil); err == nil || !strings.Contains(err.Error(), "--service") {
 		t.Errorf("not chosen: %v", err)
 	}
 	if p.Service("b").Command.IsSet() {
@@ -2636,7 +2636,7 @@ func TestCommandFlagReachesTheObservationAndTheReport(t *testing.T) {
 	if o.Entrypoint == nil || !reflect.DeepEqual(*o.Entrypoint, []string{"/entry.sh"}) {
 		t.Errorf("observed entrypoint %v", o.Entrypoint)
 	}
-	if !hasWarning(h, "web", `from "gunicorn app:app" to "uvicorn app:app --port 8000"`) {
+	if !hasWarning(h, "web", `from "gunicorn" with 1 argument to "uvicorn" with 3 arguments`) {
 		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
 	}
 	if !hasWarning(h, "web", "it still runs and receives the command") {
@@ -2657,5 +2657,171 @@ func TestCommandFlagUnknownServiceStopsBeforeAnythingRuns(t *testing.T) {
 	}
 	if len(h.observed) != 0 || len(h.dock.calls) != 0 {
 		t.Errorf("something ran: %v %v", h.observed, h.dock.calls)
+	}
+}
+
+func TestApplyCommandsRefusesAServiceThatIsNotConverted(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{
+		{Name: "dbg", Image: "i", Profiles: []string{"debug"}},
+		{Name: "bare"},
+	}}
+	_, err := applyCommands(p, []commandOverride{{"dbg", "x"}}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "--command dbg") || !strings.Contains(err.Error(), "has profiles (debug)") {
+		t.Errorf("profiles: %v", err)
+	}
+	_, err = applyCommands(p, []commandOverride{{"bare", "x"}}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "has no image and no build") {
+		t.Errorf("no image: %v", err)
+	}
+	if p.Service("dbg").Command.IsSet() || p.Service("bare").Command.IsSet() {
+		t.Errorf("a refused command was applied")
+	}
+}
+
+func TestApplyCommandsChecksEveryOverrideBeforeApplyingAny(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{{Name: "a", Image: "i"}, {Name: "b", Image: "i"}}}
+	_, err := applyCommands(p, []commandOverride{{"a", "run ok"}, {"b", "run 'open"}}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "--command b") {
+		t.Fatalf("error %v", err)
+	}
+	if p.Service("a").Command.IsSet() {
+		t.Errorf("the first service was changed although the second override is invalid: %+v", p.Service("a").Command)
+	}
+}
+
+func TestApplyCommandsReadsTheValueBeforeAnythingRuns(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{{Name: "a", Image: "i"}}}
+	none := func(string) (string, bool) { return "", false }
+	_, err := applyCommands(p, []commandOverride{{"a", "run ${NEEDED:?missing}"}}, nil, none)
+	if err == nil || !strings.Contains(err.Error(), "--command a") {
+		t.Errorf("required variable: %v", err)
+	}
+	_, err = applyCommands(p, []commandOverride{{"a", `run "open`}}, nil, none)
+	if err == nil || !strings.Contains(err.Error(), "double quote is not closed") {
+		t.Errorf("quote: %v", err)
+	}
+	if p.Service("a").Command.IsSet() {
+		t.Errorf("an invalid value was applied")
+	}
+}
+
+func TestApplyCommandsDoesNotPrintTheArguments(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{
+		{Name: "a", Image: "i", Command: compose.Command{Shell: "old --password=hunter2", Set: true}, Entrypoint: compose.Command{Shell: "/entry.sh --token abc", Set: true}},
+		{Name: "b", Image: "i", Command: compose.Command{Exec: []string{}, Set: true}},
+	}}
+	out, err := applyCommands(p, []commandOverride{{"a", "new --url=http://u:secret@h/"}, {"b", "x"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(out["a"], "\n")
+	for _, bad := range []string{"hunter2", "secret", "abc"} {
+		if strings.Contains(all, bad) {
+			t.Errorf("the notes print %q: %s", bad, all)
+		}
+	}
+	if !strings.Contains(out["a"][0], `from "old" with 1 argument to "new" with 1 argument`) {
+		t.Errorf("notes %q", out["a"])
+	}
+	if !strings.Contains(out["a"][1], `entrypoint ("/entry.sh" with 2 arguments)`) {
+		t.Errorf("entrypoint written as a string: %q", out["a"])
+	}
+	if !strings.Contains(out["b"][0], "from empty (clears the command of the image)") {
+		t.Errorf("empty command: %q", out["b"])
+	}
+}
+
+func TestCommandFlagWithQuotesReachesTheObservationSplit(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert", "--command", "web=sh -c 'echo hi there' \"a b\"")
+	if len(h.observed) != 1 || !reflect.DeepEqual(h.observed[0].Cmd, []string{"sh", "-c", "echo hi there", "a b"}) {
+		t.Errorf("observed %+v", h.observed)
+	}
+}
+
+func TestCommandFlagInvalidValueStopsBeforeAnythingRuns(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(1, "convert", "--command", "web=run 'open")
+	if !strings.Contains(h.stderr.String(), "--command web") || len(h.observed) != 0 || len(h.dock.calls) != 0 {
+		t.Errorf("stderr %q, observed %d, docker %v", h.stderr, len(h.observed), h.dock.calls)
+	}
+}
+
+func TestCommandFlagNotesAnEntrypointOfTheImage(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.dock.images["w"] = &docker.ImageConfig{Entrypoint: []string{"/docker-entrypoint.sh"}, Cmd: []string{"old"}}
+	h.mustRun(0, "convert", "--command", "web=new")
+	if !hasWarning(h, "web", `has an entrypoint in its image ("/docker-entrypoint.sh" with 0 arguments): it still runs and receives the command of --command`) {
+		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+}
+
+func TestCommandFlagEntrypointInTheFileGivesNoImageNote(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    entrypoint: /entry.sh --flag\n")
+	h.dock.have["w"] = true
+	h.dock.images["w"] = &docker.ImageConfig{Entrypoint: []string{"/docker-entrypoint.sh"}}
+	h.mustRun(0, "convert", "--command", "web=new")
+	if !hasWarning(h, "web", `entrypoint ("/entry.sh" with 1 argument): it still runs`) {
+		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+	if hasWarning(h, "web", "entrypoint in its image") {
+		t.Errorf("the entrypoint of the image is not the one that runs: %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+}
+
+func TestCommandFlagSurvivesTheSecondObservationAndIsNotedOnce(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", noDepsCompose)
+	h.haveAll("b", "d")
+	h.dock.images["b"] = &docker.ImageConfig{Entrypoint: []string{"/ep.sh"}}
+	observeBy(h, func(image string) bool { return image == "b" && countEvents(h, "start d") == 0 })
+	h.mustRun(0, "convert", "--command", "backend=uvicorn app:app")
+	var runs [][]string
+	for _, o := range h.observed {
+		if o.Image == "b" {
+			runs = append(runs, o.Cmd)
+		}
+	}
+	want := []string{"uvicorn", "app:app"}
+	if len(runs) != 2 || !reflect.DeepEqual(runs[0], want) || !reflect.DeepEqual(runs[1], want) {
+		t.Fatalf("commands of the observations of backend: %q", runs)
+	}
+	n, m := 0, 0
+	for _, w := range h.genIn[0].Services["backend"].Observed.Warnings {
+		if strings.Contains(w, "replaced by --command") {
+			n++
+		}
+		if strings.Contains(w, "entrypoint in its image") {
+			m++
+		}
+	}
+	if n != 1 || m != 1 {
+		t.Errorf("the notes were carried %d and %d times: %q", n, m, h.genIn[0].Services["backend"].Observed.Warnings)
+	}
+}
+
+func TestCommandFlagServiceStartedAsADependencyRunsTheReplacedCommand(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  api:\n    image: a\n    command: old\n  web:\n    image: w\n    depends_on: [api]\n")
+	h.haveAll("a", "w")
+	h.mustRun(0, "convert", "--command", "api=serve --port 9")
+	found := false
+	for _, st := range h.started {
+		if st.Image == "a" {
+			found = true
+			if !reflect.DeepEqual(st.Cmd, []string{"serve", "--port", "9"}) {
+				t.Errorf("api was started with %q", st.Cmd)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("api was not started for web: %v", h.events)
 	}
 }
