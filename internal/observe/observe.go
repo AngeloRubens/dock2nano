@@ -1794,7 +1794,6 @@ func redirectAddress(first, target *url.URL) string {
 
 func (httpProber) Get(ctx context.Context, url, host string) error {
 	if host != "" && !ValidHost(host) {
-		return fmt.Errorf("%q is not a host a Host header can hold", host)
 	}
 	rest := strings.TrimPrefix(url, "http://")
 	address, _, _ := strings.Cut(rest, "/")
