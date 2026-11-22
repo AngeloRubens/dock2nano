@@ -1612,6 +1612,86 @@ func TestExerciseFlagsReachTheObservation(t *testing.T) {
 	}
 }
 
+func TestExerciseHostFlagIsParsed(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n  api:\n    image: a\n")
+	h.haveAll("w", "a")
+	h.mustRun(0, "convert", "--exercise", "/x", "--exercise-host", "localhost", "--exercise-host", "web=app.test:8000")
+	got := map[string]string{}
+	for _, o := range h.observed {
+		got[o.Image] = o.ExerciseHost
+	}
+	want := map[string]string{"w": "app.test:8000", "a": "localhost"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hosts %v, want %v", got, want)
+	}
+}
+
+func TestExerciseHostFlagErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"empty", []string{"--exercise-host", ""}, "the host of --exercise-host is empty"},
+		{"empty host after service", []string{"--exercise-host", "web="}, "the host of --exercise-host is empty"},
+		{"empty service", []string{"--exercise-host", "=localhost"}, "the service before = is empty"},
+		{"twice for a service", []string{"--exercise-host", "web=a", "--exercise-host", "web=b"}, "given twice for web"},
+		{"twice without a service", []string{"--exercise-host", "a", "--exercise-host", "b"}, "given twice without a service"},
+		{"unknown service", []string{"--exercise-host", "ghost=a"}, "the file has no such service (services: web)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+			h.dock.have["w"] = true
+			h.mustRun(1, append([]string{"convert"}, tc.args...)...)
+			if !strings.Contains(h.stderr.String(), tc.want) {
+				t.Errorf("stderr %q does not contain %q", h.stderr, tc.want)
+			}
+			if len(h.observed) != 0 {
+				t.Errorf("something was observed")
+			}
+		})
+	}
+}
+
+func TestExerciseHostForPicksTheHostOfTheService(t *testing.T) {
+	hosts := []exerciseHost{{"", "all"}, {"web", "only-web"}}
+	if got := exerciseHostFor("web", hosts); got != "only-web" {
+		t.Errorf("web: %q", got)
+	}
+	if got := exerciseHostFor("db", hosts); got != "all" {
+		t.Errorf("db: %q", got)
+	}
+	if got := exerciseHostFor("db", []exerciseHost{{"web", "w"}}); got != "" {
+		t.Errorf("db without a default: %q", got)
+	}
+	if got := exerciseHostFor("web", nil); got != "" {
+		t.Errorf("no flag: %q", got)
+	}
+}
+
+func TestExerciseHostWithoutARequestIsAWarning(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n  api:\n    image: a\n")
+	h.haveAll("w", "a")
+	h.mustRun(0, "convert", "--exercise", "web=/x", "--exercise-host", "localhost")
+	has := func(svc string) bool {
+		for _, w := range h.genIn[0].Services[svc].Observed.Warnings {
+			if strings.Contains(w, "--exercise-host localhost is not used for service "+svc) {
+				return true
+			}
+		}
+		return false
+	}
+	if has("web") {
+		t.Errorf("web has a request and was warned: %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+	if !has("api") {
+		t.Errorf("api has no request and was not warned: %q", h.genIn[0].Services["api"].Observed.Warnings)
+	}
+}
+
 func TestKeepTraceNamesAFilePerService(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

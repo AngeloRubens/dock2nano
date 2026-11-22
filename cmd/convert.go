@@ -61,6 +61,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			fmt.Fprintf(a.Stderr, "%s: %s\n", c.service, m)
 		}
 	}
+	if err := checkExerciseHosts(project, o.exerciseHosts); err != nil {
+		return 0, err
+	}
 	ordered, err := dependencyOrder(project)
 	if err != nil {
 		return 0, err
@@ -783,6 +786,11 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		oo.KeepTrace = filepath.Join(traceDir, tagComponent(s.Name)+".strace")
 	}
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
+	oo.ExerciseHost = exerciseHostFor(s.Name, o.exerciseHosts)
+	var hostNotes []string
+	if oo.ExerciseHost != "" && len(oo.Exercise) == 0 {
+		hostNotes = append(hostNotes, fmt.Sprintf("--exercise-host %s is not used for service %s: it applies to the requests of --exercise, and none is made for this service (--exercise-cmd is not touched)", oo.ExerciseHost, s.Name))
+	}
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
 	}
@@ -813,6 +821,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 		res.Warnings = append(res.Warnings, cmdNotes...)
+		res.Warnings = append(res.Warnings, hostNotes...)
 	}
 	rs.findCrashed(ctx, a, s, res)
 	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
@@ -1525,6 +1534,36 @@ func exerciseFor(service string, values []string, project *compose.Project) []st
 		out = append(out, v)
 	}
 	return out
+}
+
+// exerciseHostFor gives the Host header of the requests of --exercise for the service: the one
+// given for it, else the one given without a service, else "".
+func exerciseHostFor(service string, hosts []exerciseHost) string {
+	def := ""
+	for _, h := range hosts {
+		if h.service == service {
+			return h.host
+		}
+		if h.service == "" {
+			def = h.host
+		}
+	}
+	return def
+}
+
+// checkExerciseHosts is an error when --exercise-host names a service the file does not have.
+func checkExerciseHosts(p *compose.Project, hosts []exerciseHost) error {
+	for _, h := range hosts {
+		if h.service == "" || p.Service(h.service) != nil {
+			continue
+		}
+		var known []string
+		for _, x := range p.Services {
+			known = append(known, x.Name)
+		}
+		return fmt.Errorf("--exercise-host %s=%s: the file has no such service (services: %s)", h.service, h.host, strings.Join(known, ", "))
+	}
+	return nil
 }
 
 // declaredPorts are the tcp ports that the file says the service listens on: the targets of ports

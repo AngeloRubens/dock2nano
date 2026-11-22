@@ -66,6 +66,11 @@ Flags of convert:
                      only to answer are carried: /health is asked of the first port the image
                      exposes, http://container:9000/ping names the port (can be repeated); with
                      SVC= only that service is asked
+  --exercise-host [SVC=]HOST  send HOST as the Host header of the requests of --exercise, in place
+                     of the address of the container: for a framework that answers 400 to a host it
+                     does not allow (Django ALLOWED_HOSTS) before it loads the code that serves a
+                     valid request. At most one per service; one without SVC= is for the services
+                     that have none of their own. --exercise-cmd is not touched
   --exercise-cmd [SVC=]CMD  run a command here once the program is up, for one that does not speak
                      HTTP; it sees DOCK2NANO_HOST and DOCK2NANO_PORT
   --with SERVICE     start this service for the observation of the others, as if each of them
@@ -232,24 +237,32 @@ func newApp() *App {
 
 // options are the flags of convert.
 type options struct {
-	file        string
-	dockerfile  string
-	context     string
-	name        string
-	out         string
-	opsHome     string
-	seconds     int
-	pull        bool
-	force       bool
-	strict      bool
-	shortNames  bool
-	noHub       bool
-	noWith      bool
-	exercise    []string
-	exerciseCmd []string
-	with        []string
-	commands    []commandOverride
-	services    []string
+	file          string
+	dockerfile    string
+	context       string
+	name          string
+	out           string
+	opsHome       string
+	seconds       int
+	pull          bool
+	force         bool
+	strict        bool
+	shortNames    bool
+	noHub         bool
+	noWith        bool
+	exercise      []string
+	exerciseCmd   []string
+	exerciseHosts []exerciseHost
+	with          []string
+	commands      []commandOverride
+	services      []string
+}
+
+// exerciseHost is one --exercise-host: the Host header and the service it is for ("" for all
+// the services that have none of their own).
+type exerciseHost struct {
+	service string
+	host    string
 }
 
 // commandOverride is one --command: the service and the command that replaces its own.
@@ -344,6 +357,28 @@ func (a *App) parseConvert(args []string) (*options, error) {
 			return errors.New("the request of --exercise is empty")
 		}
 		o.exercise = append(o.exercise, v)
+		return nil
+	})
+	set.Func("exercise-host", "", func(v string) error {
+		service, host := "", v
+		if name, rest, ok := strings.Cut(v, "="); ok {
+			if name == "" {
+				return fmt.Errorf("--exercise-host %q: the service before = is empty", v)
+			}
+			service, host = name, rest
+		}
+		if host == "" {
+			return errors.New("the host of --exercise-host is empty")
+		}
+		for _, h := range o.exerciseHosts {
+			if h.service == service {
+				if service == "" {
+					return errors.New("--exercise-host is given twice without a service")
+				}
+				return fmt.Errorf("--exercise-host is given twice for %s", service)
+			}
+		}
+		o.exerciseHosts = append(o.exerciseHosts, exerciseHost{service: service, host: host})
 		return nil
 	})
 	set.Func("exercise-cmd", "", func(v string) error {

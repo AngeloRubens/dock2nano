@@ -364,12 +364,15 @@ func (c *fakeClock) sleep(ctx context.Context, d time.Duration) error {
 
 type fakeProber struct {
 	urls []string
+	// hosts are the Host values that came with each question ("" when none).
+	hosts []string
 	// limits are the time left that the context of each question had.
 	limits []time.Duration
 }
 
-func (p *fakeProber) Get(ctx context.Context, url string) error {
+func (p *fakeProber) Get(ctx context.Context, url, host string) error {
 	p.urls = append(p.urls, url)
+	p.hosts = append(p.hosts, host)
 	if dl, ok := ctx.Deadline(); ok {
 		p.limits = append(p.limits, time.Until(dl))
 	}
@@ -1483,7 +1486,7 @@ func TestHTTPProberFollowsARedirectToHTTPSOnTheSameHost(t *testing.T) {
 		http.Redirect(w, r, secure.URL+"/", http.StatusFound)
 	}))
 	defer plain.Close()
-	if err := (httpProber{}).Get(context.Background(), plain.URL+"/"); err != nil {
+	if err := (httpProber{}).Get(context.Background(), plain.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests that reached the https server", hits, 1)
@@ -1492,7 +1495,7 @@ func TestHTTPProberFollowsARedirectToHTTPSOnTheSameHost(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	url := closed.URL + "/"
 	closed.Close()
-	if err := (httpProber{}).Get(context.Background(), url); err == nil {
+	if err := (httpProber{}).Get(context.Background(), url, ""); err == nil {
 		t.Error("a closed port was not an error")
 	}
 }
@@ -1588,6 +1591,21 @@ func TestObserveProbesInTheOrderOfThePorts(t *testing.T) {
 	equal(t, "exposed ports", res.ExposedPorts, []int{80, 443, 8080})
 }
 
+func TestHTTPProberSendsTheHostItIsGiven(t *testing.T) {
+	hosts := make(chan string, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts <- r.Host
+	}))
+	defer srv.Close()
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", "localhost"); err != nil {
+		t.Fatal(err)
+	}
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "hosts", []string{<-hosts, <-hosts}, []string{"localhost", strings.TrimPrefix(srv.URL, "http://")})
+}
+
 func TestHTTPProberDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 	var other atomic.Int32
 	l, err := net.Listen("tcp", "127.0.0.2:0")
@@ -1605,7 +1623,7 @@ func TestHTTPProberDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 		http.Redirect(w, r, far.URL+"/", http.StatusFound)
 	}))
 	defer near.Close()
-	if err := (httpProber{}).Get(context.Background(), near.URL+"/"); err != nil {
+	if err := (httpProber{}).Get(context.Background(), near.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests to the first server", first.Load(), int32(1))
@@ -1620,7 +1638,7 @@ func TestHTTPProberStopsAtTenRequests(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/"); err != nil {
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests made to a server that always redirects to itself", hits.Load(), int32(10))
@@ -1852,7 +1870,7 @@ func TestObserveRunningUntilTheEndIsNotStoppedEarly(t *testing.T) {
 
 type failProber struct{}
 
-func (failProber) Get(ctx context.Context, url string) error { return errors.New("connection refused") }
+func (failProber) Get(ctx context.Context, url, host string) error { return errors.New("connection refused") }
 
 func TestObserveProbeFailureWarnsOncePerPort(t *testing.T) {
 	s := newScene(t)
@@ -1968,7 +1986,7 @@ func TestHTTPProberReadsAtMostOneMiBOfTheBody(t *testing.T) {
 			}
 		}
 	}))
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/"); err != nil {
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	srv.Close()
@@ -2523,7 +2541,7 @@ type flakyProber struct {
 	urls []string
 }
 
-func (p *flakyProber) Get(ctx context.Context, url string) error {
+func (p *flakyProber) Get(ctx context.Context, url, host string) error {
 	p.urls = append(p.urls, url)
 	if len(p.urls) == 1 {
 		return errors.New("connection refused")
@@ -3005,6 +3023,22 @@ func TestObserveExerciseAsksOnceTheProgramIsUp(t *testing.T) {
 		"http://172.17.0.2:8080/",
 		"http://172.17.0.2:8080/health", "http://172.17.0.2:9000/ping", "http://172.17.0.2:8080/status",
 	})
+}
+
+func TestObserveExerciseHostIsSentOnlyWithTheExerciseRequests(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"8080/tcp"}
+	s.d.exec["cat /proc/net/tcp"] = tcpHeader + "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000\n"
+	s.o.Exercise = []string{"/health", "/status"}
+	s.o.ExerciseHost = "localhost"
+	if _, err := s.observe(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "urls", s.probe.urls, []string{
+		"http://172.17.0.2:8080/", "http://172.17.0.2:8080/health", "http://172.17.0.2:8080/status",
+	})
+	// the front page request keeps the address of the container
+	equal(t, "hosts", s.probe.hosts, []string{"", "localhost", "localhost"})
 }
 
 func TestObserveExerciseWaitsForTheProgramAndMovesTheEnd(t *testing.T) {

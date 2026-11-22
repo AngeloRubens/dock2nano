@@ -82,8 +82,9 @@ type Addresser interface {
 // up in the trace.
 type Prober interface {
 	// Get returns an error only when the server could not be reached. A reply that is not valid
-	// HTTP is not an error: the port was there and has been asked.
-	Get(ctx context.Context, url string) error
+	// HTTP is not an error: the port was there and has been asked. host, when not empty, is sent
+	// as the Host header in place of the address of the url.
+	Get(ctx context.Context, url, host string) error
 }
 
 // Options are the options of Observe.
@@ -140,6 +141,11 @@ type Options struct {
 	// answered when it exposes none); an address with the host "container" is asked of the
 	// container, at the port it names. A request that fails is a warning.
 	Exercise []string
+	// ExerciseHost, when not empty, is the Host header of the requests of Exercise, in place of
+	// the address of the container: for a program that answers 400 to a host it does not allow
+	// before it loads the code that serves a valid request. The front page request and
+	// ExerciseCmd are not touched.
+	ExerciseHost string
 	// ExerciseCmd is a command run on this side once the program is up, for one that does not
 	// speak HTTP. It sees DOCK2NANO_HOST and DOCK2NANO_PORT, the address of the container.
 	ExerciseCmd string
@@ -1338,7 +1344,7 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 			}
 			// the question may not take the observation past its end
 			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
-			err := r.o.Probe.Get(pctx, url)
+			err := r.o.Probe.Get(pctx, url, "")
 			stop()
 			if err != nil {
 				failed[port] = err.Error()
@@ -1722,13 +1728,17 @@ func (r *run) exercise(ctx context.Context, host string, port int, deadline time
 			continue
 		}
 		pctx, stop := context.WithTimeout(ctx, left)
-		err = r.o.Probe.Get(pctx, address)
+		err = r.o.Probe.Get(pctx, address, r.o.ExerciseHost)
 		stop()
 		if err != nil {
 			r.warnOnce(r.redact("exercise: calling " + raw + ": " + err.Error()))
 			continue
 		}
-		r.vlogf("exercised %s\n", address)
+		if r.o.ExerciseHost != "" {
+			r.vlogf("exercised %s with the Host %s\n", address, r.o.ExerciseHost)
+		} else {
+			r.vlogf("exercised %s\n", address)
+		}
 	}
 	if r.o.ExerciseCmd == "" {
 		return
@@ -1758,7 +1768,7 @@ func runShell(ctx context.Context, command string, env []string) ([]byte, error)
 // httpProber is the default Prober: it connects to the address and asks for the page.
 type httpProber struct{}
 
-func (httpProber) Get(ctx context.Context, url string) error {
+func (httpProber) Get(ctx context.Context, url, host string) error {
 	rest := strings.TrimPrefix(url, "http://")
 	address, _, _ := strings.Cut(rest, "/")
 	dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -1787,6 +1797,9 @@ func (httpProber) Get(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil
+	}
+	if host != "" {
+		req.Host = host
 	}
 	if resp, err := client.Do(req); err == nil {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
