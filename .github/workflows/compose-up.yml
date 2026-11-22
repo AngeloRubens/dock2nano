@@ -19,9 +19,9 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: fastapi, dir: fastapi, flags: "", probe: "api:8000:http"}
-          - {name: fastapi2, dir: fastapi, flags: "", probe: "api:8000:http"}
-          - {name: fastapi3, dir: fastapi, flags: "", probe: "api:8000:http"}
+          - {name: fastapi, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000'", probe: "api:8000:http"}
+          - {name: fastapi2, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000'", probe: "api:8000:http"}
+          - {name: fastapi3, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000'", probe: "api:8000:http"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
