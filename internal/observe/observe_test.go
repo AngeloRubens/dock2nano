@@ -1870,7 +1870,9 @@ func TestObserveRunningUntilTheEndIsNotStoppedEarly(t *testing.T) {
 
 type failProber struct{}
 
-func (failProber) Get(ctx context.Context, url, host string) error { return errors.New("connection refused") }
+func (failProber) Get(ctx context.Context, url, host string) error {
+	return errors.New("connection refused")
+}
 
 func TestObserveProbeFailureWarnsOncePerPort(t *testing.T) {
 	s := newScene(t)
