@@ -788,9 +788,6 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	oo.ExerciseHost = exerciseHostFor(s.Name, o.exerciseHosts)
 	var hostNotes []string
-	if oo.ExerciseHost != "" && len(oo.Exercise) == 0 {
-		hostNotes = append(hostNotes, fmt.Sprintf("--exercise-host %s is not used for service %s: it applies to the requests of --exercise, and none is made for this service (--exercise-cmd is not touched)", oo.ExerciseHost, s.Name))
-	}
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
 	}
