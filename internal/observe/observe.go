@@ -1344,7 +1344,7 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 			}
 			// the question may not take the observation past its end
 			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
-			err := r.o.Probe.Get(pctx, url, "")
+			err := r.o.Probe.Get(pctx, url, r.o.ExerciseHost)
 			stop()
 			if err != nil {
 				failed[port] = err.Error()
