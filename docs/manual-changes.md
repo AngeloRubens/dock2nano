@@ -6,7 +6,7 @@ The goal is zero changes by the user. These are the hand changes that were still
 
 | Case | Change | Status |
 | --- | --- | --- |
-| fastapi | command uvicorn added to the compose file before the conversion | manual (patch ci/patches/fastapi.pre.sh); a command override option is not built |
+| fastapi | command uvicorn added to the compose file before the conversion | tool option: convert --command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000' (the file stays unchanged); the user has to give it, the tool does not guess it |
 | petclinic | mysqld args --user=root --skip-name-resolve | manual |
 | petclinic | domain.xml serverName db changed to db.service | manual; the flag --short-names (dns_search) exists since later |
 | petclinic | JVM -Xint | manual |
@@ -17,7 +17,7 @@ The goal is zero changes by the user. These are the hand changes that were still
 
 ## fastapi (awesome-compose)
 
-Change: add `command: uvicorn app.main:app --host 0.0.0.0 --port 8000` to the compose file before the conversion (ci/patches/fastapi.pre.sh).
+Change: run `convert --command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000'`. The command replaces the one of the service before the observation, so the observation and the package run it. Changing only the Args of the package after the conversion fails (No module named runpy), because the observation never saw uvicorn. The report says the command was replaced and prints the program and the number of arguments, not the arguments. An entrypoint of the service or of the image still runs and receives the command as arguments. A hub package used whole does not run the command.
 
 Why: the original command runs gunicorn with uvicorn workers, and gunicorn calls os.fork(), which nanos does not have (run 44808943029, 3 of 3 red at the probe with OSError 38).
 
@@ -76,4 +76,4 @@ Status: the hub use is a tool feature, the database creation is manual.
 
 ## Hub apache and php
 
-The hub apache listens on 8080 with MapDirs of the docroot, and the hub php package is php -S. These rows are not in the table of the tool yet (diary, 2026-11-21).
+The hub apache listens on 8080 with MapDirs of the docroot, and the hub php package is php -S. These rows are not in the table of the tool yet (project notes, 2026-11-21).

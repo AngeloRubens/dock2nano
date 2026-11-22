@@ -39,7 +39,7 @@ Cause: nanos runs the program as root. A program that refuses root does not star
 
 Kind: hard limit of nanos. The program can be told to accept root with its own option (mysqld --user=root).
 
-Evidence: found while converting petclinic (diary, 2026-11-08). No run id recorded.
+Evidence: found while converting petclinic (project notes, 2026-11-08). No run id recorded.
 
 What the tool does: nothing automatic. The option is a manual change (see manual-changes.md).
 
@@ -105,7 +105,7 @@ Cause: these start child processes. gunicorn forks workers (no fork, see above).
 
 Kind: hard limit for the fork itself; a gap for the tool, which could run the real program directly instead of the wrapper.
 
-Evidence: gunicorn run 44808943029. npm: diary 2026-11-10 (npm start images break). nodemon: react-express-mongodb red in the matrix of 2026-11-20. No run ids recorded for the last two. Single-process variants are needed for fastapi (uvicorn) and django (runserver --noreload).
+Evidence: gunicorn run 44808943029. npm: project notes 2026-11-10 (npm start images break). nodemon: react-express-mongodb red in the matrix of 2026-11-20. No run ids recorded for the last two. Single-process variants are needed for fastapi (uvicorn) and django (runserver --noreload); the option --command gives them (fastapi measured, django not run).
 
 ## Code never run during the observation
 

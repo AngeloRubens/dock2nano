@@ -28,8 +28,10 @@ Only what was measured is listed. Anything not measured is "not run". Run ids ar
 | fastapi, original command (3 identical jobs) | red, answers 000 | 44808943029 | 2026-11-22 | shebang fix works; gunicorn then dies with os.fork() OSError 38 |
 | fastapi, Args changed after conversion | red | 45003079974 | 2026-11-22 | "No module named runpy" |
 | fastapi, uvicorn command added before conversion | answers 200, 3 of 3 | 45003684361 | 2026-11-22 | ci/patches/fastapi.pre.sh |
+| fastapi, convert --command (3 identical jobs) | answers 200, 3 of 3 | 45066198780 | 2026-11-22 | code before the review fixes |
+| fastapi, convert --command, after the review fixes | answers 200, 3 of 3 | 45067756031 | 2026-11-22 | ci 45067574940 and integration 45067668399 green on the same code |
 | 12 Java servers on the fork CI | started, not stable | id not recorded | not recorded | ActiveMQ, Helidon, WildFly sometimes crash under emulation |
 | petclinic after the ops dns fix 1803 | not shown | not run | not recorded | do not claim it |
 | data retention of postgres | not run | not run | not recorded | |
-| django, runserver --noreload | not run | not run | not recorded | |
+| django, runserver --noreload (now possible with --command) | not run | not run | not recorded | |
 | hub apache and php rows | not run | not run | not recorded | not in the table yet |
