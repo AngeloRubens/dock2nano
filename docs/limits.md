@@ -105,7 +105,7 @@ Cause: these start child processes. gunicorn forks workers (no fork, see above).
 
 Kind: hard limit for the fork itself; a gap for the tool, which could run the real program directly instead of the wrapper.
 
-Evidence: gunicorn run 44808943029. npm: project notes 2026-11-10 (npm start images break). nodemon: react-express-mongodb red in the matrix of 2026-11-20. No run ids recorded for the last two. Single-process variants are needed for fastapi (uvicorn) and django (runserver --noreload); the option --command gives them (fastapi measured, django not run).
+Evidence: gunicorn run 44808943029. npm: project notes 2026-11-10 (npm start images break). nodemon: react-express-mongodb red in the matrix of 2026-11-20. No run ids recorded for the last two. Single-process variants are needed for fastapi (uvicorn) and django (runserver --noreload); the option --command gives them (fastapi answers 200; django runs and answers 400 DisallowedHost for a Host that is an address, a 200 was not run).
 
 ## Code never run during the observation
 

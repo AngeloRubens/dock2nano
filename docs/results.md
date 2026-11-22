@@ -33,5 +33,7 @@ Only what was measured is listed. Anything not measured is "not run". Run ids ar
 | 12 Java servers on the fork CI | started, not stable | id not recorded | not recorded | ActiveMQ, Helidon, WildFly sometimes crash under emulation |
 | petclinic after the ops dns fix 1803 | not shown | not run | not recorded | do not claim it |
 | data retention of postgres | not run | not run | not recorded | |
-| django, runserver --noreload (now possible with --command) | not run | not run | not recorded | |
+| django (awesome-compose), original command | red | 45071130523 | 2026-11-22 | the autoreloader of runserver starts another process and fails on nanos |
+| django, convert --command 'web=manage.py runserver 0.0.0.0:8000 --noreload' | server runs, answers 400 | 45071130523 | 2026-11-22 | DisallowedHost: the probe sends the address of the guest as Host, which the example does not allow. The probe counts any 2xx, 3xx or 4xx as an answer, so the job is green. A 200 with an allowed Host was not run |
+| flask (awesome-compose), original command | answers 200 | 45071130523 | 2026-11-22 | one run, no changes |
 | hub apache and php rows | not run | not run | not recorded | not in the table yet |
