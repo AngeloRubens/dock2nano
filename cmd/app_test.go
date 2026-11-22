@@ -1671,24 +1671,100 @@ func TestExerciseHostForPicksTheHostOfTheService(t *testing.T) {
 	}
 }
 
-func TestExerciseHostWithoutARequestIsAWarning(t *testing.T) {
+func TestExerciseHostFlagChecksTheHost(t *testing.T) {
+	for _, bad := range []string{"app.test/x", "a b", "user@host", "web=app.test/x", "web=user@host"} {
+		h := newHarness(t)
+		h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+		h.dock.have["w"] = true
+		h.mustRun(1, "convert", "--exercise-host", bad)
+		if !strings.Contains(h.stderr.String(), "a Host header can hold") {
+			t.Errorf("%q: stderr %q", bad, h.stderr)
+		}
+		if len(h.observed) != 0 {
+			t.Errorf("%q: something was observed", bad)
+		}
+	}
+	for _, good := range []string{"localhost", "localhost:8000", "[::1]:8000", "web=localhost:8000"} {
+		h := newHarness(t)
+		h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+		h.haveAll("w")
+		h.mustRun(0, "convert", "--exercise", "/x", "--exercise-host", good)
+	}
+}
+
+func TestExerciseHostForAServiceWithoutARequestIsAWarning(t *testing.T) {
 	h := newHarness(t)
 	h.write("compose.yaml", "services:\n  web:\n    image: w\n  api:\n    image: a\n")
 	h.haveAll("w", "a")
-	h.mustRun(0, "convert", "--exercise", "web=/x", "--exercise-host", "localhost")
-	has := func(svc string) bool {
-		for _, w := range h.genIn[0].Services[svc].Observed.Warnings {
-			if strings.Contains(w, "--exercise-host localhost is not used for service "+svc) {
-				return true
-			}
-		}
-		return false
-	}
-	if has("web") {
+	h.mustRun(0, "convert", "--exercise", "web=/x", "--exercise-host", "web=localhost", "--exercise-host", "api=localhost")
+	if hasWarning(h, "web", "--exercise-host") {
 		t.Errorf("web has a request and was warned: %q", h.genIn[0].Services["web"].Observed.Warnings)
 	}
-	if !has("api") {
+	if !hasWarning(h, "api", "--exercise-host localhost is not used for service api") {
 		t.Errorf("api has no request and was not warned: %q", h.genIn[0].Services["api"].Observed.Warnings)
+	}
+	if !strings.Contains(h.stderr.String(), "--exercise-host localhost is not used for service api") {
+		t.Errorf("not on stderr: %q", h.stderr)
+	}
+}
+
+func TestExerciseHostWithoutAServiceAndNoRequestIsOneWarning(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n  api:\n    image: a\n")
+	h.haveAll("w", "a")
+	h.mustRun(0, "convert", "--exercise-host", "localhost")
+	n := 0
+	for _, svc := range []string{"web", "api"} {
+		for _, w := range h.genIn[0].Services[svc].Observed.Warnings {
+			if strings.Contains(w, "--exercise-host localhost is not used") {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d warnings, want 1", n)
+	}
+	if c := strings.Count(h.stderr.String(), "--exercise-host localhost is not used"); c != 1 {
+		t.Errorf("%d lines on stderr, want 1: %q", c, h.stderr)
+	}
+}
+
+func TestExerciseHostDefaultMakesNoNoiseForServicesWithoutARequest(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n  db:\n    image: d\n  cache:\n    image: c\n")
+	h.haveAll("w", "d", "c")
+	h.mustRun(0, "convert", "--exercise", "web=/x", "--exercise-host", "localhost")
+	for _, svc := range []string{"web", "db", "cache"} {
+		if hasWarning(h, svc, "--exercise-host") {
+			t.Errorf("%s was warned: %q", svc, h.genIn[0].Services[svc].Observed.Warnings)
+		}
+	}
+	if strings.Contains(h.stderr.String(), "is not used") {
+		t.Errorf("stderr: %q", h.stderr)
+	}
+}
+
+func TestExerciseHostForAServiceThatIsNotConvertedIsANote(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n  api:\n    image: a\n")
+	h.haveAll("w")
+	h.mustRun(0, "convert", "--service", "web", "--exercise", "web=/x", "--exercise-host", "api=localhost")
+	want := "service api is not converted"
+	if !hasWarning(h, "web", want) {
+		t.Errorf("not in the report: %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+	if !strings.Contains(h.stderr.String(), want) {
+		t.Errorf("not on stderr: %q", h.stderr)
+	}
+}
+
+func TestExerciseHostOfAnUnknownServiceFailsBeforeOtherNotes(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", noDepsCompose)
+	h.haveAll("b", "d")
+	h.mustRun(1, "convert", "--with", "db", "--exercise-host", "ghost=a")
+	if got := h.stderr.String(); strings.Contains(got, "started with it") || !strings.Contains(got, "no such service") {
+		t.Errorf("stderr: %q", got)
 	}
 }
 

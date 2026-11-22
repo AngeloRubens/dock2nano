@@ -1768,7 +1768,34 @@ func runShell(ctx context.Context, command string, env []string) ([]byte, error)
 // httpProber is the default Prober: it connects to the address and asks for the page.
 type httpProber struct{}
 
+// ValidHost tells whether host can be the Host header of a request: a host name or address, with
+// an optional port, and no path, query, fragment, user name or space.
+func ValidHost(host string) bool {
+	u, err := url.Parse("http://" + host)
+	return err == nil && host != "" && u.Host == host && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil && !strings.ContainsAny(host, " \t")
+}
+
+// redirectAddress is the address to reach the container at when a redirect names the host given
+// for the Host header: the address of the first request. When the scheme is another (a redirect to
+// https), the port of the redirect is kept, as the container does not speak it on the first port.
+func redirectAddress(first, target *url.URL) string {
+	if first.Scheme == target.Scheme {
+		return first.Host
+	}
+	name := first.Hostname()
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port := target.Port(); port != "" {
+		return name + ":" + port
+	}
+	return name
+}
+
 func (httpProber) Get(ctx context.Context, url, host string) error {
+	if host != "" && !ValidHost(host) {
+		return fmt.Errorf("%q is not a host a Host header can hold", host)
+	}
 	rest := strings.TrimPrefix(url, "http://")
 	address, _, _ := strings.Cut(rest, "/")
 	dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -1788,8 +1815,22 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 		Timeout:   15 * time.Second,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Hostname() != via[0].URL.Hostname() || len(via) >= 10 {
+			if len(via) >= 10 {
 				return http.ErrUseLastResponse
+			}
+			// Go keeps a Host given by hand only for a relative Location. A redirect to the
+			// name that was given as Host (an application that redirects to its own domain) is
+			// followed to the container and still carries that Host.
+			if host != "" && strings.EqualFold(req.URL.Hostname(), hostName(host)) {
+				req.URL.Host = redirectAddress(via[0].URL, req.URL)
+				req.Host = host
+				return nil
+			}
+			if req.URL.Hostname() != via[0].URL.Hostname() {
+				return http.ErrUseLastResponse
+			}
+			if host != "" {
+				req.Host = host
 			}
 			return nil
 		},
@@ -1801,11 +1842,25 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 	if host != "" {
 		req.Host = host
 	}
-	if resp, err := client.Do(req); err == nil {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
-		resp.Body.Close()
+	resp, err := client.Do(req)
+	if err != nil {
+		if host != "" && strings.Contains(err.Error(), "invalid Host header") {
+			return err
+		}
+		return nil
 	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
+	resp.Body.Close()
 	return nil
+}
+
+// hostName is the name of a host that ValidHost accepted, without its port.
+func hostName(host string) string {
+	u, err := url.Parse("http://" + host)
+	if err != nil {
+		return host
+	}
+	return u.Hostname()
 }
 
 // trimEmpty drops the empty strings at the end of list.

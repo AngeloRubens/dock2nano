@@ -45,6 +45,10 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	hostNotes, err := checkExerciseHosts(project, o.exerciseHosts, only, o.exercise)
+	if err != nil {
+		return 0, err
+	}
 	extra, err := applyWith(project, o.with, only)
 	if err != nil {
 		return 0, err
@@ -61,8 +65,10 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 			fmt.Fprintf(a.Stderr, "%s: %s\n", c.service, m)
 		}
 	}
-	if err := checkExerciseHosts(project, o.exerciseHosts); err != nil {
-		return 0, err
+	hostNotesByService := map[string][]string{}
+	for _, n := range hostNotes {
+		fmt.Fprintln(a.Stderr, n.text)
+		hostNotesByService[n.service] = append(hostNotesByService[n.service], n.text)
 	}
 	ordered, err := dependencyOrder(project)
 	if err != nil {
@@ -92,7 +98,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, hostNotes: hostNotesByService, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -787,10 +793,6 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	}
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	oo.ExerciseHost = exerciseHostFor(s.Name, o.exerciseHosts)
-	var hostNotes []string
-	if oo.ExerciseHost != "" && len(oo.Exercise) == 0 {
-		hostNotes = append(hostNotes, fmt.Sprintf("--exercise-host %s is not used for service %s: it applies to the requests of --exercise, and none is made for this service (--exercise-cmd is not touched)", oo.ExerciseHost, s.Name))
-	}
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
 	}
@@ -821,7 +823,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
 		res.Warnings = append(res.Warnings, cmdNotes...)
-		res.Warnings = append(res.Warnings, hostNotes...)
+		res.Warnings = append(res.Warnings, rs.hostNotes[s.Name]...)
 	}
 	rs.findCrashed(ctx, a, s, res)
 	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
@@ -1185,6 +1187,9 @@ type runState struct {
 	noted map[string][]string
 	// cmdNotes are the lines of the report about a command replaced by --command, by service.
 	cmdNotes map[string][]string
+	// hostNotes are the lines of the report about an --exercise-host that is not used, by the
+	// service whose report carries them.
+	hostNotes map[string][]string
 	// served holds, by service name, the services that were observed while it was running.
 	served map[string][]string
 	order  []string
@@ -1551,8 +1556,18 @@ func exerciseHostFor(service string, hosts []exerciseHost) string {
 	return def
 }
 
-// checkExerciseHosts is an error when --exercise-host names a service the file does not have.
-func checkExerciseHosts(p *compose.Project, hosts []exerciseHost) error {
+// hostNote is a line about an --exercise-host that is not used, and the service whose report
+// carries it.
+type hostNote struct {
+	service string
+	text    string
+}
+
+// checkExerciseHosts is an error when --exercise-host names a service the file does not have. It
+// returns the notes about the hosts that nothing uses: a host for one service that has no
+// request of --exercise, a host for a service that is not converted (not chosen with --service),
+// and a host without a service when no converted service has a request.
+func checkExerciseHosts(p *compose.Project, hosts []exerciseHost, only map[string]bool, exercise []string) ([]hostNote, error) {
 	for _, h := range hosts {
 		if h.service == "" || p.Service(h.service) != nil {
 			continue
@@ -1561,9 +1576,38 @@ func checkExerciseHosts(p *compose.Project, hosts []exerciseHost) error {
 		for _, x := range p.Services {
 			known = append(known, x.Name)
 		}
-		return fmt.Errorf("--exercise-host %s=%s: the file has no such service (services: %s)", h.service, h.host, strings.Join(known, ", "))
+		return nil, fmt.Errorf("--exercise-host %s=%s: the file has no such service (services: %s)", h.service, h.host, strings.Join(known, ", "))
 	}
-	return nil
+	var converted []string
+	requested := map[string]bool{}
+	anyRequest := false
+	for _, s := range p.Services {
+		if only != nil && !only[s.Name] {
+			continue
+		}
+		converted = append(converted, s.Name)
+		if len(exerciseFor(s.Name, exercise, p)) > 0 {
+			requested[s.Name] = true
+			anyRequest = true
+		}
+	}
+	if len(converted) == 0 {
+		return nil, nil
+	}
+	var notes []hostNote
+	for _, h := range hosts {
+		switch {
+		case h.service == "":
+			if !anyRequest {
+				notes = append(notes, hostNote{converted[0], fmt.Sprintf("--exercise-host %s is not used: it applies to the requests of --exercise, and no service has one (--exercise-cmd is not touched)", h.host)})
+			}
+		case only != nil && !only[h.service]:
+			notes = append(notes, hostNote{converted[0], fmt.Sprintf("--exercise-host %s=%s is not used: service %s is not converted, it is not one of those chosen with --service", h.service, h.host, h.service)})
+		case !requested[h.service]:
+			notes = append(notes, hostNote{h.service, fmt.Sprintf("--exercise-host %s is not used for service %s: it applies to the requests of --exercise, and none is made for this service (--exercise-cmd is not touched)", h.host, h.service)})
+		}
+	}
+	return notes, nil
 }
 
 // declaredPorts are the tcp ports that the file says the service listens on: the targets of ports

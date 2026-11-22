@@ -70,7 +70,8 @@ Flags of convert:
                      of the address of the container: for a framework that answers 400 to a host it
                      does not allow (Django ALLOWED_HOSTS) before it loads the code that serves a
                      valid request. At most one per service; one without SVC= is for the services
-                     that have none of their own. --exercise-cmd is not touched
+                     that have none of their own. The front page request keeps the address of
+                     the container as Host. --exercise-cmd is not touched
   --exercise-cmd [SVC=]CMD  run a command here once the program is up, for one that does not speak
                      HTTP; it sees DOCK2NANO_HOST and DOCK2NANO_PORT
   --with SERVICE     start this service for the observation of the others, as if each of them
@@ -369,6 +370,9 @@ func (a *App) parseConvert(args []string) (*options, error) {
 		}
 		if host == "" {
 			return errors.New("the host of --exercise-host is empty")
+		}
+		if !observe.ValidHost(host) {
+			return fmt.Errorf("--exercise-host %q: %q is not a host a Host header can hold (host or host:port, without a path, a user or a space)", v, host)
 		}
 		for _, h := range o.exerciseHosts {
 			if h.service == service {
