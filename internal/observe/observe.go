@@ -761,18 +761,18 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		base := "/proc/" + pid + "/"
 		if out, ok := r.procRead(ctx, id, "command line", []string{"cat", base + "cmdline"}); ok {
 			// a program that rewrites its command line, nginx for one, pads it with NULs
-			parts := trace.SplitNul(out)
-			for len(parts) > 0 && parts[len(parts)-1] == "" {
-				parts = parts[:len(parts)-1]
-			}
+			parts := trimEmpty(trace.SplitNul(out))
+			// the same trim for the copy of execve that is compared, so that a trailing empty
+			// argument (app "") is not taken for a difference
+			asked := trimEmpty(slices.Clone(cmdline))
 			if len(parts) > 0 {
 				switch {
 				case len(cmdline) == 0:
 					cmdline = parts
-				case startedThroughShebang(parts, cmdline):
+				case startedThroughShebang(parts, asked, program):
 					r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
 					cmdline = parts
-				case !slices.Equal(parts, cmdline):
+				case !slices.Equal(parts, asked):
 					r.warnOnce(r.redact(fmt.Sprintf(NoteProcCmdline+" %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
 				}
 			}
@@ -1795,13 +1795,23 @@ func (httpProber) Get(ctx context.Context, url string) error {
 	return nil
 }
 
+// trimEmpty drops the empty strings at the end of list.
+func trimEmpty(list []string) []string {
+	for len(list) > 0 && list[len(list)-1] == "" {
+		list = list[:len(list)-1]
+	}
+	return list
+}
+
 // startedThroughShebang tells whether the command line in /proc is the one execve was given with
 // the kernel's shebang expansion in front: the interpreter, optionally its one argument, then the
-// script in place of argv[0], then the rest of the arguments unchanged. The script must be argv[0]
-// itself or have its name. Anything else (a program that rewrote its own arguments, a launcher) is
-// not taken for a shebang.
-func startedThroughShebang(proc, execve []string) bool {
-	if len(execve) == 0 {
+// script in place of argv[0], then the rest of the arguments unchanged. The kernel puts the file
+// name given to execve (path) there, not argv[0], so the script must be path itself or have its
+// name. Anything else (a program that rewrote its own arguments, a launcher) is not taken for a
+// shebang. The check that the interpreter is the one of /proc/PID/exe is not made: that link is
+// read after the command line, and the interpreter can be reached through a link.
+func startedThroughShebang(proc, execve []string, path string) bool {
+	if len(execve) == 0 || path == "" {
 		return false
 	}
 	// the interpreter and the script replace argv[0]; the interpreter argument is optional
@@ -1813,5 +1823,5 @@ func startedThroughShebang(proc, execve []string) bool {
 		return false
 	}
 	script := proc[lead-1]
-	return script == execve[0] || filepath.Base(script) == filepath.Base(execve[0])
+	return script == path || filepath.Base(script) == filepath.Base(path)
 }

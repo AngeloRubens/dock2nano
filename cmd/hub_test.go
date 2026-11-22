@@ -604,3 +604,51 @@ func TestRetryBindNotesAreDroppedForAPackageUsedWhole(t *testing.T) {
 		t.Errorf("the input was changed: %q", binds)
 	}
 }
+
+func TestHubWholeSaysThePackageDoesNotRunTheCommandOfTheFlag(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.28.0", nginxObserved(0))
+	rows, err := hub.ParseRequired([]byte(hubTestRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.stub.pkgs = []hub.Package{hubPkg("eyberg", "nginx", "1.28.3")}
+	h.stub.wholeFiles = map[string]string{"nginx": "ELF"}
+	h.mustRun(0, "convert", "--command", "web=nginx -g 'daemon off;'")
+	si := h.genIn[0].Services["web"]
+	if !si.HubWhole {
+		t.Fatalf("the package was not used whole")
+	}
+	found := false
+	for _, it := range si.HubItems {
+		if strings.Contains(it.Message, "the package of the hub does not run the command of --command") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no note about the command in the items of the hub: %+v", si.HubItems)
+	}
+	kept := false
+	for _, w := range si.Observed.Warnings {
+		if strings.Contains(w, "replaced by --command") {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Errorf("the note about the replaced command is gone: %q", si.Observed.Warnings)
+	}
+}
+
+func TestHubWholeWithoutTheHubSaysTheCommandWasReplaced(t *testing.T) {
+	h := newHubHarness(t, "nginx:1.28.0", nginxObserved(0))
+	rows, err := hub.ParseRequired([]byte(hubTestRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.mustRun(0, "convert", "--no-hub", "--command", "web=nginx -g 'daemon off;'")
+	why := h.genIn[0].Skipped["web"]
+	if !strings.Contains(why, "--no-hub") || !strings.Contains(why, "its command was replaced by --command") {
+		t.Errorf("skipped reason %q", why)
+	}
+}

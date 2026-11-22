@@ -73,11 +73,15 @@ Flags of convert:
                      the compose file does not say it needs; the service is also listed before
                      them in compose.yaml
   --command SVC=CMD  replace the command of this service before the observation, so that the
-                     observation and the package run CMD (read as a command given as a string in
-                     the file); the file is not changed. For a program that forks (gunicorn
-                     workers) and is run in a single process instead. An entrypoint of the service
-                     stays and receives CMD as arguments. The report says so (can be repeated, once
-                     for each service)
+                     observation and the generated package run CMD (read as a command given as a
+                     string in the file; $VAR in it is taken from the environment of the tool at
+                     conversion time, and $$ escapes it); the file is not changed. For a program
+                     that forks (gunicorn workers) and is run in a single process instead. An
+                     entrypoint of the service, from the file or from the image, stays and
+                     receives CMD as arguments. For a service whose package is taken whole from the
+                     hub the package does not run CMD: the report says so. The report names the
+                     program and the number of arguments of the old and the new command, not the
+                     arguments (can be repeated, once for each service)
   --no-with          do not start any service for the observation of another: neither those of
                      depends_on nor those of --with. Without it, the services a service lists in
                      depends_on run during its observation (the report names them). A service that

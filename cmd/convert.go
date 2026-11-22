@@ -52,7 +52,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	for _, m := range extra {
 		fmt.Fprintln(a.Stderr, m)
 	}
-	cmdNotes, err := applyCommands(project, o.commands, only)
+	cmdNotes, err := applyCommands(project, o.commands, only, a.LookupEnv)
 	if err != nil {
 		return 0, err
 	}
@@ -331,6 +331,9 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	}
 
 	for name, why := range rs.late {
+		if len(cmdNotes[name]) > 0 {
+			why += "; its command was replaced by --command for the observation, and the package of the hub does not run it"
+		}
 		skipped[name] = why
 	}
 	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, ShortNames: o.shortNames}
@@ -597,10 +600,16 @@ func applyWith(p *compose.Project, with []string, only map[string]bool) ([]strin
 
 // applyCommands replaces the command of each service named by --command with the value, read as
 // a command given as a string in the file (shell form). The entrypoint is not touched. It returns
-// the lines of the report for each service that got one.
-func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]bool) (map[string][]string, error) {
-	out := map[string][]string{}
-	for _, c := range cmds {
+// the lines of the report for each service that got one. Every override is checked first (the
+// service is there, chosen and converted, and the value reads: interpolation, quotes) and only
+// then applied, so that an error leaves the project as it was. The notes name the program and the
+// number of arguments, not the arguments: they may hold a secret.
+func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]bool, lookup func(string) (string, bool)) (map[string][]string, error) {
+	if lookup == nil {
+		lookup = func(string) (string, bool) { return "", false }
+	}
+	newWords := make([][]string, len(cmds))
+	for i, c := range cmds {
 		s := p.Service(c.service)
 		if s == nil {
 			var known []string
@@ -612,12 +621,25 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 		if only != nil && !only[c.service] {
 			return nil, fmt.Errorf("--command %s: the service is not one of those chosen with --service", c.service)
 		}
+		if why := notConverted(s, only); why != "" {
+			return nil, fmt.Errorf("--command %s: the service is not converted (%s), so its command is not used", c.service, why)
+		}
+		// the same reading of the value as the one that starts the observation
+		_, w, err := gen.EffectiveCommand(&compose.Service{Command: compose.Command{Shell: c.command, Set: true}}, nil, lookup)
+		if err != nil {
+			return nil, fmt.Errorf("--command %s: %w", c.service, err)
+		}
+		newWords[i] = w
+	}
+	out := map[string][]string{}
+	for i, c := range cmds {
+		s := p.Service(c.service)
 		old := "none (the command of the image)"
 		if s.Command.IsSet() {
 			old = describeCommand(s.Command)
 		}
 		s.Command = compose.Command{Shell: c.command, Set: true}
-		out[c.service] = append(out[c.service], fmt.Sprintf("command of service %s replaced by --command, from %q to %q; the output was observed with this command and must be reviewed (the file is not changed)", c.service, old, c.command))
+		out[c.service] = append(out[c.service], fmt.Sprintf("command of service %s replaced by --command, from %s to %s; the output was observed with this command and must be reviewed (the file is not changed)", c.service, old, describeWords(newWords[i])))
 		if s.Entrypoint.IsSet() && (s.Entrypoint.Shell != "" || len(s.Entrypoint.Exec) > 0) {
 			out[c.service] = append(out[c.service], fmt.Sprintf("service %s has an entrypoint (%s): it still runs and receives the command of --command as its arguments, as docker does", c.service, describeCommand(s.Entrypoint)))
 		}
@@ -625,12 +647,25 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 	return out, nil
 }
 
-// describeCommand writes a command of the file as one line.
+// describeCommand writes a command of the file as the program and the number of arguments, not
+// the arguments themselves, which may hold a secret. A string is cut at blanks for this; it is
+// not interpolated.
 func describeCommand(c compose.Command) string {
 	if c.Shell != "" {
-		return c.Shell
+		return describeWords(strings.Fields(c.Shell))
 	}
-	return strings.Join(c.Exec, " ")
+	return describeWords(c.Exec)
+}
+
+// describeWords writes a command line as its program and the number of arguments.
+func describeWords(w []string) string {
+	switch len(w) {
+	case 0:
+		return "empty (clears the command of the image)"
+	case 2:
+		return fmt.Sprintf("%q with 1 argument", w[0])
+	}
+	return fmt.Sprintf("%q with %d arguments", w[0], len(w)-1)
 }
 
 // dependencyOrder sorts the services by depends_on, keeping the file order
@@ -714,6 +749,12 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	if err != nil {
 		return si, err
 	}
+	// An entrypoint that comes from the image, not from the file, also stays and gets the command.
+	// The notes are built here and not stored, so that a second observation says it once.
+	cmdNotes := slices.Clone(rs.cmdNotes[s.Name])
+	if len(cmdNotes) > 0 && !s.Entrypoint.IsSet() && img != nil && len(img.Entrypoint) > 0 {
+		cmdNotes = append(cmdNotes, fmt.Sprintf("service %s has an entrypoint in its image (%s): it still runs and receives the command of --command as its arguments, as docker does", s.Name, describeWords(img.Entrypoint)))
+	}
 	// The entrypoint is always passed, even when empty, so that the CMD of the
 	// image is replaced by cmd and an entrypoint cleared in the file stays
 	// cleared.
@@ -771,7 +812,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	if res != nil {
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
-		res.Warnings = append(res.Warnings, rs.cmdNotes[s.Name]...)
+		res.Warnings = append(res.Warnings, cmdNotes...)
 	}
 	rs.findCrashed(ctx, a, s, res)
 	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
