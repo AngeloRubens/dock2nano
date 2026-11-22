@@ -1541,9 +1541,6 @@ func exerciseFor(service string, values []string, project *compose.Project) []st
 func exerciseHostFor(service string, hosts []exerciseHost) string {
 	def := ""
 	for _, h := range hosts {
-		if h.service == service {
-			return h.host
-		}
 		if h.service == "" {
 			def = h.host
 		}
