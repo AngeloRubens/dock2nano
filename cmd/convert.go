@@ -52,6 +52,15 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	for _, m := range extra {
 		fmt.Fprintln(a.Stderr, m)
 	}
+	cmdNotes, err := applyCommands(project, o.commands, only)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range o.commands {
+		for _, m := range cmdNotes[c.service] {
+			fmt.Fprintf(a.Stderr, "%s: %s\n", c.service, m)
+		}
+	}
 	ordered, err := dependencyOrder(project)
 	if err != nil {
 		return 0, err
@@ -80,7 +89,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{dir: dir, noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -586,6 +595,44 @@ func applyWith(p *compose.Project, with []string, only map[string]bool) ([]strin
 	return out, nil
 }
 
+// applyCommands replaces the command of each service named by --command with the value, read as
+// a command given as a string in the file (shell form). The entrypoint is not touched. It returns
+// the lines of the report for each service that got one.
+func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]bool) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, c := range cmds {
+		s := p.Service(c.service)
+		if s == nil {
+			var known []string
+			for _, x := range p.Services {
+				known = append(known, x.Name)
+			}
+			return nil, fmt.Errorf("--command %s: the file has no such service (services: %s)", c.service, strings.Join(known, ", "))
+		}
+		if only != nil && !only[c.service] {
+			return nil, fmt.Errorf("--command %s: the service is not one of those chosen with --service", c.service)
+		}
+		old := "none (the command of the image)"
+		if s.Command.IsSet() {
+			old = describeCommand(s.Command)
+		}
+		s.Command = compose.Command{Shell: c.command, Set: true}
+		out[c.service] = append(out[c.service], fmt.Sprintf("command of service %s replaced by --command, from %q to %q; the output was observed with this command and must be reviewed (the file is not changed)", c.service, old, c.command))
+		if s.Entrypoint.IsSet() && (s.Entrypoint.Shell != "" || len(s.Entrypoint.Exec) > 0) {
+			out[c.service] = append(out[c.service], fmt.Sprintf("service %s has an entrypoint (%s): it still runs and receives the command of --command as its arguments, as docker does", c.service, describeCommand(s.Entrypoint)))
+		}
+	}
+	return out, nil
+}
+
+// describeCommand writes a command of the file as one line.
+func describeCommand(c compose.Command) string {
+	if c.Shell != "" {
+		return c.Shell
+	}
+	return strings.Join(c.Exec, " ")
+}
+
 // dependencyOrder sorts the services by depends_on, keeping the file order
 // for ties. internal/gen has the same sort (its unexported order function): the two are copies
 // of each other, so a change here goes there too.
@@ -724,6 +771,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	if res != nil {
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
+		res.Warnings = append(res.Warnings, rs.cmdNotes[s.Name]...)
 	}
 	rs.findCrashed(ctx, a, s, res)
 	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
@@ -1085,6 +1133,8 @@ type runState struct {
 	// noted holds what Start noticed about each started service; every service
 	// observed with it running gets the notes, not only the first one.
 	noted map[string][]string
+	// cmdNotes are the lines of the report about a command replaced by --command, by service.
+	cmdNotes map[string][]string
 	// served holds, by service name, the services that were observed while it was running.
 	served map[string][]string
 	order  []string

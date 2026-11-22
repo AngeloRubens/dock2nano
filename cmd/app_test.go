@@ -2554,3 +2554,108 @@ func TestAHubPackageUsedAfterAFailedSecondObservationIsRemoved(t *testing.T) {
 		t.Errorf("the directory of the hub package was not removed: %s", dest)
 	}
 }
+
+func TestCommandFlagParse(t *testing.T) {
+	h := newHarness(t)
+	o, err := h.app.parseConvert([]string{"--command", "web=uvicorn app:app --port=8000", "--command", "db=postgres -c x=y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []commandOverride{{"web", "uvicorn app:app --port=8000"}, {"db", "postgres -c x=y"}}
+	if !reflect.DeepEqual(o.commands, want) {
+		t.Errorf("commands %v, want %v (split on the first =)", o.commands, want)
+	}
+	for _, r := range []struct{ arg, want string }{
+		{"web", "expected SERVICE=COMMAND"},
+		{"=run", "the service of --command is empty"},
+		{"web=", "the command of --command web is empty"},
+		{"web=  ", "the command of --command web is empty"},
+	} {
+		if _, err := h.app.parseConvert([]string{"--command", r.arg}); err == nil || !strings.Contains(err.Error(), r.want) {
+			t.Errorf("--command %q: error %v, want %q", r.arg, err, r.want)
+		}
+	}
+	if _, err := h.app.parseConvert([]string{"--command", "web=a", "--command", "web=b"}); err == nil || !strings.Contains(err.Error(), "web is given twice") {
+		t.Errorf("duplicate: %v", err)
+	}
+}
+
+func TestApplyCommandsReplacesTheCommandAndKeepsTheEntrypoint(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{
+		{Name: "web", Command: compose.Command{Exec: []string{"gunicorn", "app:app"}, Set: true}},
+		{Name: "job", Entrypoint: compose.Command{Exec: []string{"/entry.sh"}, Set: true}},
+		{Name: "plain"},
+	}}
+	out, err := applyCommands(p, []commandOverride{{"web", "uvicorn app:app --port 8000"}, {"job", "run it"}, {"plain", "x"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Service("web").Command; !reflect.DeepEqual(got, compose.Command{Shell: "uvicorn app:app --port 8000", Set: true}) {
+		t.Errorf("web command %+v", got)
+	}
+	if len(out["web"]) != 1 || !strings.Contains(out["web"][0], `command of service web replaced by --command, from "gunicorn app:app" to "uvicorn app:app --port 8000"`) || !strings.Contains(out["web"][0], "must be reviewed") {
+		t.Errorf("web notes %q", out["web"])
+	}
+	if got := p.Service("job").Entrypoint; !reflect.DeepEqual(got, compose.Command{Exec: []string{"/entry.sh"}, Set: true}) {
+		t.Errorf("job entrypoint changed: %+v", got)
+	}
+	if len(out["job"]) != 2 || !strings.Contains(out["job"][1], "entrypoint (/entry.sh): it still runs and receives the command") {
+		t.Errorf("job notes %q", out["job"])
+	}
+	if len(out["plain"]) != 1 || !strings.Contains(out["plain"][0], `from "none (the command of the image)"`) {
+		t.Errorf("plain notes %q", out["plain"])
+	}
+}
+
+func TestApplyCommandsRefusesWhatIsNotThere(t *testing.T) {
+	p := &compose.Project{Services: []*compose.Service{{Name: "a"}, {Name: "b"}}}
+	_, err := applyCommands(p, []commandOverride{{"nope", "x"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--command nope") || !strings.Contains(err.Error(), "a, b") {
+		t.Errorf("unknown: %v", err)
+	}
+	if _, err := applyCommands(p, []commandOverride{{"b", "x"}}, map[string]bool{"a": true}); err == nil || !strings.Contains(err.Error(), "--service") {
+		t.Errorf("not chosen: %v", err)
+	}
+	if p.Service("b").Command.IsSet() {
+		t.Errorf("a refused command was applied")
+	}
+}
+
+func TestCommandFlagReachesTheObservationAndTheReport(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n    command: gunicorn app:app\n    entrypoint: /entry.sh\n")
+	h.dock.have["w"] = true
+	h.mustRun(0, "convert", "--command", "web=uvicorn app:app --port 8000")
+	if len(h.observed) != 1 {
+		t.Fatalf("observed %d", len(h.observed))
+	}
+	o := h.observed[0]
+	if !reflect.DeepEqual(o.Cmd, []string{"uvicorn", "app:app", "--port", "8000"}) {
+		t.Errorf("observed command %q", o.Cmd)
+	}
+	if o.Entrypoint == nil || !reflect.DeepEqual(*o.Entrypoint, []string{"/entry.sh"}) {
+		t.Errorf("observed entrypoint %v", o.Entrypoint)
+	}
+	if !hasWarning(h, "web", `from "gunicorn app:app" to "uvicorn app:app --port 8000"`) {
+		t.Errorf("warnings %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+	if !hasWarning(h, "web", "it still runs and receives the command") {
+		t.Errorf("no entrypoint note: %q", h.genIn[0].Services["web"].Observed.Warnings)
+	}
+	if !strings.Contains(h.stderr.String(), "web: command of service web replaced by --command") {
+		t.Errorf("stderr %q", h.stderr)
+	}
+}
+
+func TestCommandFlagUnknownServiceStopsBeforeAnythingRuns(t *testing.T) {
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  web:\n    image: w\n")
+	h.dock.have["w"] = true
+	h.mustRun(1, "convert", "--command", "nope=x")
+	if !strings.Contains(h.stderr.String(), "--command nope: the file has no such service (services: web)") {
+		t.Errorf("stderr %q", h.stderr)
+	}
+	if len(h.observed) != 0 || len(h.dock.calls) != 0 {
+		t.Errorf("something ran: %v %v", h.observed, h.dock.calls)
+	}
+}
