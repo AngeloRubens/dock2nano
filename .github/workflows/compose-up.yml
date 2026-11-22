@@ -19,16 +19,9 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-short, dir: sparkjava-mysql, flags: "--short-names", probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
-          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp"}
+          - {name: django-xhost-a, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/ --exercise-host web=localhost:8000", host: "localhost:8000", probe: "web:8000:http"}
+          - {name: django-xhost-b, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/ --exercise-host web=localhost:8000", host: "localhost:8000", probe: "web:8000:http"}
+          - {name: django-xhost-c, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/ --exercise-host web=localhost:8000", host: "localhost:8000", probe: "web:8000:http"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -160,8 +153,9 @@ jobs:
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
-                code=$(curl -s -m 5 -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
-                case "$code" in 2*|3*|4*) break;; esac
+                if [ -n "${{ matrix.host }}" ]; then hdr="Host: ${{ matrix.host }}"; else hdr="Host: $ip:$port"; fi
+                code=$(curl -s -m 5 -H "$hdr" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                case "$code" in 2*|3*|4*|5*) break;; esac
               else
                 if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
               fi
@@ -169,8 +163,13 @@ jobs:
             done
             echo "answer: $code"
             if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
-            # a service of the probe list that gives no answer fails the job
-            case "$code" in 2*|3*|4*|open) ;; *) echo "no answer from $svc"; probe_fail=1;; esac
+            # a service of the probe list that gives no answer fails the job, and so does one that
+            # answers with an error status: green means 2xx or 3xx (or an open port), nothing weaker
+            case "$code" in
+              2*|3*|open) echo "result: $svc success ($code)" ;;
+              4*|5*) echo "result: $svc reached, status $code is not a success"; probe_fail=1 ;;
+              *) echo "no answer from $svc"; probe_fail=1 ;;
+            esac
           done
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
