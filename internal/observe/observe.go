@@ -1823,5 +1823,5 @@ func startedThroughShebang(proc, execve []string, path string) bool {
 		return false
 	}
 	script := proc[lead-1]
-	return script == path || filepath.Base(script) == filepath.Base(path)
+	return script == execve[0] || filepath.Base(script) == filepath.Base(execve[0])
 }
