@@ -52,6 +52,15 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	for _, m := range extra {
 		fmt.Fprintln(a.Stderr, m)
 	}
+	cmdNotes, err := applyCommands(project, o.commands, only)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range o.commands {
+		for _, m := range cmdNotes[c.service] {
+			fmt.Fprintf(a.Stderr, "%s: %s\n", c.service, m)
+		}
+	}
 	ordered, err := dependencyOrder(project)
 	if err != nil {
 		return 0, err
@@ -80,7 +89,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
-	rs := &runState{noWith: o.noWith, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -113,8 +122,10 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	inputs := map[string]gen.ServiceInput{}
 	var sysroots []string
 	defer func() {
-		for _, s := range sysroots {
-			a.RemoveAll(s)
+		for _, s := range append(sysroots, rs.undeleted...) {
+			if err := a.RemoveAll(s); err != nil {
+				fmt.Fprintf(a.Stderr, "%s: warning: the directory %s could not be removed (%v)\n", ToolName, s, err)
+			}
 		}
 	}()
 	arch, archOwner := "", ""
@@ -264,7 +275,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		if si.Observed != nil {
 			w := &si.Observed.Warnings
-			*w = append(*w, binds...)
+			*w = append(*w, retryBindNotes(si, binds)...)
 			if len(notRan) > 0 {
 				*w = append(*w, "these services were meant to run beside it for the second observation and did not: "+strings.Join(notRan, "; "))
 			}
@@ -314,8 +325,8 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// The package of a service holds its files as they were at the end of its own observation. What
 	// the services observed beside it did to it afterwards (a schema, rows, files) is not in it.
 	for name, by := range rs.served {
-		if si, ok := inputs[name]; ok && si.Observed != nil {
-			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s was observed while this service was running; what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
+		if si, ok := inputs[name]; ok && si.Observed != nil && !si.HubWhole {
+			si.Observed.Warnings = append(si.Observed.Warnings, fmt.Sprintf("%s"+observe.NoteObservedBeside+"what %s wrote into it (tables, rows, files) is not in this package, which holds the files as they were at the end of its own observation", strings.Join(by, ", "), strings.Join(by, ", ")))
 		}
 	}
 
@@ -584,6 +595,44 @@ func applyWith(p *compose.Project, with []string, only map[string]bool) ([]strin
 	return out, nil
 }
 
+// applyCommands replaces the command of each service named by --command with the value, read as
+// a command given as a string in the file (shell form). The entrypoint is not touched. It returns
+// the lines of the report for each service that got one.
+func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]bool) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, c := range cmds {
+		s := p.Service(c.service)
+		if s == nil {
+			var known []string
+			for _, x := range p.Services {
+				known = append(known, x.Name)
+			}
+			return nil, fmt.Errorf("--command %s: the file has no such service (services: %s)", c.service, strings.Join(known, ", "))
+		}
+		if only != nil && !only[c.service] {
+			return nil, fmt.Errorf("--command %s: the service is not one of those chosen with --service", c.service)
+		}
+		old := "none (the command of the image)"
+		if s.Command.IsSet() {
+			old = describeCommand(s.Command)
+		}
+		s.Command = compose.Command{Shell: c.command, Set: true}
+		out[c.service] = append(out[c.service], fmt.Sprintf("command of service %s replaced by --command, from %q to %q; the output was observed with this command and must be reviewed (the file is not changed)", c.service, old, c.command))
+		if s.Entrypoint.IsSet() && (s.Entrypoint.Shell != "" || len(s.Entrypoint.Exec) > 0) {
+			out[c.service] = append(out[c.service], fmt.Sprintf("service %s has an entrypoint (%s): it still runs and receives the command of --command as its arguments, as docker does", c.service, describeCommand(s.Entrypoint)))
+		}
+	}
+	return out, nil
+}
+
+// describeCommand writes a command of the file as one line.
+func describeCommand(c compose.Command) string {
+	if c.Shell != "" {
+		return c.Shell
+	}
+	return strings.Join(c.Exec, " ")
+}
+
 // dependencyOrder sorts the services by depends_on, keeping the file order
 // for ties. internal/gen has the same sort (its unexported order function): the two are copies
 // of each other, so a change here goes there too.
@@ -722,6 +771,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	if res != nil {
 		res.Warnings = append(res.Warnings, bindNotes...)
 		res.Warnings = append(res.Warnings, notes...)
+		res.Warnings = append(res.Warnings, rs.cmdNotes[s.Name]...)
 	}
 	rs.findCrashed(ctx, a, s, res)
 	if res != nil && res.StoppedEarly && res.ExitCode != 0 {
@@ -988,6 +1038,16 @@ func (rs *runState) wantsRetry(s *compose.Service, res *observe.Result) bool {
 	return len(rs.candidates(s, false)) > 0
 }
 
+// retryBindNotes are the notes about the binds that go to the warnings of a
+// service observed once more. They describe files of the image, which a package
+// of the hub used whole replaces, so such a service gets none.
+func retryBindNotes(si gen.ServiceInput, binds []string) []string {
+	if si.HubWhole {
+		return slices.DeleteFunc(slices.Clone(binds), gen.IsFileWarning)
+	}
+	return binds
+}
+
 // resetBinds makes a new copy of each read-write bind of s that no other service mounts, so that
 // the second observation starts from the files of the user and not from what the first one wrote.
 // For a bind that another service mounts too it returns a note: that copy is kept.
@@ -1018,7 +1078,7 @@ func (rs *runState) resetBinds(a *App, p *compose.Project, dir string, s *compos
 			}
 		}
 		if shared != "" {
-			notes = append(notes, fmt.Sprintf("the bind %s is shared with %s: the second observation started from what the first one left there", host, shared))
+			notes = append(notes, fmt.Sprintf(observe.NoteBind+"%s is shared with %s: the second observation started from what the first one left there", host, shared))
 			continue
 		}
 		delete(rs.binds, host)
@@ -1073,6 +1133,8 @@ type runState struct {
 	// noted holds what Start noticed about each started service; every service
 	// observed with it running gets the notes, not only the first one.
 	noted map[string][]string
+	// cmdNotes are the lines of the report about a command replaced by --command, by service.
+	cmdNotes map[string][]string
 	// served holds, by service name, the services that were observed while it was running.
 	served map[string][]string
 	order  []string
@@ -1083,6 +1145,14 @@ type runState struct {
 	// (the hub). It is kept apart from skipped, which refuses to start a service
 	// for the observation of the ones that need it.
 	late map[string]string
+
+	// undeleted holds the directories of observations that a package of the hub
+	// replaced and that could not be removed then; they are removed again at the
+	// end of the run.
+	undeleted []string
+
+	// dir is the directory of the compose file, for env_file.
+	dir string
 	// staleSaid is set once the report has said that the list of the hub is an
 	// old copy, which is said for one service only.
 	staleSaid bool

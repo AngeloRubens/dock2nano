@@ -72,6 +72,12 @@ Flags of convert:
                      had it in depends_on (can be repeated): for a program that needs a database
                      the compose file does not say it needs; the service is also listed before
                      them in compose.yaml
+  --command SVC=CMD  replace the command of this service before the observation, so that the
+                     observation and the package run CMD (read as a command given as a string in
+                     the file); the file is not changed. For a program that forks (gunicorn
+                     workers) and is run in a single process instead. An entrypoint of the service
+                     stays and receives CMD as arguments. The report says so (can be repeated, once
+                     for each service)
   --no-with          do not start any service for the observation of another: neither those of
                      depends_on nor those of --with. Without it, the services a service lists in
                      depends_on run during its observation (the report names them). A service that
@@ -238,7 +244,14 @@ type options struct {
 	exercise    []string
 	exerciseCmd []string
 	with        []string
+	commands    []commandOverride
 	services    []string
+}
+
+// commandOverride is one --command: the service and the command that replaces its own.
+type commandOverride struct {
+	service string
+	command string
 }
 
 // Run runs the command line and returns the exit status.
@@ -302,6 +315,24 @@ func (a *App) parseConvert(args []string) (*options, error) {
 			return errors.New("the service of --with is empty")
 		}
 		o.with = append(o.with, v)
+		return nil
+	})
+	set.Func("command", "", func(v string) error {
+		name, cmd, ok := strings.Cut(v, "=")
+		switch {
+		case !ok:
+			return fmt.Errorf("--command %q: expected SERVICE=COMMAND", v)
+		case name == "":
+			return errors.New("the service of --command is empty")
+		case strings.TrimSpace(cmd) == "":
+			return fmt.Errorf("the command of --command %s is empty", name)
+		}
+		for _, c := range o.commands {
+			if c.service == name {
+				return fmt.Errorf("--command %s is given twice", name)
+			}
+		}
+		o.commands = append(o.commands, commandOverride{service: name, command: cmd})
 		return nil
 	})
 	set.Func("exercise", "", func(v string) error {

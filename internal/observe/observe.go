@@ -303,6 +303,37 @@ type run struct {
 // maxWarnedPaths is how many paths of one kind are named in the warnings; the rest is counted.
 const maxWarnedPaths = 10
 
+// The beginnings of the notes of an observation that describe the files of the
+// image (what was carried, made or not carried). They are constants because the
+// notes are made here and in cmd, and gen drops them for a package of the hub
+// that is used whole: a rewording that changed one without the other would not
+// compile.
+const (
+	NoteEntrypointMade    = "the entrypoint made "
+	NoteCreatedWhileRan   = "the program created these files while it ran"
+	NoteNotCarried        = "not carried "
+	NoteMorePrefix        = "and "
+	NoteMoreSuffix        = " more paths were not carried"
+	NoteBind              = "the bind "
+	NoteMachineFiles      = "could not write the machine files"
+	NoteHosts             = "could not make /etc/hosts"
+	NoteProcCmdline       = "the command line in /proc"
+	NoteStoppedBeforeProc = "the program had stopped before /proc could be read"
+	NoteUserGroup         = "could not read the user and group"
+	NoteImageRuns         = "the image runs as "
+	// NoteObservedBeside is in the middle of the note that names the services
+	// observed while this one ran.
+	NoteObservedBeside = " was observed while this service was running; "
+)
+
+// FileNotePrefixes are the beginnings of the notes that describe the files of
+// the image. NoteMorePrefix, NoteMoreSuffix and NoteObservedBeside are not in
+// it: they are matched on their own.
+var FileNotePrefixes = []string{
+	NoteEntrypointMade, NoteCreatedWhileRan, NoteNotCarried, NoteBind, NoteMachineFiles,
+	NoteHosts, NoteProcCmdline, NoteStoppedBeforeProc, NoteUserGroup, NoteImageRuns,
+}
+
 // isNotFound tells a path that docker cp could not find from another failure of docker cp.
 func isNotFound(err error) bool {
 	text := err.Error()
@@ -742,7 +773,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 					r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
 					cmdline = parts
 				case !slices.Equal(parts, cmdline):
-					r.warnOnce(r.redact(fmt.Sprintf("the command line in /proc %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
+					r.warnOnce(r.redact(fmt.Sprintf(NoteProcCmdline+" %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
 				}
 			}
 		}
@@ -760,14 +791,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		if out, ok := r.procRead(ctx, id, "user and group", []string{"cat", base + "status"}); ok {
 			var good bool
 			if uid, gid, good = parseStatusIDs(string(out)); !good {
-				r.warnOnce("could not read the user and group of the program from /proc: they are not known")
+				r.warnOnce(NoteUserGroup + " of the program from /proc: they are not known")
 			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("observe: reading /proc of the program: %w", err)
 		}
 	} else {
-		r.warnOnce("the program had stopped before /proc could be read: the command line, environment and directory are those of the image")
+		r.warnOnce(NoteStoppedBeforeProc + ": the command line, environment and directory are those of the image")
 	}
 	if len(cmdline) == 0 {
 		cmdline = argv
@@ -845,7 +876,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			more = fmt.Sprintf(" and %d more", len(list)-maxWarnedPaths)
 			list = list[:maxWarnedPaths]
 		}
-		r.warnOnce(fmt.Sprintf("the entrypoint made %d files before the program started (the state the image starts from, such as the data of a database); they are carried as they were at the end of the observation: %s%s", len(earlyHere), strings.Join(list, ", "), more))
+		r.warnOnce(fmt.Sprintf(NoteEntrypointMade+"%d files before the program started (the state the image starts from, such as the data of a database); they are carried as they were at the end of the observation: %s%s", len(earlyHere), strings.Join(list, ", "), more))
 	}
 
 	// the created files that were gone at the end are counted, not listed
@@ -863,10 +894,10 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			more = fmt.Sprintf(" and %d more", len(list)-maxWarnedPaths)
 			list = list[:maxWarnedPaths]
 		}
-		r.warnOnce("the program created these files while it ran; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(list, ", ") + more)
+		r.warnOnce(NoteCreatedWhileRan + "; they are carried as they were at the end of the observation, and a fresh start may not make them: " + strings.Join(list, ", ") + more)
 	}
 	if r.notCarried > maxWarnedPaths {
-		r.warn = append(r.warn, fmt.Sprintf("and %d more paths were not carried", r.notCarried-maxWarnedPaths))
+		r.warn = append(r.warn, fmt.Sprintf(NoteMorePrefix+"%d"+NoteMoreSuffix, r.notCarried-maxWarnedPaths))
 	}
 
 	if !strings.HasPrefix(program, "/") {
@@ -886,7 +917,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	r.writeLocalNames(sysroot)
 	machine, err := writeMachineFiles(sysroot, cfg.Architecture, touched)
 	if err != nil {
-		r.warnOnce(fmt.Sprintf("could not write the machine files for the package: %v", err))
+		r.warnOnce(fmt.Sprintf(NoteMachineFiles+" for the package: %v", err))
 	}
 
 	return &Result{
@@ -956,12 +987,12 @@ func (r *run) writeLocalNames(sysroot string) {
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		r.warnOnce(fmt.Sprintf("could not make /etc/hosts for the package: %v", err))
+		r.warnOnce(fmt.Sprintf(NoteHosts+" for the package: %v", err))
 		return
 	}
 	const hosts = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
 	if err := os.WriteFile(path, []byte(hosts), 0o644); err != nil {
-		r.warnOnce(fmt.Sprintf("could not make /etc/hosts for the package: %v", err))
+		r.warnOnce(fmt.Sprintf(NoteHosts+" for the package: %v", err))
 		return
 	}
 	r.localNames = true
@@ -981,7 +1012,7 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (string, erro
 	if err != nil {
 		if strings.Trim(who, "0123456789") == "" {
 			// only digits, but too many for a uid
-			r.warnOnce(fmt.Sprintf("the image runs as %q, which is not a uid; it was observed as root", who))
+			r.warnOnce(fmt.Sprintf(NoteImageRuns+"%q, which is not a uid; it was observed as root", who))
 			return "", nil
 		}
 		return who, nil
@@ -1011,7 +1042,7 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (string, erro
 		r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
 		return name, nil
 	}
-	text := fmt.Sprintf("the image runs as uid %d, which has no name in /etc/passwd; it was observed as root", uid)
+	text := fmt.Sprintf(NoteImageRuns+"uid %d, which has no name in /etc/passwd; it was observed as root", uid)
 	if why != "" {
 		text += " (/etc/passwd could not be read: " + why + ")"
 	}
@@ -1543,7 +1574,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	}
 
 	notCarried := func(p string, why string) {
-		text := r.redact(fmt.Sprintf("not carried %s: %s", p, why))
+		text := r.redact(fmt.Sprintf(NoteNotCarried+"%s: %s", p, why))
 		r.notCarried++
 		if r.notCarried <= maxWarnedPaths {
 			r.warn = append(r.warn, text)
