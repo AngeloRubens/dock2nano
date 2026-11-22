@@ -1561,7 +1561,7 @@ func checkExerciseHosts(p *compose.Project, hosts []exerciseHost) error {
 		for _, x := range p.Services {
 			known = append(known, x.Name)
 		}
-		return fmt.Errorf("--exercise-host %s=%s: the file has no such service (services: %s)", h.service, h.host, strings.Join(known, ", "))
+		continue
 	}
 	return nil
 }
