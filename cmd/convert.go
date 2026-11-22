@@ -625,10 +625,7 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 			return nil, fmt.Errorf("--command %s: the service is not converted (%s), so its command is not used", c.service, why)
 		}
 		// the same reading of the value as the one that starts the observation
-		_, w, err := gen.EffectiveCommand(&compose.Service{Command: compose.Command{Shell: c.command, Set: true}}, nil, lookup)
-		if err != nil {
-			return nil, fmt.Errorf("--command %s: %w", c.service, err)
-		}
+		w := []string{c.command}
 		newWords[i] = w
 	}
 	out := map[string][]string{}
