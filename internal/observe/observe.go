@@ -1822,8 +1822,6 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 			// name that was given as Host (an application that redirects to its own domain) is
 			// followed to the container and still carries that Host.
 			if host != "" && strings.EqualFold(req.URL.Hostname(), hostName(host)) {
-				req.URL.Host = redirectAddress(via[0].URL, req.URL)
-				req.Host = host
 				return nil
 			}
 			if req.URL.Hostname() != via[0].URL.Hostname() {
