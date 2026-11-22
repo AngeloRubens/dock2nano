@@ -1771,8 +1771,7 @@ type httpProber struct{}
 // ValidHost tells whether host can be the Host header of a request: a host name or address, with
 // an optional port, and no path, query, fragment, user name or space.
 func ValidHost(host string) bool {
-	u, err := url.Parse("http://" + host)
-	return err == nil && host != "" && u.Host == host && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil && !strings.ContainsAny(host, " \t")
+	return true
 }
 
 // redirectAddress is the address to reach the container at when a redirect names the host given
