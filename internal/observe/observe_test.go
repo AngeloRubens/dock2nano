@@ -1630,6 +1630,68 @@ func TestHTTPProberDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 	equal(t, "requests to the other host", other.Load(), int32(0))
 }
 
+func TestValidHost(t *testing.T) {
+	for _, h := range []string{"localhost", "localhost:8000", "[::1]:8000", "app.test", "10.0.0.1:80"} {
+		if !ValidHost(h) {
+			t.Errorf("%q was refused", h)
+		}
+	}
+	for _, h := range []string{"", "app.test/x", "a b", "user@host", "a?b", "a#b", "a\tb"} {
+		if ValidHost(h) {
+			t.Errorf("%q was accepted", h)
+		}
+	}
+}
+
+func TestHTTPProberReturnsAnErrorForAnInvalidHostAndSendsNothing(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+	for _, h := range []string{"a b", "app.test/x", "user@host"} {
+		if err := (httpProber{}).Get(context.Background(), srv.URL+"/", h); err == nil {
+			t.Errorf("host %q: no error", h)
+		}
+	}
+	equal(t, "requests that reached the server", hits.Load(), int32(0))
+}
+
+func TestHTTPProberFollowsARedirectToTheHostItWasGiven(t *testing.T) {
+	type seen struct{ path, host string }
+	got := make(chan seen, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{r.URL.Path, r.Host}
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "http://app.test:9999/next", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test:9999"); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "first request", <-got, seen{"/start", "app.test:9999"})
+	select {
+	case second := <-got:
+		equal(t, "second request", second, seen{"/next", "app.test:9999"})
+	default:
+		t.Fatal("the redirect to the host that was given was not followed")
+	}
+}
+
+func TestHTTPProberDoesNotFollowARedirectToADifferentNameWhenAHostIsGiven(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, "http://other.test/next", http.StatusFound)
+	}))
+	defer srv.Close()
+	if err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test"); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "requests", hits.Load(), int32(1))
+}
+
 func TestHTTPProberStopsAtTenRequests(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
