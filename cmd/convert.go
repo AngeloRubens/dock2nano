@@ -67,7 +67,6 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	}
 	hostNotesByService := map[string][]string{}
 	for _, n := range hostNotes {
-		fmt.Fprintln(a.Stderr, n.text)
 		hostNotesByService[n.service] = append(hostNotesByService[n.service], n.text)
 	}
 	ordered, err := dependencyOrder(project)
