@@ -367,9 +367,6 @@ func (a *App) parseConvert(args []string) (*options, error) {
 			}
 			service, host = name, rest
 		}
-		if host == "" {
-			return errors.New("the host of --exercise-host is empty")
-		}
 		for _, h := range o.exerciseHosts {
 			if h.service == service {
 				if service == "" {
