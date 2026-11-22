@@ -624,16 +624,15 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 		if why := notConverted(s, only); why != "" {
 			return nil, fmt.Errorf("--command %s: the service is not converted (%s), so its command is not used", c.service, why)
 		}
-		// the same reading of the value as the one that starts the observation
+	}
+	out := map[string][]string{}
+	for i, c := range cmds {
+		s := p.Service(c.service)
 		_, w, err := gen.EffectiveCommand(&compose.Service{Command: compose.Command{Shell: c.command, Set: true}}, nil, lookup)
 		if err != nil {
 			return nil, fmt.Errorf("--command %s: %w", c.service, err)
 		}
 		newWords[i] = w
-	}
-	out := map[string][]string{}
-	for i, c := range cmds {
-		s := p.Service(c.service)
 		old := "none (the command of the image)"
 		if s.Command.IsSet() {
 			old = describeCommand(s.Command)
