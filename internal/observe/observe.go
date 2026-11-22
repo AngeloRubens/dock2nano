@@ -1728,7 +1728,7 @@ func (r *run) exercise(ctx context.Context, host string, port int, deadline time
 			continue
 		}
 		pctx, stop := context.WithTimeout(ctx, left)
-		err = r.o.Probe.Get(pctx, address, r.o.ExerciseHost)
+		err = r.o.Probe.Get(pctx, address, "")
 		stop()
 		if err != nil {
 			r.warnOnce(r.redact("exercise: calling " + raw + ": " + err.Error()))
