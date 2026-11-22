@@ -764,7 +764,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			parts := trimEmpty(trace.SplitNul(out))
 			// the same trim for the copy of execve that is compared, so that a trailing empty
 			// argument (app "") is not taken for a difference
-			asked := trimEmpty(slices.Clone(cmdline))
+			asked := slices.Clone(cmdline)
 			if len(parts) > 0 {
 				switch {
 				case len(cmdline) == 0:
