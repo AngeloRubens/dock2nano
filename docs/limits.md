@@ -20,7 +20,7 @@ Each entry says whether it is a hard limit (it comes from nanos, ops or the natu
 | gunicorn, npm, nodemon fork or spawn processes | hard limit, partly a gap | run 44808943029, no run id recorded for npm and nodemon |
 | Code paths never run during the observation | hard limit of the method | tzdb.dat case |
 | JVM crashes with compiled code | open | petclinic, no run id recorded |
-| ops compose reports ip timeout although the guest has an address | gap in ops | runs recorded in the diary only as a matrix |
+| ops compose reports ip timeout although the guest has an address | gap in ops | runs recorded in the project notes only as a matrix |
 | Hub postgres package has no entrypoint | gap | see manual-changes.md |
 
 ## No fork

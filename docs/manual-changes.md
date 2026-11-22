@@ -25,7 +25,7 @@ Why before the conversion: changing only Args in the manifest after the conversi
 
 Result with the change: answers 200, 3 of 3 (run 45003684361, 2026-11-22).
 
-Status: manual. The real feature is a tool option that overrides the service command and is used in the observation. It is not built. An earlier fix, to use the command line of /proc when the program was started through a shebang (commit f67751e), works but is not merged into feat/modules at the time of the diary entry.
+Status: manual. The real feature is a tool option that overrides the service command and is used in the observation. It is not built. An earlier fix, to use the command line of /proc when the program was started through a shebang (commit f67751e), works but is not merged into feat/modules at the time of the project notes entry.
 
 ## petclinic (GlassFish and MySQL)
 

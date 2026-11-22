@@ -1,6 +1,6 @@
 # Measured results
 
-Only what was measured is listed. Anything not measured is "not run". Run ids are GitHub Actions runs on the fork of the project. "id not recorded" means the diary states the result but not the run id. Dates are those of the diary entry that reports the result.
+Only what was measured is listed. Anything not measured is "not run". Run ids are GitHub Actions runs on the fork of the project. "id not recorded" means the project notes states the result but not the run id. Dates are those of the project notes entry that reports the result.
 
 | Case | Outcome | Run id | Date | Remark |
 | --- | --- | --- | --- | --- |
@@ -16,12 +16,12 @@ Only what was measured is listed. Anything not measured is "not run". Run ids ar
 | nginx-golang, local run with KVM forced | red, 3 of 3 | 43510838986 | 2026-11-14 | "host not found in upstream backend.service"; artifact of this run used; KVM does not fix it |
 | nginx-golang with exec_wait_for_ip4_secs 30 | compose up ok at attempt 1, proxy and backend answer 200 | 44583469624 | 2026-11-19 | one run |
 | nginx-golang without the option | compose up failed, 3 of 3 | 44583469624 | 2026-11-19 | same job without the option |
-| nginx-golang with and without exec_wait_for_ip4_secs | 3 of 3 with, 3 of 3 without (outcomes as stated in the diary) | 44583469624, 44612626939, 44612633466 | 2026-11-19 | the diary gives the counts for the three runs together; the first run is described in the two rows above |
+| nginx-golang with and without exec_wait_for_ip4_secs | 3 of 3 with, 3 of 3 without (outcomes as stated in the project notes) | 44583469624, 44612626939, 44612633466 | 2026-11-19 | the project notes gives the counts for the three runs together; the first run is described in the two rows above |
 | compose-up matrix, ops master 2177c54, address wait | 8 of 10 green | id not recorded | 2026-11-20 | red: nginx-nodejs-redis, react-express-mongodb |
 | ops#1816 cwd leak | old ops fails with "unable to change cwd", master 2177c54 starts | id not recorded | 2026-11-20 | |
 | nginx-nodejs-redis web1 with FUTEX_REQUEUE kernel | 4 of 4 start | id not recorded | 2026-11-20 | on the fork branch of nanos |
 | nginx-nodejs-redis web1 with nightly kernel | 0 of 4 start | id not recorded | 2026-11-20 | earlier revision |
-| nanos mmap test, origin/master | hangs: 0 of 30 (1 vcpu), 7 of 30 (2), 6 of 30 (4) | id not recorded | 2026-11-20 | hang counts as stated in the diary; 18 of 60 on master against 16 of 60 on the branch with 2 vcpus |
+| nanos mmap test, origin/master | hangs: 0 of 30 (1 vcpu), 7 of 30 (2), 6 of 30 (4) | id not recorded | 2026-11-20 | hang counts as stated in the project notes; 18 of 60 on master against 16 of 60 on the branch with 2 vcpus |
 | spring-postgres with hub postgres | 200 after CREATE DATABASE | id not recorded | 2026-11-21 | second boot after kill fails on stale postmaster.pid |
 | feat/modules at 542bb5d, ci | green | 44920078254 | 2026-11-21 | |
 | feat/modules at 542bb5d, integration | green | 44920078564 | 2026-11-21 | |
