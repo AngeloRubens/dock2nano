@@ -371,7 +371,7 @@ func (a *App) parseConvert(args []string) (*options, error) {
 			return errors.New("the host of --exercise-host is empty")
 		}
 		for _, h := range o.exerciseHosts {
-			if h.service == service {
+			if h.service == service && service != "" {
 				if service == "" {
 					return errors.New("--exercise-host is given twice without a service")
 				}
