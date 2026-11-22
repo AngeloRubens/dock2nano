@@ -1604,7 +1604,6 @@ func checkExerciseHosts(p *compose.Project, hosts []exerciseHost, only map[strin
 		case only != nil && !only[h.service]:
 			notes = append(notes, hostNote{converted[0], fmt.Sprintf("--exercise-host %s=%s is not used: service %s is not converted, it is not one of those chosen with --service", h.service, h.host, h.service)})
 		case !requested[h.service]:
-			notes = append(notes, hostNote{h.service, fmt.Sprintf("--exercise-host %s is not used for service %s: it applies to the requests of --exercise, and none is made for this service (--exercise-cmd is not touched)", h.host, h.service)})
 		}
 	}
 	return notes, nil
