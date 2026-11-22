@@ -646,7 +646,7 @@ func TestHubWholeWithoutTheHubSaysTheCommandWasReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.app.HubRequired = rows
-	h.mustRun(0, "convert", "--no-hub", "--command", "web=nginx -g 'daemon off;'")
+	h.mustRun(1, "convert", "--no-hub", "--command", "web=nginx -g 'daemon off;'")
 	why := h.genIn[0].Skipped["web"]
 	if !strings.Contains(why, "--no-hub") || !strings.Contains(why, "its command was replaced by --command") {
 		t.Errorf("skipped reason %q", why)
