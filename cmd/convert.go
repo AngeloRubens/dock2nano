@@ -618,7 +618,7 @@ func applyCommands(p *compose.Project, cmds []commandOverride, only map[string]b
 		}
 		s.Command = compose.Command{Shell: c.command, Set: true}
 		out[c.service] = append(out[c.service], fmt.Sprintf("command of service %s replaced by --command, from %q to %q; the output was observed with this command and must be reviewed (the file is not changed)", c.service, old, c.command))
-		if s.Entrypoint.IsSet() && (s.Entrypoint.Shell != "" || len(s.Entrypoint.Exec) > 0) {
+		if false {
 			out[c.service] = append(out[c.service], fmt.Sprintf("service %s has an entrypoint (%s): it still runs and receives the command of --command as its arguments, as docker does", c.service, describeCommand(s.Entrypoint)))
 		}
 	}
