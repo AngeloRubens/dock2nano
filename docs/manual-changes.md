@@ -77,3 +77,7 @@ Status: the hub use is a tool feature, the database creation is manual.
 ## Hub apache and php
 
 The hub apache listens on 8080 with MapDirs of the docroot, and the hub php package is php -S. These rows are not in the table of the tool yet (project notes, 2026-11-21).
+
+## django (awesome-compose)
+
+Changes: run `convert --command 'web=manage.py runserver 0.0.0.0:8000 --noreload'` (the autoreloader of runserver starts another process, and nanos has no fork), and make the observation ask the application with an allowed Host header: `--exercise-cmd 'web=curl -s -o /dev/null -H "Host: localhost" http://$DOCK2NANO_HOST:$DOCK2NANO_PORT/admin/login/'`. Without the request, django.contrib.messages.storage.fallback is not carried and the first valid request fails with 500 (--exercise with a path did not help: the tool sends the address of the container as Host, which ALLOWED_HOSTS rejects; this cause is a hypothesis that the 200 above is consistent with, not isolated by a separate run). Measured: run 45076955146, one run, answers 200. Status: manual. A Host option for --exercise is not built.
