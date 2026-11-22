@@ -753,7 +753,6 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	// The notes are built here and not stored, so that a second observation says it once.
 	cmdNotes := slices.Clone(rs.cmdNotes[s.Name])
 	if len(cmdNotes) > 0 && !s.Entrypoint.IsSet() && img != nil && len(img.Entrypoint) > 0 {
-		cmdNotes = append(cmdNotes, fmt.Sprintf("service %s has an entrypoint in its image (%s): it still runs and receives the command of --command as its arguments, as docker does", s.Name, describeWords(img.Entrypoint)))
 	}
 	// The entrypoint is always passed, even when empty, so that the CMD of the
 	// image is replaced by cmd and an entrypoint cleared in the file stays
