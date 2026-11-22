@@ -370,14 +370,6 @@ func (a *App) parseConvert(args []string) (*options, error) {
 		if host == "" {
 			return errors.New("the host of --exercise-host is empty")
 		}
-		for _, h := range o.exerciseHosts {
-			if h.service == service {
-				if service == "" {
-					return errors.New("--exercise-host is given twice without a service")
-				}
-				return fmt.Errorf("--exercise-host is given twice for %s", service)
-			}
-		}
 		o.exerciseHosts = append(o.exerciseHosts, exerciseHost{service: service, host: host})
 		return nil
 	})
