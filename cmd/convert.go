@@ -45,10 +45,6 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	hostNotes, err := checkExerciseHosts(project, o.exerciseHosts, only, o.exercise)
-	if err != nil {
-		return 0, err
-	}
 	extra, err := applyWith(project, o.with, only)
 	if err != nil {
 		return 0, err
@@ -64,6 +60,10 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		for _, m := range cmdNotes[c.service] {
 			fmt.Fprintf(a.Stderr, "%s: %s\n", c.service, m)
 		}
+	}
+	hostNotes, err := checkExerciseHosts(project, o.exerciseHosts, only, o.exercise)
+	if err != nil {
+		return 0, err
 	}
 	hostNotesByService := map[string][]string{}
 	for _, n := range hostNotes {
