@@ -1598,8 +1598,8 @@ func checkExerciseHosts(p *compose.Project, hosts []exerciseHost, only map[strin
 	for _, h := range hosts {
 		switch {
 		case h.service == "":
-			if !anyRequest {
-				notes = append(notes, hostNote{converted[0], fmt.Sprintf("--exercise-host %s is not used: it applies to the requests of --exercise, and no service has one (--exercise-cmd is not touched)", h.host)})
+			for _, c := range converted {
+				notes = append(notes, hostNote{c, fmt.Sprintf("--exercise-host %s is not used: it applies to the requests of --exercise, and no service has one (--exercise-cmd is not touched)", h.host)})
 			}
 		case only != nil && !only[h.service]:
 			notes = append(notes, hostNote{converted[0], fmt.Sprintf("--exercise-host %s=%s is not used: service %s is not converted, it is not one of those chosen with --service", h.service, h.host, h.service)})
