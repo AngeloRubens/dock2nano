@@ -19,8 +19,7 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: django-ex, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/", host: "localhost:8000", probe: "web:8000:http"}
-          - {name: django-ex2, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/", host: "localhost:8000", probe: "web:8000:http"}
+          - {name: django-curl, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise-cmd 'web=curl -s -o /dev/null -H \"Host: localhost\" http://$DOCK2NANO_HOST:$DOCK2NANO_PORT/ ; curl -s -o /dev/null -H \"Host: localhost\" http://$DOCK2NANO_HOST:$DOCK2NANO_PORT/admin/login/'", host: "localhost:8000", probe: "web:8000:http"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
