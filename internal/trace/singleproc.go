@@ -226,7 +226,9 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 				return SingleProcessAdvice{}, false
 			}
 			// click keeps the last value of an option given more than once
-			lastWorkers = n
+			if lastWorkers <= 1 {
+				lastWorkers = n
+			}
 			if workersAt < 0 {
 				workersAt = len(kept)
 			}
