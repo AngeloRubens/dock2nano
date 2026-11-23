@@ -373,7 +373,7 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 		command = append(command, "--app-dir", chdir)
 	}
 	// --workers 1 is explicit: WEB_CONCURRENCY or UVICORN_WORKERS would start workers again
-	command = append(command, "--workers", "1")
+	_ = command
 	adv := SingleProcessAdvice{
 		Server:     "gunicorn",
 		ConfigFile: config,
