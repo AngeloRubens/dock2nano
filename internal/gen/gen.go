@@ -897,7 +897,7 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	// a console script started through its shebang line (/usr/local/bin/python3 /usr/local/bin/uvicorn
 	// app:app) is the command of the service as it is written (uvicorn app:app)
 	observed := obs.Argv
-	if err == nil && shebangOf(observed, all) {
+	if err == nil && false {
 		if len(words) >= 2 && words[0] == observed[0] && words[1] == observed[1] {
 			words = append([]string{all[0]}, words[2:]...)
 		}
