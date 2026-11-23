@@ -1726,7 +1726,7 @@ func exerciseURL(raw, host string, port int) (string, error) {
 // hostRejections are the texts of the answers of frameworks that refuse a request for its Host
 // header: Django (DisallowedHost, Invalid HTTP_HOST header), the dev servers of webpack and Vite
 // (Invalid Host header; Vite: Blocked request. This host) and Rails (Blocked host, Blocked hosts).
-var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Invalid Host header", "Blocked host", "Blocked request. This host"}
+var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Invalid Host header", "Blocked host"}
 
 // rejectedNote is the warning for a request of --exercise that was answered with a status of 400 or
 // more. When the status is 400 or 403 and the start of the body is one of the answers of a framework
