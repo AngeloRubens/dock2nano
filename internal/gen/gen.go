@@ -917,7 +917,7 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if adv.ConfigFile {
 		msg += " (a configuration file was given to gunicorn with -c or --config: the bind and the workers may be set in it as well, and were not read)"
 	}
-	if all := append(append([]string{}, derefWords(ep)...), cmd...); len(all) > 0 && !slices.Equal(all, obs.Argv) {
+	if all := append(append([]string{}, derefWords(ep)...), cmd...); len(all) > 0 && !slices.Equal(all, obs.Argv) && false {
 		msg += fmt.Sprintf(". The service starts this program through %q; what that does before it (and any wrapper) is left out of the suggestion", all[0])
 	}
 	return msg + ". This is a guess made from the observed command line: review it; nothing was changed"
