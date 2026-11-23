@@ -368,15 +368,21 @@ type fakeProber struct {
 	hosts []string
 	// limits are the time left that the context of each question had.
 	limits []time.Duration
+	// reply, when set, gives the status and the body of the answer to a url.
+	reply func(url string) (int, string)
 }
 
-func (p *fakeProber) Get(ctx context.Context, url, host string) error {
+func (p *fakeProber) Get(ctx context.Context, url, host string) (int, []byte, error) {
 	p.urls = append(p.urls, url)
 	p.hosts = append(p.hosts, host)
 	if dl, ok := ctx.Deadline(); ok {
 		p.limits = append(p.limits, time.Until(dl))
 	}
-	return nil
+	if p.reply != nil {
+		status, body := p.reply(url)
+		return status, []byte(body), nil
+	}
+	return 200, nil, nil
 }
 
 type scene struct {
@@ -1486,7 +1492,7 @@ func TestHTTPProberFollowsARedirectToHTTPSOnTheSameHost(t *testing.T) {
 		http.Redirect(w, r, secure.URL+"/", http.StatusFound)
 	}))
 	defer plain.Close()
-	if err := (httpProber{}).Get(context.Background(), plain.URL+"/", ""); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), plain.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests that reached the https server", hits, 1)
@@ -1495,7 +1501,7 @@ func TestHTTPProberFollowsARedirectToHTTPSOnTheSameHost(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	url := closed.URL + "/"
 	closed.Close()
-	if err := (httpProber{}).Get(context.Background(), url, ""); err == nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), url, ""); err == nil {
 		t.Error("a closed port was not an error")
 	}
 }
@@ -1597,10 +1603,10 @@ func TestHTTPProberSendsTheHostItIsGiven(t *testing.T) {
 		hosts <- r.Host
 	}))
 	defer srv.Close()
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", "localhost"); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/", "localhost"); err != nil {
 		t.Fatal(err)
 	}
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "hosts", []string{<-hosts, <-hosts}, []string{"localhost", strings.TrimPrefix(srv.URL, "http://")})
@@ -1623,7 +1629,7 @@ func TestHTTPProberDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 		http.Redirect(w, r, far.URL+"/", http.StatusFound)
 	}))
 	defer near.Close()
-	if err := (httpProber{}).Get(context.Background(), near.URL+"/", ""); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), near.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests to the first server", first.Load(), int32(1))
@@ -1650,7 +1656,7 @@ func TestHTTPProberReturnsAnErrorForAnInvalidHostAndSendsNothing(t *testing.T) {
 	}))
 	defer srv.Close()
 	for _, h := range []string{"a b", "app.test/x", "user@host"} {
-		if err := (httpProber{}).Get(context.Background(), srv.URL+"/", h); err == nil {
+		if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/", h); err == nil {
 			t.Errorf("host %q: no error", h)
 		}
 	}
@@ -1667,7 +1673,7 @@ func TestHTTPProberFollowsARedirectToTheHostItWasGiven(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test:9999"); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test:9999"); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "first request", <-got, seen{"/start", "app.test:9999"})
@@ -1686,7 +1692,7 @@ func TestHTTPProberDoesNotFollowARedirectToADifferentNameWhenAHostIsGiven(t *tes
 		http.Redirect(w, r, "http://other.test/next", http.StatusFound)
 	}))
 	defer srv.Close()
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test"); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/start", "app.test"); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests", hits.Load(), int32(1))
@@ -1700,7 +1706,7 @@ func TestHTTPProberStopsAtTenRequests(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	equal(t, "requests made to a server that always redirects to itself", hits.Load(), int32(10))
@@ -1932,8 +1938,8 @@ func TestObserveRunningUntilTheEndIsNotStoppedEarly(t *testing.T) {
 
 type failProber struct{}
 
-func (failProber) Get(ctx context.Context, url, host string) error {
-	return errors.New("connection refused")
+func (failProber) Get(ctx context.Context, url, host string) (int, []byte, error) {
+	return 0, nil, errors.New("connection refused")
 }
 
 func TestObserveProbeFailureWarnsOncePerPort(t *testing.T) {
@@ -2050,7 +2056,7 @@ func TestHTTPProberReadsAtMostOneMiBOfTheBody(t *testing.T) {
 			}
 		}
 	}))
-	if err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
+	if _, _, err := (httpProber{}).Get(context.Background(), srv.URL+"/", ""); err != nil {
 		t.Fatal(err)
 	}
 	srv.Close()
@@ -2605,12 +2611,12 @@ type flakyProber struct {
 	urls []string
 }
 
-func (p *flakyProber) Get(ctx context.Context, url, host string) error {
+func (p *flakyProber) Get(ctx context.Context, url, host string) (int, []byte, error) {
 	p.urls = append(p.urls, url)
 	if len(p.urls) == 1 {
-		return errors.New("connection refused")
+		return 0, nil, errors.New("connection refused")
 	}
-	return nil
+	return 200, nil, nil
 }
 
 func TestObserveAPortThatFailedAndWasAskedLaterDoesNotWarn(t *testing.T) {
@@ -3242,4 +3248,145 @@ func TestUpWithAnErrorSaysSoAndTakesTheContainerToBeRunning(t *testing.T) {
 	if len(logged) != 1 || !strings.Contains(logged[0], "daemon gone") {
 		t.Errorf("logged %q", logged)
 	}
+}
+
+// exerciseScene is a scene whose program listens on 8080 and is asked for the paths of the
+// requests, each answered as reply says.
+func exerciseScene(t *testing.T, paths []string, reply func(path string) (int, string)) *scene {
+	t.Helper()
+	s := newScene(t)
+	s.d.cfg.ExposedPorts = []string{"8080/tcp"}
+	s.d.exec["cat /proc/net/tcp"] = tcpHeader + "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000\n"
+	s.o.Exercise = paths
+	s.o.ServiceName = "web"
+	s.probe.reply = func(url string) (int, string) {
+		path := strings.TrimPrefix(url, "http://172.17.0.2:8080")
+		if path == "/" {
+			// the front page is asked as before and its answer is not used
+			return 500, "DisallowedHost"
+		}
+		return reply(path)
+	}
+	return s
+}
+
+func TestObserveExerciseWarnsForAStatusOfAnError(t *testing.T) {
+	s := exerciseScene(t, []string{"/a", "/b"}, func(path string) (int, string) { return 500, "Traceback: secret-token" })
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings", res.Warnings, []string{
+		"exercise: the request for /a was answered with status 500",
+		"exercise: the request for /b was answered with status 500",
+	})
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "secret-token") || strings.Contains(w, "--exercise-host") {
+			t.Errorf("warning %q", w)
+		}
+	}
+}
+
+func TestObserveExerciseNamesTheOptionWhenTheHostIsRejected(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"django DisallowedHost", 400, "<h1>DisallowedHost at /</h1>"},
+		{"django message", 400, "Invalid HTTP_HOST header: '172.17.0.2:8080'. You may need to add '172.17.0.2' to ALLOWED_HOSTS."},
+		{"webpack and vite", 403, "Invalid Host header"},
+		{"rails host", 403, "Blocked host: 172.17.0.2"},
+		{"rails hosts", 403, "Blocked hosts: 172.17.0.2"},
+	} {
+		s := exerciseScene(t, []string{"/admin/"}, func(path string) (int, string) { return c.status, c.body })
+		res, err := s.observe(t, context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("exercise: the program rejected the Host header of the request for /admin/ (status %d): code that is loaded only to answer a valid request may be missing from the package; run again with --exercise-host web=localhost (or the host name the program accepts)", c.status)
+		equal(t, c.name+": warnings", res.Warnings, []string{want})
+		if strings.Contains(strings.Join(res.Warnings, "\n"), "ALLOWED_HOSTS") {
+			t.Errorf("%s: the body was printed", c.name)
+		}
+	}
+}
+
+func TestObserveExerciseHostRejectionNeedsStatus400Or403(t *testing.T) {
+	// the same body with another status is the plain warning; a 400 without the text is the plain one too
+	for _, c := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{500, "DisallowedHost", "exercise: the request for /x was answered with status 500"},
+		{404, "Invalid Host header", "exercise: the request for /x was answered with status 404"},
+		{400, "bad request", "exercise: the request for /x was answered with status 400"},
+		{403, "forbidden", "exercise: the request for /x was answered with status 403"},
+	} {
+		s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return c.status, c.body })
+		res, err := s.observe(t, context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		equal(t, fmt.Sprintf("%d %q", c.status, c.body), res.Warnings, []string{c.want})
+	}
+}
+
+func TestObserveExerciseNoWarningForSuccessAndRedirects(t *testing.T) {
+	for _, status := range []int{200, 204, 301, 302, 399} {
+		s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return status, "DisallowedHost" })
+		res, err := s.observe(t, context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		equal(t, fmt.Sprintf("status %d: warnings", status), res.Warnings, []string(nil))
+	}
+}
+
+func TestObserveExerciseSameRejectionIsWarnedOnce(t *testing.T) {
+	s := exerciseScene(t, []string{"/x", "/x", "/y"}, func(path string) (int, string) { return 400, "DisallowedHost" })
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 2 || !strings.Contains(res.Warnings[0], "request for /x ") || !strings.Contains(res.Warnings[1], "request for /y ") {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
+func TestObserveExerciseRejectionWithoutAServiceNameWritesSVC(t *testing.T) {
+	s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 400, "DisallowedHost" })
+	s.o.ServiceName = ""
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "--exercise-host SVC=localhost") {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
+func TestHTTPProberReturnsTheStatusAndTheStartOfTheBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		io.WriteString(w, strings.Repeat("a", ProbeBodyHead)+"tail")
+	}))
+	defer srv.Close()
+	status, body, err := (httpProber{}).Get(context.Background(), srv.URL+"/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "status", status, 400)
+	equal(t, "body", string(body), strings.Repeat("a", ProbeBodyHead))
+	// a redirect that is not followed gives its own status
+	red := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://other.invalid/", 302)
+	}))
+	defer red.Close()
+	status, _, err = (httpProber{}).Get(context.Background(), red.URL+"/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "status of a redirect", status, 302)
 }

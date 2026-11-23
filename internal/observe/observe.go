@@ -26,6 +26,7 @@ package observe
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -82,9 +83,10 @@ type Addresser interface {
 // up in the trace.
 type Prober interface {
 	// Get returns an error only when the server could not be reached. A reply that is not valid
-	// HTTP is not an error: the port was there and has been asked. host, when not empty, is sent
-	// as the Host header in place of the address of the url.
-	Get(ctx context.Context, url, host string) error
+	// HTTP is not an error: the port was there and has been asked (the status is 0 then). host,
+	// when not empty, is sent as the Host header in place of the address of the url. status is the
+	// status code of the last answer, and body its first ProbeBodyHead bytes.
+	Get(ctx context.Context, url, host string) (status int, body []byte, err error)
 }
 
 // Options are the options of Observe.
@@ -146,6 +148,11 @@ type Options struct {
 	// before it loads the code that serves a valid request. The front page request and
 	// ExerciseCmd are not touched.
 	ExerciseHost string
+
+	// ServiceName is the name of the service in the compose file. It is used only in the text of a
+	// warning that names --exercise-host; "SVC" is written when it is empty.
+	ServiceName string
+
 	// ExerciseCmd is a command run on this side once the program is up, for one that does not
 	// speak HTTP. It sees DOCK2NANO_HOST and DOCK2NANO_PORT, the address of the container.
 	ExerciseCmd string
@@ -265,6 +272,9 @@ const (
 	stoppedLogBytes = 1024
 	// passwdLimit is the most that is read of /etc/passwd of an image.
 	passwdLimit = 1 << 20
+	// ProbeBodyHead is how much of the body of an answer a Prober gives back.
+	ProbeBodyHead = 2048
+
 	// probeBodyLimit is the most that is read of the answer to a probe.
 	probeBodyLimit = 1 << 20
 	// namePrefix and ownLabel mark the containers of the tool.
@@ -1344,7 +1354,7 @@ func (r *run) watch(ctx context.Context, id string, tracerDir string, exposed []
 			}
 			// the question may not take the observation past its end
 			pctx, stop := context.WithTimeout(ctx, deadline.Sub(r.o.now()))
-			err := r.o.Probe.Get(pctx, url, "")
+			_, _, err := r.o.Probe.Get(pctx, url, "")
 			stop()
 			if err != nil {
 				failed[port] = err.Error()
@@ -1713,6 +1723,29 @@ func exerciseURL(raw, host string, port int) (string, error) {
 	return u.String(), nil
 }
 
+// hostRejections are the texts of the answers of frameworks that refuse a request for its Host
+// header: Django (DisallowedHost, Invalid HTTP_HOST header), the dev servers of webpack and Vite
+// (Invalid Host header) and Rails (Blocked host, Blocked hosts).
+var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Invalid Host header", "Blocked host"}
+
+// rejectedNote is the warning for a request of --exercise that was answered with a status of 400 or
+// more. When the status is 400 or 403 and the start of the body is one of the answers of a framework
+// that refuses the Host header, it says so and names the option; the body itself is not printed.
+func (r *run) rejectedNote(raw string, status int, body []byte) string {
+	if status == 400 || status == 403 {
+		for _, m := range hostRejections {
+			if bytes.Contains(body, []byte(m)) {
+				service := r.o.ServiceName
+				if service == "" {
+					service = "SVC"
+				}
+				return fmt.Sprintf("exercise: the program rejected the Host header of the request for %s (status %d): code that is loaded only to answer a valid request may be missing from the package; run again with --exercise-host %s=localhost (or the host name the program accepts)", raw, status, service)
+			}
+		}
+	}
+	return fmt.Sprintf("exercise: the request for %s was answered with status %d", raw, status)
+}
+
 // exercise makes the requests and runs the command once the program is up. What fails is a
 // warning: the package is made from whatever was seen. Nothing goes past the end of the time.
 func (r *run) exercise(ctx context.Context, host string, port int, deadline time.Time) {
@@ -1728,11 +1761,14 @@ func (r *run) exercise(ctx context.Context, host string, port int, deadline time
 			continue
 		}
 		pctx, stop := context.WithTimeout(ctx, left)
-		err = r.o.Probe.Get(pctx, address, r.o.ExerciseHost)
+		status, body, err := r.o.Probe.Get(pctx, address, r.o.ExerciseHost)
 		stop()
 		if err != nil {
 			r.warnOnce(r.redact("exercise: calling " + raw + ": " + err.Error()))
 			continue
+		}
+		if status >= 400 {
+			r.warnOnce(r.redact(r.rejectedNote(raw, status, body)))
 		}
 		if r.o.ExerciseHost != "" {
 			r.vlogf("exercised %s with the Host %s\n", address, r.o.ExerciseHost)
@@ -1792,16 +1828,16 @@ func redirectAddress(first, target *url.URL) string {
 	return name
 }
 
-func (httpProber) Get(ctx context.Context, url, host string) error {
+func (httpProber) Get(ctx context.Context, url, host string) (int, []byte, error) {
 	if host != "" && !ValidHost(host) {
-		return fmt.Errorf("%q is not a host a Host header can hold", host)
+		return 0, nil, fmt.Errorf("%q is not a host a Host header can hold", host)
 	}
 	rest := strings.TrimPrefix(url, "http://")
 	address, _, _ := strings.Cut(rest, "/")
 	dialer := net.Dialer{Timeout: 2 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	conn.Close()
 
@@ -1837,7 +1873,7 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil
+		return 0, nil, nil
 	}
 	if host != "" {
 		req.Host = host
@@ -1845,13 +1881,15 @@ func (httpProber) Get(ctx context.Context, url, host string) error {
 	resp, err := client.Do(req)
 	if err != nil {
 		if host != "" && strings.Contains(err.Error(), "invalid Host header") {
-			return err
+			return 0, nil, err
 		}
-		return nil
+		return 0, nil, nil
 	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit))
+	limited := io.LimitReader(resp.Body, probeBodyLimit)
+	head, _ := io.ReadAll(io.LimitReader(limited, ProbeBodyHead))
+	io.Copy(io.Discard, limited)
 	resp.Body.Close()
-	return nil
+	return resp.StatusCode, head, nil
 }
 
 // hostName is the name of a host that ValidHost accepted, without its port.
