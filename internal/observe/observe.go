@@ -1735,7 +1735,7 @@ func (r *run) rejectedNote(raw string, status int, body []byte) string {
 	if status == 400 || status == 403 {
 		for _, m := range hostRejections {
 			if bytes.Contains(body, []byte(m)) {
-				service := r.o.ServiceName
+				service := "SVC"
 				if service == "" {
 					service = "SVC"
 				}
