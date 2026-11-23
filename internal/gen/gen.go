@@ -98,6 +98,10 @@ type Input struct {
 	// dns_search: [service] in compose.yaml.
 	ShortNames bool
 
+	// ToolName is the name of the tool, for the commands the report suggests. When it is empty
+	// the text {tool} is written in its place.
+	ToolName string
+
 	// Arch is the architecture of the packages, "amd64" or "arm64". The default
 	// is that of the machine that runs the tool; for any other machine it is
 	// an error.
@@ -855,8 +859,59 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 		if supervisor {
 			msg += ". The program is a supervisor: see the supervisor item"
 		}
+		if note := g.singleProcessNote(s, obs); note != "" {
+			msg += ". " + note
+		}
 		g.add(s.Name, plan.Unsupported, "processes", msg)
 	}
+}
+
+// singleProcessNote says, for a program that is known to start more than one process (the
+// development server of django, uvicorn with workers, gunicorn), which option runs it in one
+// process, with the command to copy, built from the observed command line. Nothing is applied: the
+// text says that the command is a guess to review. It is "" for any other program. No command is
+// given when the service has an entrypoint that the command does not start with (--command
+// replaces the command, not the entrypoint), or when a word cannot be quoted safely.
+func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) string {
+	adv, ok := trace.SingleProcess(obs.Program, obs.Argv)
+	if !ok {
+		return ""
+	}
+	if len(adv.Command) == 0 {
+		return adv.Reason + "; no command is suggested"
+	}
+	words := adv.Command
+	var img *docker.ImageConfig
+	if in, ok := g.in.Services[s.Name]; ok {
+		img = in.Image
+	}
+	lookup := g.in.HostEnv
+	if lookup == nil {
+		lookup = func(string) (string, bool) { return "", false }
+	}
+	ep, _, err := EffectiveCommand(s, img, lookup)
+	switch {
+	case err != nil:
+		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
+	case ep != nil && len(*ep) > 0:
+		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
+			return adv.Reason + "; no command is suggested, because the service has an entrypoint that the command would not start with (--command replaces the command and keeps the entrypoint), so write it by hand"
+		}
+		words = words[len(*ep):]
+	}
+	quoted, ok := trace.QuoteWords(words)
+	if name, nameOK := trace.QuoteWords([]string{s.Name}); !ok || !nameOK || name != s.Name {
+		return adv.Reason + "; no command is suggested, because a word of it cannot be quoted safely for a shell, so write it by hand"
+	}
+	tool := g.in.ToolName
+	if tool == "" {
+		tool = "{tool}"
+	}
+	msg := fmt.Sprintf("%s; to run it in one process, try: %s convert ... --command '%s=%s'", adv.Reason, tool, s.Name, quoted)
+	if adv.Assumed != "" {
+		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
+	}
+	return msg + ". This is a guess made from the observed command line: review it; nothing was changed"
 }
 
 // maxImageFile is the largest file of the image that is read here (package.json, .npmrc).

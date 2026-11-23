@@ -25,6 +25,8 @@ Why before the conversion: changing only Args in the manifest after the conversi
 
 Result with the change: answers 200, 3 of 3 (run 45003684361, 2026-11-22).
 
+Report: when gunicorn with the worker class uvicorn.workers.UvicornWorker is observed and starts child processes, the item "processes" now gives the command to copy (`--command 'api=uvicorn MODULE:APP --host H --port P'`, taken from the command line; the host and port are said to be assumed when no --bind was given). Not measured: no CI run of this suggestion yet, and the command it builds was not compared with the one above.
+
 Status: manual. The real feature is a tool option that overrides the service command and is used in the observation. It is not built. An earlier fix, to use the command line of /proc when the program was started through a shebang (commit f67751e), works but is not merged into feat/modules at the time of the project notes entry.
 
 ## petclinic (GlassFish and MySQL)
@@ -81,3 +83,5 @@ The hub apache listens on 8080 with MapDirs of the docroot, and the hub php pack
 ## django (awesome-compose)
 
 Changes: run `convert --command 'web=manage.py runserver 0.0.0.0:8000 --noreload'` (the autoreloader of runserver starts another process, and nanos has no fork), and make the observation ask the application with an allowed Host header: `--exercise-cmd 'web=curl -s -o /dev/null -H "Host: localhost" http://$DOCK2NANO_HOST:$DOCK2NANO_PORT/admin/login/'`. Without the request, django.contrib.messages.storage.fallback is not carried and the first valid request fails with 500 (--exercise with a path did not help: the tool sends the address of the container as Host, which ALLOWED_HOSTS rejects; this cause is a hypothesis that the 200 above is consistent with, not isolated by a separate run). Measured: run 45076955146, one run, answers 200. Status: tool option, the user gives the host (the tool does not guess it). The option `--exercise-host [SVC=]HOST` sets the Host header of the requests of --exercise. Measured with `--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/ --exercise web=/admin/login/ --exercise-host web=localhost:8000`: run 45078461680, 3 of 3 jobs answer 200; the unit tests are green in run 45078373869.
+
+Report: when runserver is observed without --noreload and starts child processes, the item "processes" now gives the `--command` with --noreload added to the observed command line. Not measured: no CI run of this suggestion yet.

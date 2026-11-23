@@ -345,7 +345,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		skipped[name] = why
 	}
-	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, ShortNames: o.shortNames}
+	in := gen.Input{Project: project, Dir: dir, Services: inputs, Skipped: skipped, Arch: arch, ShortNames: o.shortNames, ToolName: ToolName}
 	in.HostEnv = a.LookupEnv
 	in.ReadFile = a.ReadFile
 	in.Stat = a.Stat
