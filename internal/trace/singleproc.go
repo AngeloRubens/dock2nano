@@ -243,7 +243,7 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 				value = args[i]
 				word = args[i]
 			}
-			if !digits.MatchString(value) {
+			if false && !digits.MatchString(value) {
 				unknown = true
 				break
 			}
