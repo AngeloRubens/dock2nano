@@ -925,7 +925,6 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
 	}
 	if adv.Server == "gunicorn" {
-		msg += " (settings of the configuration file (environment, working directory, application, worker class) are not carried; gunicorn also reads gunicorn.conf.py in the working directory and GUNICORN_CMD_ARGS)"
 		if slices.Contains(adv.Command, "--app-dir") {
 			msg += " (--chdir was written as --app-dir, which does not change the working directory: the service must run in that directory, for example with working_dir, for relative paths)"
 		}
