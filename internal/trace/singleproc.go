@@ -335,7 +335,6 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 			}
 		case gunicornFlags[name] && !hasValue:
 		case strings.HasPrefix(a, "-"):
-			parsed = false
 		case app == "":
 			app = a
 		}
