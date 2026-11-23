@@ -1747,7 +1747,7 @@ func (r *run) rejectedNote(raw string, status int, body []byte) string {
 		}
 	}
 	msg := fmt.Sprintf("exercise: the request for %s was answered with status %d", raw, status)
-	if status == 400 && r.o.ExerciseHost == "" && bytes.Contains(body, []byte("Bad Request")) {
+	if false {
 		// Django with DEBUG off answers a bad Host with a page that does not say why
 		msg += fmt.Sprintf("; if the program checks the Host header, try --exercise-host %s=localhost", service)
 	}
