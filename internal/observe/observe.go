@@ -1725,25 +1725,33 @@ func exerciseURL(raw, host string, port int) (string, error) {
 
 // hostRejections are the texts of the answers of frameworks that refuse a request for its Host
 // header: Django (DisallowedHost, Invalid HTTP_HOST header), the dev servers of webpack and Vite
-// (Invalid Host header) and Rails (Blocked host, Blocked hosts).
-var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Invalid Host header", "Blocked host"}
+// (Invalid Host header; Vite: Blocked request. This host) and Rails (Blocked host, Blocked hosts).
+var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Invalid Host header", "Blocked host", "Blocked request. This host"}
 
 // rejectedNote is the warning for a request of --exercise that was answered with a status of 400 or
 // more. When the status is 400 or 403 and the start of the body is one of the answers of a framework
 // that refuses the Host header, it says so and names the option; the body itself is not printed.
 func (r *run) rejectedNote(raw string, status int, body []byte) string {
+	service := r.o.ServiceName
+	if service == "" {
+		service = "SVC"
+	}
 	if status == 400 || status == 403 {
 		for _, m := range hostRejections {
 			if bytes.Contains(body, []byte(m)) {
-				service := r.o.ServiceName
-				if service == "" {
-					service = "SVC"
+				if r.o.ExerciseHost != "" {
+					return fmt.Sprintf("exercise: the program rejected the Host header of the request for %s (status %d): the Host %s given with --exercise-host was rejected; give a name the program accepts (for Django one in ALLOWED_HOSTS)", raw, status, r.o.ExerciseHost)
 				}
 				return fmt.Sprintf("exercise: the program rejected the Host header of the request for %s (status %d): code that is loaded only to answer a valid request may be missing from the package; run again with --exercise-host %s=localhost (or the host name the program accepts)", raw, status, service)
 			}
 		}
 	}
-	return fmt.Sprintf("exercise: the request for %s was answered with status %d", raw, status)
+	msg := fmt.Sprintf("exercise: the request for %s was answered with status %d", raw, status)
+	if status == 400 && r.o.ExerciseHost == "" && bytes.Contains(body, []byte("Bad Request")) {
+		// Django with DEBUG off answers a bad Host with a page that does not say why
+		msg += fmt.Sprintf("; if the program checks the Host header, try --exercise-host %s=localhost", service)
+	}
+	return msg
 }
 
 // exercise makes the requests and runs the command once the program is up. What fails is a

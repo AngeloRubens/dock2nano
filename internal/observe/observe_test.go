@@ -3298,6 +3298,7 @@ func TestObserveExerciseNamesTheOptionWhenTheHostIsRejected(t *testing.T) {
 		{"webpack and vite", 403, "Invalid Host header"},
 		{"rails host", 403, "Blocked host: 172.17.0.2"},
 		{"rails hosts", 403, "Blocked hosts: 172.17.0.2"},
+		{"vite", 403, "Blocked request. This host (\"172.17.0.2\") is not allowed."},
 	} {
 		s := exerciseScene(t, []string{"/admin/"}, func(path string) (int, string) { return c.status, c.body })
 		res, err := s.observe(t, context.Background())
@@ -3333,6 +3334,46 @@ func TestObserveExerciseHostRejectionNeedsStatus400Or403(t *testing.T) {
 	}
 }
 
+func TestObserveExerciseHostGivenAndRejected(t *testing.T) {
+	s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 400, "DisallowedHost at /" })
+	s.o.ExerciseHost = "example.test"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("warnings = %q", res.Warnings)
+	}
+	w := res.Warnings[0]
+	if !strings.Contains(w, "the Host example.test given with --exercise-host was rejected; give a name the program accepts (for Django one in ALLOWED_HOSTS)") || strings.Contains(w, "run again with --exercise-host") {
+		t.Errorf("warning = %q", w)
+	}
+}
+
+func TestObserveExerciseGenericBadRequestHintsAtTheHost(t *testing.T) {
+	body := "<!doctype html><title>Bad Request (400)</title><h1>Bad Request (400)</h1>"
+	s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 400, body })
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings", res.Warnings, []string{"exercise: the request for /x was answered with status 400; if the program checks the Host header, try --exercise-host web=localhost"})
+	// with a Host given, or another status, the plain warning stays
+	s = exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 400, body })
+	s.o.ExerciseHost = "example.test"
+	res, err = s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings with a host", res.Warnings, []string{"exercise: the request for /x was answered with status 400"})
+	s = exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 500, body })
+	res, err = s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "warnings of 500", res.Warnings, []string{"exercise: the request for /x was answered with status 500"})
+}
+
 func TestObserveExerciseNoWarningForSuccessAndRedirects(t *testing.T) {
 	for _, status := range []int{200, 204, 301, 302, 399} {
 		s := exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return status, "DisallowedHost" })
@@ -3364,6 +3405,43 @@ func TestObserveExerciseRejectionWithoutAServiceNameWritesSVC(t *testing.T) {
 	}
 	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "--exercise-host SVC=localhost") {
 		t.Errorf("warnings = %q", res.Warnings)
+	}
+}
+
+// A server that goes on writing: the probe reads the head and a bounded rest, then returns.
+func TestHTTPProberDrainIsBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		chunk := []byte(strings.Repeat("a", 32<<10))
+		for r.Context().Err() == nil {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+	type result struct {
+		status int
+		body   []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		st, b, err := (httpProber{}).Get(context.Background(), srv.URL+"/", "")
+		done <- result{st, b, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		equal(t, "status", r.status, 400)
+		equal(t, "head length", len(r.body), ProbeBodyHead)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the probe did not return for an endless body")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Some servers start more than one process by default, and have an option, or a sibling program,
@@ -27,7 +28,19 @@ type SingleProcessAdvice struct {
 	// Assumed says which values of the command were not found in the command line and were
 	// assumed ("host and port"), or is "" when none was.
 	Assumed string
+
+	// Withheld is true when a command could have been built but a word of the command line is not
+	// one the suggestion carries (an option that may hold a secret or is not known): nothing of the
+	// command line is repeated then.
+	Withheld bool
+
+	// ConfigFile is true when gunicorn was given a configuration file (-c, --config): the bind and
+	// the workers may be set there, in addition to what was assumed.
+	ConfigFile bool
 }
+
+// WithheldText is what the report says when Withheld is true.
+const WithheldText = "no command is suggested: an option of the command line may hold a secret or is not known"
 
 var (
 	pythonName = regexp.MustCompile(`^python(\d+(\.\d+)*)?$`)
@@ -116,6 +129,16 @@ func withPrefix(prefix []string, rest ...string) []string {
 	return append(out, rest...)
 }
 
+// djangoFlags are the options of runserver that the suggestion carries (they take no value).
+var djangoFlags = map[string]bool{
+	"--insecure": true, "--nothreading": true, "--ipv6": true, "-6": true, "--nostatic": true,
+	"--skip-checks": true, "--noreload": true,
+}
+
+// djangoAddrport is the optional argument of runserver: [ADDR:]PORT, with an IPv6 address in
+// brackets or a name.
+var djangoAddrport = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+
 func djangoAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 	if len(args) == 0 || args[0] != "runserver" {
 		return SingleProcessAdvice{}, false
@@ -128,47 +151,124 @@ func djangoAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 			return SingleProcessAdvice{}, false
 		}
 	}
-	return SingleProcessAdvice{
-		Server:  "django",
-		Command: withPrefix(prefix, append(append([]string{}, args...), "--noreload")...),
-		Reason:  "the development server of django starts a second process that reloads the code; --noreload keeps one",
-	}, true
+	adv := SingleProcessAdvice{
+		Server: "django",
+		Reason: "the development server of django starts a second process that reloads the code; --noreload keeps one",
+	}
+	addrport := false
+	for _, a := range args[1:] {
+		switch {
+		case djangoFlags[a]:
+		case !strings.HasPrefix(a, "-") && !addrport && djangoAddrport.MatchString(a):
+			addrport = true
+		default:
+			adv.Withheld = true
+			return adv, true
+		}
+	}
+	adv.Command = withPrefix(prefix, append(append([]string{}, args...), "--noreload")...)
+	return adv, true
+}
+
+// uvicornFlags are the options of uvicorn that the suggestion carries and that take no value;
+// uvicornValues take one (the next word, or after =). Any other option makes the command withheld:
+// it may hold a secret (a key password, a header) or not be known.
+var uvicornFlags = map[string]bool{
+	"--factory": true, "--proxy-headers": true, "--no-proxy-headers": true, "--no-access-log": true,
+	"--access-log": true, "--no-server-header": true, "--no-date-header": true,
+}
+
+var uvicornValues = map[string]bool{
+	"--host": true, "--port": true, "--uds": true, "--fd": true, "--app-dir": true,
+	"--root-path": true, "--forwarded-allow-ips": true, "--log-level": true, "--loop": true,
+	"--http": true, "--ws": true, "--lifespan": true, "--interface": true,
+}
+
+// uvicornReloadValues are the options of the reloader; they are left out together with --reload.
+// UVICORN_RELOAD and UVICORN_WORKERS of the environment are not looked at here.
+var uvicornReloadValues = map[string]bool{
+	"--reload-dir": true, "--reload-include": true, "--reload-exclude": true, "--reload-delay": true,
 }
 
 func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 	var kept []string
-	changed := false
+	changed, unknown, hasApp, workersOne := false, false, false, false
+	workersAt := -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		name, value, hasValue := a, "", false
+		if strings.HasPrefix(a, "--") {
+			name, value, hasValue = strings.Cut(a, "=")
+		}
 		switch {
-		case a == "--reload":
+		case name == "--reload" && !hasValue:
 			changed = true
-		case a == "--workers" && i+1 < len(args):
-			if n, err := strconv.Atoi(args[i+1]); err == nil && n > 1 {
-				changed = true
+		case uvicornReloadValues[name]:
+			if !hasValue {
 				i++
-				continue
 			}
-			kept = append(kept, a, args[i+1])
-			i++
-		case strings.HasPrefix(a, "--workers="):
-			if n, err := strconv.Atoi(strings.TrimPrefix(a, "--workers=")); err == nil && n > 1 {
+		case name == "--workers":
+			if !hasValue {
+				if i+1 >= len(args) {
+					return SingleProcessAdvice{}, false
+				}
+				i++
+				value = args[i]
+			}
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return SingleProcessAdvice{}, false
+			}
+			if n > 1 {
 				changed = true
-				continue
+				if workersAt < 0 {
+					workersAt = len(kept)
+				}
+			} else {
+				workersOne = true
+				kept = append(kept, "--workers", "1")
 			}
+		case uvicornFlags[name] && !hasValue:
+			kept = append(kept, a)
+		case uvicornValues[name]:
+			if hasValue {
+				kept = append(kept, a)
+				break
+			}
+			if i+1 >= len(args) {
+				unknown = true
+				break
+			}
+			i++
+			kept = append(kept, a, args[i])
+		case !strings.HasPrefix(a, "-") && !hasApp && appSpec.MatchString(a):
+			hasApp = true
 			kept = append(kept, a)
 		default:
-			kept = append(kept, a)
+			unknown = true
 		}
 	}
 	if !changed {
 		return SingleProcessAdvice{}, false
 	}
-	return SingleProcessAdvice{
-		Server:  "uvicorn",
-		Command: withPrefix(prefix, kept...),
-		Reason:  "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out",
-	}, true
+	adv := SingleProcessAdvice{
+		Server: "uvicorn",
+		Reason: "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out, and --workers 1 is written because WEB_CONCURRENCY or UVICORN_WORKERS in the environment would start workers again",
+	}
+	if unknown {
+		adv.Withheld = true
+		return adv, true
+	}
+	if !workersOne {
+		// in place of the dropped --workers N, else at the end
+		at := len(kept)
+		if workersAt >= 0 {
+			at = workersAt
+		}
+		kept = append(kept[:at:at], append([]string{"--workers", "1"}, kept[at:]...)...)
+	}
+	adv.Command = withPrefix(prefix, kept...)
+	return adv, true
 }
 
 // gunicornFlags are the options of gunicorn that take no value; gunicornValues take the next
@@ -190,10 +290,17 @@ var gunicornValues = map[string]bool{
 	"--access-logformat": true, "--log-file": true,
 }
 
-const uvicornWorker = "uvicorn.workers.UvicornWorker"
+// uvicornWorkers are the worker classes of gunicorn that run uvicorn.
+var uvicornWorkers = map[string]bool{
+	"uvicorn.workers.UvicornWorker":    true,
+	"uvicorn.workers.UvicornH11Worker": true,
+	"uvicorn_worker.UvicornWorker":     true,
+	"uvicorn_worker.UvicornH11Worker":  true,
+}
 
 func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
-	var class, app, bind string
+	var class, app, bind, chdir string
+	config := false
 	parsed := true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -221,6 +328,10 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 				if bind == "" {
 					bind = value
 				}
+			case "--chdir":
+				chdir = value
+			case "-c", "--config":
+				config = true
 			}
 		case gunicornFlags[name] && !hasValue:
 		case strings.HasPrefix(a, "-"):
@@ -236,11 +347,15 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 		Server: "gunicorn",
 		Reason: "gunicorn forks its workers, so it always starts more than one process; a server that runs in one process (waitress, uvicorn, hypercorn) has to be chosen by you",
 	}
-	if class != uvicornWorker {
+	if !uvicornWorkers[class] {
 		return generic, true
 	}
-	if !parsed || !appSpec.MatchString(app) {
-		// a factory, a missing application or an option that is not known: nothing is invented
+	if !parsed {
+		generic.Withheld = true
+		return generic, true
+	}
+	if !appSpec.MatchString(app) {
+		// a factory or a missing application: nothing is invented
 		return generic, true
 	}
 	host, port, assumed := "0.0.0.0", "8000", false
@@ -253,10 +368,17 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 	} else {
 		assumed = true
 	}
+	command := []string{"uvicorn", app, "--host", host, "--port", port}
+	if chdir != "" {
+		command = append(command, "--app-dir", chdir)
+	}
+	// --workers 1 is explicit: WEB_CONCURRENCY or UVICORN_WORKERS would start workers again
+	command = append(command, "--workers", "1")
 	adv := SingleProcessAdvice{
-		Server:  "gunicorn",
-		Command: []string{"uvicorn", app, "--host", host, "--port", port},
-		Reason:  "gunicorn forks its workers; with the worker class of uvicorn the same application runs under uvicorn in one process (the other options of gunicorn are not carried)",
+		Server:     "gunicorn",
+		ConfigFile: config,
+		Command:    command,
+		Reason:     "gunicorn forks its workers; with the worker class of uvicorn the same application runs under uvicorn in one process (the other options of gunicorn are not carried)",
 	}
 	if assumed {
 		adv.Assumed = "host and port"
@@ -311,7 +433,7 @@ var safeWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 // QuoteWords writes words as the text of a command line that reads back as the same words, both in
 // a shell and in the compose file, and that sits inside single quotes: a word with no special
 // character is written as it is, any other is put in double quotes. It gives false for a word that
-// cannot be written so (one with a quote, a backslash, a $, a backtick or a control character):
+// cannot be written so (one with a quote, a backslash, a $, a backtick, a control character or any rune that is not printable):
 // no command is made of it.
 func QuoteWords(words []string) (string, bool) {
 	out := make([]string, len(words))
@@ -320,7 +442,7 @@ func QuoteWords(words []string) (string, bool) {
 		case safeWord.MatchString(w):
 			out[i] = w
 		case strings.IndexFunc(w, func(r rune) bool {
-			return r < 0x20 || r == 0x7f || r == '\'' || r == '"' || r == '\\' || r == '$' || r == '`'
+			return !unicode.IsPrint(r) || r == '\'' || r == '"' || r == '\\' || r == '$' || r == '`'
 		}) >= 0:
 			return "", false
 		default:

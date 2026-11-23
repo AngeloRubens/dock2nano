@@ -34,42 +34,57 @@ func TestSingleProcess(t *testing.T) {
 		{"python -m of another module", "/usr/local/bin/python3", []string{"python", "-m", "http.server"}, false, "", nil, ""},
 
 		{"uvicorn with workers", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--host", "0.0.0.0", "--workers", "4"}, true, "uvicorn",
-			[]string{"uvicorn", "app:app", "--host", "0.0.0.0"}, ""},
+			[]string{"uvicorn", "app:app", "--host", "0.0.0.0", "--workers", "1"}, ""},
 		{"uvicorn with workers=", "/usr/local/bin/uvicorn", []string{"uvicorn", "--workers=2", "app:app"}, true, "uvicorn",
-			[]string{"uvicorn", "app:app"}, ""},
+			[]string{"uvicorn", "--workers", "1", "app:app"}, ""},
 		{"uvicorn with reload", "/usr/local/bin/python3", []string{"python", "-m", "uvicorn", "app.main:app", "--reload", "--port", "80"}, true, "uvicorn",
-			[]string{"python", "-m", "uvicorn", "app.main:app", "--port", "80"}, ""},
+			[]string{"python", "-m", "uvicorn", "app.main:app", "--port", "80", "--workers", "1"}, ""},
 		{"uvicorn with reload and workers 1", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "1", "--reload"}, true, "uvicorn",
 			[]string{"uvicorn", "app:app", "--workers", "1"}, ""},
 		{"uvicorn started by python on its file", "/usr/local/bin/python3", []string{"python", "/usr/local/bin/uvicorn", "app:app", "--workers", "3"}, true, "uvicorn",
-			[]string{"python", "/usr/local/bin/uvicorn", "app:app"}, ""},
+			[]string{"python", "/usr/local/bin/uvicorn", "app:app", "--workers", "1"}, ""},
 		{"uvicorn with one worker", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "1"}, false, "", nil, ""},
 		{"uvicorn plain", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app"}, false, "", nil, ""},
 		{"uvicorn with a workers value that is not a number", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "$N"}, false, "", nil, ""},
 
 		{"gunicorn with the worker of uvicorn and a bind", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-w", "4", "-b", "0.0.0.0:5000", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"}, ""},
 		{"gunicorn long options", "/usr/local/bin/gunicorn", []string{"gunicorn", "main:app", "--worker-class", uv, "--bind=127.0.0.1:9000"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "127.0.0.1", "--port", "9000"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "127.0.0.1", "--port", "9000", "--workers", "1"}, ""},
 		{"gunicorn worker class with =", "/usr/local/bin/gunicorn", []string{"gunicorn", "--worker-class=" + uv, "-b", ":8080", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"}, ""},
 		{"gunicorn attached short options", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k" + uv, "-b0.0.0.0:7000", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7000"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7000", "--workers", "1"}, ""},
 		{"gunicorn bind with a host only", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", "10.0.0.1", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "10.0.0.1", "--port", "8000"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "10.0.0.1", "--port", "8000", "--workers", "1"}, ""},
 		{"gunicorn bind IPv6", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", "[::1]:8000", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "::1", "--port", "8000"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "::1", "--port", "8000", "--workers", "1"}, ""},
 		{"gunicorn without a bind", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"}, "host and port"},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"}, "host and port"},
 		{"gunicorn bind to a socket", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", "unix:/run/app.sock", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"}, "host and port"},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"}, "host and port"},
 		{"gunicorn through python -m", "/usr/local/bin/python3", []string{"python", "-m", "gunicorn", "-k", uv, "-b", ":80", "main:app"}, true, "gunicorn",
-			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"}, ""},
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--workers", "1"}, ""},
 		{"gunicorn with another worker class", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", "gevent", "main:app"}, true, "gunicorn", nil, ""},
 		{"gunicorn with the sync worker", "/usr/local/bin/gunicorn", []string{"gunicorn", "-w", "2", "main:app"}, true, "gunicorn", nil, ""},
 		{"gunicorn with a factory", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "main:create_app()"}, true, "gunicorn", nil, ""},
 		{"gunicorn with an option that is not known", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "--strange", "main:app"}, true, "gunicorn", nil, ""},
-		{"gunicorn with the other worker of uvicorn", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", "uvicorn.workers.UvicornH11Worker", "main:app"}, true, "gunicorn", nil, ""},
+		{"gunicorn with the h11 worker of uvicorn", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", "uvicorn.workers.UvicornH11Worker", "-b", ":81", "main:app"}, true, "gunicorn",
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "81", "--workers", "1"}, ""},
+		{"gunicorn with uvicorn_worker", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", "uvicorn_worker.UvicornWorker", "-b", ":82", "main:app"}, true, "gunicorn",
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "82", "--workers", "1"}, ""},
+		{"gunicorn with the h11 uvicorn_worker", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", "uvicorn_worker.UvicornH11Worker", "-b", ":83", "main:app"}, true, "gunicorn",
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "83", "--workers", "1"}, ""},
+		{"gunicorn with --chdir", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", ":84", "--chdir", "/srv/app", "main:app"}, true, "gunicorn",
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "84", "--app-dir", "/srv/app", "--workers", "1"}, ""},
+		{"gunicorn with --chdir=", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", ":85", "--chdir=/srv/app", "main:app"}, true, "gunicorn",
+			[]string{"uvicorn", "main:app", "--host", "0.0.0.0", "--port", "85", "--app-dir", "/srv/app", "--workers", "1"}, ""},
+		{"django with allowed options", "/usr/local/bin/python3", []string{"python", "manage.py", "runserver", "--insecure", "--nothreading", "-6", "[::]:80"}, true, "django",
+			[]string{"python", "manage.py", "runserver", "--insecure", "--nothreading", "-6", "[::]:80", "--noreload"}, ""},
+		{"uvicorn with the reload options", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--reload", "--reload-dir", "/app", "--reload-include=*.py", "--reload-exclude", "x", "--reload-delay", "1", "--port", "80"}, true, "uvicorn",
+			[]string{"uvicorn", "app:app", "--port", "80", "--workers", "1"}, ""},
+		{"uvicorn with options of the allowlist", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers=3", "--host=0.0.0.0", "--factory", "--proxy-headers", "--log-level", "info", "--app-dir", "/srv"}, true, "uvicorn",
+			[]string{"uvicorn", "app:app", "--workers", "1", "--host=0.0.0.0", "--factory", "--proxy-headers", "--log-level", "info", "--app-dir", "/srv"}, ""},
 
 		{"nginx", "/usr/sbin/nginx", []string{"nginx", "-g", "daemon off;"}, false, "", nil, ""},
 		{"no argv", "/usr/local/bin/uvicorn", nil, false, "", nil, ""},
@@ -96,6 +111,74 @@ func TestSingleProcess(t *testing.T) {
 		if adv.Reason == "" {
 			t.Errorf("%s: no reason", tt.name)
 		}
+	}
+}
+
+// the secret of a command line is not repeated: a word outside the allowlist withholds the command
+func TestSingleProcessWithholdsTheCommand(t *testing.T) {
+	uv := "uvicorn.workers.UvicornWorker"
+	for _, c := range []struct {
+		name    string
+		program string
+		argv    []string
+	}{
+		{"uvicorn key password", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4", "--ssl-keyfile-password", "hunter2"}},
+		{"uvicorn key password =", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--reload", "--ssl-keyfile-password=hunter2"}},
+		{"uvicorn header", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "2", "--header", "X-Token:hunter2"}},
+		{"uvicorn second positional", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "hunter2", "--workers", "2"}},
+		{"django settings", "/usr/local/bin/python3", []string{"python", "manage.py", "runserver", "--settings=hunter2"}},
+		{"django a word", "/usr/local/bin/python3", []string{"python", "manage.py", "runserver", "--pythonpath", "hunter2"}},
+		{"gunicorn unknown option", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "--certfile", "hunter2", "main:app"}},
+	} {
+		adv, ok := SingleProcess(c.program, c.argv)
+		if !ok {
+			t.Errorf("%s: no advice", c.name)
+			continue
+		}
+		if len(adv.Command) != 0 || !adv.Withheld {
+			t.Errorf("%s: command = %q, withheld = %v", c.name, adv.Command, adv.Withheld)
+		}
+		if strings.Contains(adv.Reason, "hunter2") || strings.Contains(adv.Assumed, "hunter2") {
+			t.Errorf("%s: the secret is in the advice: %+v", c.name, adv)
+		}
+	}
+}
+
+// --workers 1 is written, so WEB_CONCURRENCY does not start workers again
+func TestSingleProcessWritesWorkersOne(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"uvicorn", "app:app", "--workers", "4"}, []string{"uvicorn", "app:app", "--workers", "1"}},
+		{[]string{"uvicorn", "app:app", "--reload"}, []string{"uvicorn", "app:app", "--workers", "1"}},
+		{[]string{"uvicorn", "app:app", "--reload", "--workers", "1"}, []string{"uvicorn", "app:app", "--workers", "1"}},
+	} {
+		adv, ok := SingleProcess("/usr/local/bin/uvicorn", c.argv)
+		if !ok || !reflect.DeepEqual(adv.Command, c.want) {
+			t.Errorf("%q: command = %q, ok = %v; want %q", c.argv, adv.Command, ok, c.want)
+		}
+	}
+	// already one worker and no reloader: nothing to suggest
+	if _, ok := SingleProcess("/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "1"}); ok {
+		t.Errorf("advice for one worker")
+	}
+}
+
+func TestSingleProcessGunicornConfigFile(t *testing.T) {
+	uv := "uvicorn.workers.UvicornWorker"
+	for _, argv := range [][]string{
+		{"gunicorn", "-k", uv, "-c", "gunicorn.conf.py", "main:app"},
+		{"gunicorn", "-k", uv, "--config=gunicorn.conf.py", "main:app"},
+	} {
+		adv, ok := SingleProcess("/usr/local/bin/gunicorn", argv)
+		if !ok || !adv.ConfigFile || len(adv.Command) == 0 {
+			t.Errorf("%q: %+v, ok = %v", argv, adv, ok)
+		}
+	}
+	adv, _ := SingleProcess("/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "main:app"})
+	if adv.ConfigFile {
+		t.Errorf("ConfigFile without a config")
 	}
 }
 
@@ -130,6 +213,10 @@ func TestQuoteWords(t *testing.T) {
 		{"a backslash", []string{"x", `a\b`}, "", false},
 		{"a backtick", []string{"x", "`id`"}, "", false},
 		{"a newline", []string{"x", "a\nb"}, "", false},
+		{"a C1 control", []string{"x", "a\u009bb"}, "", false},
+		{"a bidi override", []string{"x", "a\u202eb"}, "", false},
+		{"a no-break space", []string{"x", "a\u00a0b"}, "", false},
+		{"a non-ASCII word", []string{"x", "caf\u00e9"}, "x \"caf\u00e9\"", true},
 	}
 	for _, tt := range tests {
 		got, ok := QuoteWords(tt.words)

@@ -877,6 +877,9 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if !ok {
 		return ""
 	}
+	if adv.Withheld {
+		return adv.Reason + "; " + trace.WithheldText
+	}
 	if len(adv.Command) == 0 {
 		return adv.Reason + "; no command is suggested"
 	}
@@ -889,13 +892,13 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if lookup == nil {
 		lookup = func(string) (string, bool) { return "", false }
 	}
-	ep, _, err := EffectiveCommand(s, img, lookup)
+	ep, cmd, err := EffectiveCommand(s, img, lookup)
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
 	case ep != nil && len(*ep) > 0:
 		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
-			return adv.Reason + "; no command is suggested, because the service has an entrypoint that the command would not start with (--command replaces the command and keeps the entrypoint), so write it by hand"
+			return adv.Reason + "; no command string is given, because the service has an entrypoint that the observed command does not start with: --command replaces the command and keeps the entrypoint, so a command written after the entrypoint may still work if the entrypoint execs its arguments, but that was not checked"
 		}
 		words = words[len(*ep):]
 	}
@@ -911,7 +914,20 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if adv.Assumed != "" {
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
 	}
+	if adv.ConfigFile {
+		msg += " (a configuration file was given to gunicorn with -c or --config: the bind and the workers may be set in it as well, and were not read)"
+	}
+	if all := append(append([]string{}, derefWords(ep)...), cmd...); len(all) > 0 && !slices.Equal(all, obs.Argv) {
+		msg += fmt.Sprintf(". The service starts this program through %q; what that does before it (and any wrapper) is left out of the suggestion", all[0])
+	}
 	return msg + ". This is a guess made from the observed command line: review it; nothing was changed"
+}
+
+func derefWords(w *[]string) []string {
+	if w == nil {
+		return nil
+	}
+	return *w
 }
 
 // maxImageFile is the largest file of the image that is read here (package.json, .npmrc).
