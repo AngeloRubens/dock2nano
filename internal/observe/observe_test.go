@@ -3358,14 +3358,14 @@ func TestObserveExerciseGenericBadRequestHintsAtTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "warnings", res.Warnings, []string{"exercise: the request for /x was answered with status 400; if the program checks the Host header, try --exercise-host web=localhost"})
-	// with a Host given, or another status, the plain warning stays
+	// with a Host given the warning says it may have been rejected; another status keeps the plain one
 	s = exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 400, body })
 	s.o.ExerciseHost = "example.test"
 	res, err = s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	equal(t, "warnings with a host", res.Warnings, []string{"exercise: the request for /x was answered with status 400"})
+	equal(t, "warnings with a host", res.Warnings, []string{"exercise: the request for /x was answered with status 400; the Host example.test given with --exercise-host may have been rejected"})
 	s = exerciseScene(t, []string{"/x"}, func(path string) (int, string) { return 500, body })
 	res, err = s.observe(t, context.Background())
 	if err != nil {
@@ -3429,6 +3429,7 @@ func TestHTTPProberDrainIsBounded(t *testing.T) {
 		err    error
 	}
 	done := make(chan result, 1)
+	start := time.Now()
 	go func() {
 		st, b, err := (httpProber{}).Get(context.Background(), srv.URL+"/", "")
 		done <- result{st, b, err}
@@ -3440,6 +3441,10 @@ func TestHTTPProberDrainIsBounded(t *testing.T) {
 		}
 		equal(t, "status", r.status, 400)
 		equal(t, "head length", len(r.body), ProbeBodyHead)
+		// the client timeout (15 s) would end an unbounded drain: the bound has to end it far sooner
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("the probe took %v for an endless body: the drain is not bounded", d)
+		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("the probe did not return for an endless body")
 	}

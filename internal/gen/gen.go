@@ -893,6 +893,16 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 		lookup = func(string) (string, bool) { return "", false }
 	}
 	ep, cmd, err := EffectiveCommand(s, img, lookup)
+	all := append(append([]string{}, derefWords(ep)...), cmd...)
+	// a console script started through its shebang line (/usr/local/bin/python3 /usr/local/bin/uvicorn
+	// app:app) is the command of the service as it is written (uvicorn app:app)
+	observed := obs.Argv
+	if err == nil && shebangOf(observed, all) {
+		if len(words) >= 2 && words[0] == observed[0] && words[1] == observed[1] {
+			words = append([]string{all[0]}, words[2:]...)
+		}
+		observed = append([]string{all[0]}, observed[2:]...)
+	}
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
@@ -914,13 +924,45 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if adv.Assumed != "" {
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
 	}
-	if adv.ConfigFile {
-		msg += " (a configuration file was given to gunicorn with -c or --config: the bind and the workers may be set in it as well, and were not read)"
+	if adv.Server == "gunicorn" {
+		msg += " (settings of the configuration file (environment, working directory, application, worker class) are not carried; gunicorn also reads gunicorn.conf.py in the working directory and GUNICORN_CMD_ARGS)"
+		if slices.Contains(adv.Command, "--app-dir") {
+			msg += " (--chdir was written as --app-dir, which does not change the working directory: the service must run in that directory, for example with working_dir, for relative paths)"
+		}
 	}
-	if all := append(append([]string{}, derefWords(ep)...), cmd...); len(all) > 0 && !slices.Equal(all, obs.Argv) {
-		msg += fmt.Sprintf(". The service starts this program through %q; what that does before it (and any wrapper) is left out of the suggestion", all[0])
+	if len(all) > 0 && !slices.Equal(all, observed) {
+		through := "another command"
+		if w, ok := firstDifference(all, observed); ok {
+			through = fmt.Sprintf("%q", w)
+		}
+		msg += fmt.Sprintf(". The service starts this program through %s; what that does before it (and any wrapper) is left out of the suggestion", through)
 	}
 	return msg + ". This is a guess made from the observed command line: review it; nothing was changed"
+}
+
+// shebangOf tells whether argv is a console script started through its interpreter, as the kernel
+// does for a shebang line: an absolute interpreter, then the script, which has the name of the first
+// word of the command of the service.
+func shebangOf(argv, effective []string) bool {
+	return len(argv) >= 2 && len(effective) > 0 && path.IsAbs(argv[0]) && path.Base(argv[1]) == path.Base(effective[0])
+}
+
+// firstDifference gives the first word of the effective command where it differs from the observed
+// command line, when that word is a program or a script path; it is false for an option, a word
+// with a space or any other text, and when the effective command has no such word.
+func firstDifference(effective, observed []string) (string, bool) {
+	i := 0
+	for i < len(effective) && i < len(observed) && effective[i] == observed[i] {
+		i++
+	}
+	if i >= len(effective) {
+		return "", false
+	}
+	w := effective[i]
+	if w == "" || strings.HasPrefix(w, "-") || strings.ContainsAny(w, " \t\n=;&|$<>()`'\"") {
+		return "", false
+	}
+	return w, true
 }
 
 func derefWords(w *[]string) []string {

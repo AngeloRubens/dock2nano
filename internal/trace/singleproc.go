@@ -33,10 +33,6 @@ type SingleProcessAdvice struct {
 	// one the suggestion carries (an option that may hold a secret or is not known): nothing of the
 	// command line is repeated then.
 	Withheld bool
-
-	// ConfigFile is true when gunicorn was given a configuration file (-c, --config): the bind and
-	// the workers may be set there, in addition to what was assumed.
-	ConfigFile bool
 }
 
 // WithheldText is what the report says when Withheld is true.
@@ -184,6 +180,16 @@ var uvicornValues = map[string]bool{
 	"--http": true, "--ws": true, "--lifespan": true, "--interface": true,
 }
 
+// uvicornNumbers are harmless options that take a number (the next word, or after =); the value is
+// checked, and any other text withholds the command.
+var uvicornNumbers = map[string]bool{
+	"--timeout-keep-alive": true, "--limit-concurrency": true, "--backlog": true,
+	"--limit-max-requests": true, "--timeout-graceful-shutdown": true,
+	"--h11-max-incomplete-event-size": true,
+}
+
+var digits = regexp.MustCompile(`^[0-9]{1,18}$`)
+
 // uvicornReloadValues are the options of the reloader; they are left out together with --reload.
 // UVICORN_RELOAD and UVICORN_WORKERS of the environment are not looked at here.
 var uvicornReloadValues = map[string]bool{
@@ -192,8 +198,8 @@ var uvicornReloadValues = map[string]bool{
 
 func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 	var kept []string
-	changed, unknown, hasApp, workersOne := false, false, false, false
-	workersAt := -1
+	changed, unknown, hasApp := false, false, false
+	workersAt, lastWorkers := -1, 0
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		name, value, hasValue := a, "", false
@@ -219,17 +225,33 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 			if err != nil {
 				return SingleProcessAdvice{}, false
 			}
-			if n > 1 {
-				changed = true
-				if workersAt < 0 {
-					workersAt = len(kept)
-				}
-			} else {
-				workersOne = true
-				kept = append(kept, "--workers", "1")
+			// click keeps the last value of an option given more than once
+			lastWorkers = n
+			if workersAt < 0 {
+				workersAt = len(kept)
 			}
 		case uvicornFlags[name] && !hasValue:
 			kept = append(kept, a)
+		case uvicornNumbers[name]:
+			word := a
+			if !hasValue {
+				if i+1 >= len(args) {
+					unknown = true
+					break
+				}
+				i++
+				value = args[i]
+				word = args[i]
+			}
+			if !digits.MatchString(value) {
+				unknown = true
+				break
+			}
+			if hasValue {
+				kept = append(kept, word)
+			} else {
+				kept = append(kept, a, word)
+			}
 		case uvicornValues[name]:
 			if hasValue {
 				kept = append(kept, a)
@@ -248,25 +270,26 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 			unknown = true
 		}
 	}
+	if lastWorkers > 1 {
+		changed = true
+	}
 	if !changed {
 		return SingleProcessAdvice{}, false
 	}
 	adv := SingleProcessAdvice{
 		Server: "uvicorn",
-		Reason: "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out, and --workers 1 is written because WEB_CONCURRENCY or UVICORN_WORKERS in the environment would start workers again",
+		Reason: "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out, and --workers 1 is written because WEB_CONCURRENCY or UVICORN_WORKERS in the environment would start workers again; UVICORN_RELOAD in the environment is not covered by --workers 1, and uvicorn has no --no-reload",
 	}
 	if unknown {
 		adv.Withheld = true
 		return adv, true
 	}
-	if !workersOne {
-		// in place of the dropped --workers N, else at the end
-		at := len(kept)
-		if workersAt >= 0 {
-			at = workersAt
-		}
-		kept = append(kept[:at:at], append([]string{"--workers", "1"}, kept[at:]...)...)
+	// --workers 1 stands in place of the first --workers given, else at the end
+	at := len(kept)
+	if workersAt >= 0 {
+		at = workersAt
 	}
+	kept = append(kept[:at:at], append([]string{"--workers", "1"}, kept[at:]...)...)
 	adv.Command = withPrefix(prefix, kept...)
 	return adv, true
 }
@@ -300,7 +323,6 @@ var uvicornWorkers = map[string]bool{
 
 func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 	var class, app, bind, chdir string
-	config := false
 	parsed := true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -330,8 +352,6 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 				}
 			case "--chdir":
 				chdir = value
-			case "-c", "--config":
-				config = true
 			}
 		case gunicornFlags[name] && !hasValue:
 		case strings.HasPrefix(a, "-"):
@@ -375,10 +395,9 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 	// --workers 1 is explicit: WEB_CONCURRENCY or UVICORN_WORKERS would start workers again
 	command = append(command, "--workers", "1")
 	adv := SingleProcessAdvice{
-		Server:     "gunicorn",
-		ConfigFile: config,
-		Command:    command,
-		Reason:     "gunicorn forks its workers; with the worker class of uvicorn the same application runs under uvicorn in one process (the other options of gunicorn are not carried)",
+		Server:  "gunicorn",
+		Command: command,
+		Reason:  "gunicorn forks its workers; with the worker class of uvicorn the same application runs under uvicorn in one process (only the bind, the application and --chdir, carried as --app-dir, are read from the command line: the other options of gunicorn are not carried); UVICORN_RELOAD in the environment is not covered by --workers 1, and uvicorn has no --no-reload",
 	}
 	if assumed {
 		adv.Assumed = "host and port"

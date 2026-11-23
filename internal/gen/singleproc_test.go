@@ -30,6 +30,8 @@ func processesMessage(t *testing.T, in Input) string {
 // the text the item said before the suggestion existed
 const processesBefore = "the program started 2 child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program"
 
+const gunicornConfigText = "settings of the configuration file (environment, working directory, application, worker class) are not carried; gunicorn also reads gunicorn.conf.py in the working directory and GUNICORN_CMD_ARGS"
+
 func TestProcessesItemSuggestsTheCommand(t *testing.T) {
 	uv := "uvicorn.workers.UvicornWorker"
 	tests := []struct {
@@ -56,9 +58,13 @@ func TestProcessesItemSuggestsTheCommand(t *testing.T) {
 		{"a word with a dollar", "/usr/local/bin/python3", []string{"python", "/$X/manage.py", "runserver"},
 			[]string{"no command is suggested"}, []string{"--command '"}},
 		{"gunicorn with --chdir", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", ":80", "--chdir", "/my app", "main:app"},
-			[]string{"--command 'web=uvicorn main:app --host 0.0.0.0 --port 80 --app-dir \"/my app\" --workers 1'"}, nil},
+			[]string{"--command 'web=uvicorn main:app --host 0.0.0.0 --port 80 --app-dir \"/my app\" --workers 1'", "--chdir was written as --app-dir, which does not change the working directory", "working_dir"}, nil},
 		{"gunicorn with a configuration file", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-c", "conf.py", "main:app"},
-			[]string{"may be set in it as well", "were assumed"}, nil},
+			[]string{gunicornConfigText, "were assumed"}, nil},
+		{"gunicorn with no -c says it too", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", ":80", "main:app"},
+			[]string{gunicornConfigText}, []string{"--app-dir"}},
+		{"uvicorn has no gunicorn text", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4"},
+			nil, []string{"gunicorn.conf.py"}},
 	}
 	for _, tt := range tests {
 		msg := processesMessage(t, processesInput(t, tt.program, tt.argv))
@@ -114,7 +120,7 @@ func TestProcessesItemSaysWhenTheServiceStartsTheProgramThroughAnother(t *testin
 	si.Image = &docker.ImageConfig{Entrypoint: []string{"python"}, Cmd: []string{"start.py"}}
 	in.Services["web"] = si
 	msg = processesMessage(t, in)
-	if !strings.Contains(msg, `through "python"; what that does`) || !strings.Contains(msg, "--command 'web=manage.py runserver --noreload'") {
+	if !strings.Contains(msg, `through "start.py"; what that does`) || !strings.Contains(msg, "--command 'web=manage.py runserver --noreload'") {
 		t.Errorf("entrypoint and start.py: message = %q", msg)
 	}
 	// the service starts the observed command itself: no such text
@@ -124,6 +130,49 @@ func TestProcessesItemSaysWhenTheServiceStartsTheProgramThroughAnother(t *testin
 	in.Services["web"] = si
 	if msg := processesMessage(t, in); strings.Contains(msg, "starts this program through") {
 		t.Errorf("message = %q", msg)
+	}
+}
+
+// the first word that differs is named only when it is a program or a script path
+func TestProcessesItemDoesNotNameAnOption(t *testing.T) {
+	in := processesInput(t, "/usr/local/bin/python3", []string{"python", "manage.py", "runserver"})
+	si := in.Services["web"]
+	si.Image = &docker.ImageConfig{Cmd: []string{"python", "-u", "manage.py", "runserver"}}
+	in.Services["web"] = si
+	msg := processesMessage(t, in)
+	if !strings.Contains(msg, "The service starts this program through another command; what that does") || strings.Contains(msg, `"-u"`) {
+		t.Errorf("message = %q", msg)
+	}
+	// ENTRYPOINT python: the program itself is not named, the script is
+	in = processesInput(t, "/usr/local/bin/python3", []string{"python", "manage.py", "runserver"})
+	si = in.Services["web"]
+	si.Image = &docker.ImageConfig{Entrypoint: []string{"python"}, Cmd: []string{"start.py"}}
+	in.Services["web"] = si
+	if msg := processesMessage(t, in); strings.Contains(msg, `through "python"`) {
+		t.Errorf("message = %q", msg)
+	}
+}
+
+// a console script started through its shebang line: the interpreter and the script are one word
+// of the command of the service
+func TestProcessesItemReadsAShebangLine(t *testing.T) {
+	argv := []string{"/usr/local/bin/python3", "/usr/local/bin/uvicorn", "app:app", "--workers", "4"}
+	in := processesInput(t, "/usr/local/bin/python3", argv)
+	si := in.Services["web"]
+	si.Image = &docker.ImageConfig{Cmd: []string{"uvicorn", "app:app", "--workers", "4"}}
+	in.Services["web"] = si
+	msg := processesMessage(t, in)
+	if strings.Contains(msg, "starts this program through") || !strings.Contains(msg, "--command 'web=uvicorn app:app --workers 1'") {
+		t.Errorf("no entrypoint: message = %q", msg)
+	}
+	// ENTRYPOINT uvicorn: the command is what follows the entrypoint
+	in = processesInput(t, "/usr/local/bin/python3", argv)
+	si = in.Services["web"]
+	si.Image = &docker.ImageConfig{Entrypoint: []string{"uvicorn"}, Cmd: []string{"app:app", "--workers", "4"}}
+	in.Services["web"] = si
+	msg = processesMessage(t, in)
+	if strings.Contains(msg, "starts this program through") || !strings.Contains(msg, "--command 'web=app:app --workers 1'") || strings.Contains(msg, "has an entrypoint") {
+		t.Errorf("entrypoint: message = %q", msg)
 	}
 }
 

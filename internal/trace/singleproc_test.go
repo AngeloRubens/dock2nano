@@ -165,20 +165,60 @@ func TestSingleProcessWritesWorkersOne(t *testing.T) {
 	}
 }
 
-func TestSingleProcessGunicornConfigFile(t *testing.T) {
+// the last --workers counts (click keeps the last value)
+func TestSingleProcessUsesTheLastWorkers(t *testing.T) {
+	if _, ok := SingleProcess("/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4", "--workers", "1"}); ok {
+		t.Errorf("advice when the last --workers is 1")
+	}
+	adv, ok := SingleProcess("/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "1", "--workers=3"})
+	want := []string{"uvicorn", "app:app", "--workers", "1"}
+	if !ok || !reflect.DeepEqual(adv.Command, want) {
+		t.Errorf("command = %q, ok = %v; want %q", adv.Command, ok, want)
+	}
+}
+
+func TestSingleProcessReasonsSayWhatIsNotCovered(t *testing.T) {
 	uv := "uvicorn.workers.UvicornWorker"
-	for _, argv := range [][]string{
-		{"gunicorn", "-k", uv, "-c", "gunicorn.conf.py", "main:app"},
-		{"gunicorn", "-k", uv, "--config=gunicorn.conf.py", "main:app"},
+	for _, c := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"uvicorn", "app:app", "--workers", "4"}, []string{"UVICORN_RELOAD", "no --no-reload"}},
+		{[]string{"gunicorn", "-k", uv, "main:app"}, []string{"UVICORN_RELOAD", "no --no-reload", "--chdir, carried as --app-dir", "the other options of gunicorn are not carried"}},
 	} {
-		adv, ok := SingleProcess("/usr/local/bin/gunicorn", argv)
-		if !ok || !adv.ConfigFile || len(adv.Command) == 0 {
-			t.Errorf("%q: %+v, ok = %v", argv, adv, ok)
+		adv, ok := SingleProcess("/usr/local/bin/"+c.argv[0], c.argv)
+		if !ok {
+			t.Fatalf("%q: no advice", c.argv)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(adv.Reason, w) {
+				t.Errorf("%q: reason %q does not hold %q", c.argv, adv.Reason, w)
+			}
 		}
 	}
-	adv, _ := SingleProcess("/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "main:app"})
-	if adv.ConfigFile {
-		t.Errorf("ConfigFile without a config")
+}
+
+// harmless numeric options are carried; the value is checked
+func TestSingleProcessCarriesNumericOptions(t *testing.T) {
+	adv, ok := SingleProcess("/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4",
+		"--timeout-keep-alive", "30", "--limit-concurrency=100", "--backlog", "2048", "--limit-max-requests=1000",
+		"--timeout-graceful-shutdown", "10", "--h11-max-incomplete-event-size=65536"})
+	want := []string{"uvicorn", "app:app", "--workers", "1", "--timeout-keep-alive", "30", "--limit-concurrency=100",
+		"--backlog", "2048", "--limit-max-requests=1000", "--timeout-graceful-shutdown", "10", "--h11-max-incomplete-event-size=65536"}
+	if !ok || adv.Withheld || !reflect.DeepEqual(adv.Command, want) {
+		t.Errorf("command = %q, withheld = %v, ok = %v; want %q", adv.Command, adv.Withheld, ok, want)
+	}
+	for _, bad := range [][]string{
+		{"--timeout-keep-alive", "hunter2"},
+		{"--backlog=hunter2"},
+		{"--limit-concurrency", "-1"},
+		{"--limit-max-requests"},
+	} {
+		argv := append([]string{"uvicorn", "app:app", "--workers", "4"}, bad...)
+		adv, ok := SingleProcess("/usr/local/bin/uvicorn", argv)
+		if !ok || !adv.Withheld || len(adv.Command) != 0 || strings.Contains(adv.Reason, "hunter2") {
+			t.Errorf("%q: %+v, ok = %v; want the command withheld", bad, adv, ok)
+		}
 	}
 }
 
