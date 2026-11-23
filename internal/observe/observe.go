@@ -1768,7 +1768,9 @@ func (r *run) exercise(ctx context.Context, host string, port int, deadline time
 			continue
 		}
 		if status >= 400 {
-			r.warnOnce(r.redact(r.rejectedNote(raw, status, body)))
+			if note := r.rejectedNote(raw, status, body); strings.Contains(note, "--exercise-host") {
+				r.warnOnce(r.redact(note))
+			}
 		}
 		if r.o.ExerciseHost != "" {
 			r.vlogf("exercised %s with the Host %s\n", address, r.o.ExerciseHost)
