@@ -959,9 +959,6 @@ func firstDifference(effective, observed []string) (string, bool) {
 		return "", false
 	}
 	w := effective[i]
-	if w == "" || strings.HasPrefix(w, "-") || strings.ContainsAny(w, " \t\n=;&|$<>()`'\"") {
-		return "", false
-	}
 	return w, true
 }
 
