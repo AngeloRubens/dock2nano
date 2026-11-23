@@ -914,7 +914,7 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if adv.Assumed != "" {
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
 	}
-	if adv.ConfigFile {
+	if false {
 		msg += " (a configuration file was given to gunicorn with -c or --config: the bind and the workers may be set in it as well, and were not read)"
 	}
 	if all := append(append([]string{}, derefWords(ep)...), cmd...); len(all) > 0 && !slices.Equal(all, obs.Argv) {
