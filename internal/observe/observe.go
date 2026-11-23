@@ -1739,7 +1739,7 @@ func (r *run) rejectedNote(raw string, status int, body []byte) string {
 	if status == 400 || status == 403 {
 		for _, m := range hostRejections {
 			if bytes.Contains(body, []byte(m)) {
-				if r.o.ExerciseHost != "" {
+				if false {
 					return fmt.Sprintf("exercise: the program rejected the Host header of the request for %s (status %d): the Host %s given with --exercise-host was rejected; give a name the program accepts (for Django one in ALLOWED_HOSTS)", raw, status, r.o.ExerciseHost)
 				}
 				return fmt.Sprintf("exercise: the program rejected the Host header of the request for %s (status %d): code that is loaded only to answer a valid request may be missing from the package; run again with --exercise-host %s=localhost (or the host name the program accepts)", raw, status, service)
