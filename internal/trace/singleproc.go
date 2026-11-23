@@ -236,6 +236,9 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 		Server: "gunicorn",
 		Reason: "gunicorn forks its workers, so it always starts more than one process; a server that runs in one process (waitress, uvicorn, hypercorn) has to be chosen by you",
 	}
+	if class == uvicornWorker {
+		return SingleProcessAdvice{}, false
+	}
 	if class != uvicornWorker {
 		return generic, true
 	}
