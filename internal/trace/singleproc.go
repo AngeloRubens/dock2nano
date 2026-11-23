@@ -320,7 +320,7 @@ func QuoteWords(words []string) (string, bool) {
 		case safeWord.MatchString(w):
 			out[i] = w
 		case strings.IndexFunc(w, func(r rune) bool {
-			return r < 0x20 || r == 0x7f || r == '\'' || r == '"' || r == '\\' || r == '$' || r == '`'
+			return r < 0x20 || r == 0x7f || r == '"' || r == '\\' || r == '$' || r == '`'
 		}) >= 0:
 			return "", false
 		default:
