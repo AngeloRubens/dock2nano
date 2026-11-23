@@ -278,7 +278,7 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 	}
 	adv := SingleProcessAdvice{
 		Server: "uvicorn",
-		Reason: "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out, and --workers 1 is written because WEB_CONCURRENCY or UVICORN_WORKERS in the environment would start workers again; UVICORN_RELOAD in the environment is not covered by --workers 1, and uvicorn has no --no-reload",
+		Reason: "uvicorn starts one process per worker, and a reloader process with --reload; --workers (above 1) and --reload are left out, and --workers 1 is written because WEB_CONCURRENCY or UVICORN_WORKERS in the environment would start workers again",
 	}
 	if unknown {
 		adv.Withheld = true
