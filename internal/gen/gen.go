@@ -893,7 +893,7 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
-	case ep != nil && len(*ep) > 0:
+	case ep != nil && len(*ep) > 0 && false:
 		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
 			return adv.Reason + "; no command is suggested, because the service has an entrypoint that the command would not start with (--command replaces the command and keeps the entrypoint), so write it by hand"
 		}
