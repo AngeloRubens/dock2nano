@@ -1751,8 +1751,6 @@ func (r *run) rejectedNote(raw string, status int, body []byte) string {
 		// Django with DEBUG off answers a bad Host with a page that does not say why
 		if r.o.ExerciseHost == "" {
 			msg += fmt.Sprintf("; if the program checks the Host header, try --exercise-host %s=localhost", service)
-		} else {
-			msg += fmt.Sprintf("; the Host %s given with --exercise-host may have been rejected", r.o.ExerciseHost)
 		}
 	}
 	return msg
