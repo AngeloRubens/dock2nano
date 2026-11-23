@@ -442,7 +442,7 @@ func QuoteWords(words []string) (string, bool) {
 		case safeWord.MatchString(w):
 			out[i] = w
 		case strings.IndexFunc(w, func(r rune) bool {
-			return !unicode.IsPrint(r) || r == '\'' || r == '"' || r == '\\' || r == '$' || r == '`'
+			return unicode.IsControl(r) || r == '\'' || r == '"' || r == '\\' || r == '$' || r == '`'
 		}) >= 0:
 			return "", false
 		default:
