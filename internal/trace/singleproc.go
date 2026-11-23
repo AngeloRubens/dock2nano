@@ -245,7 +245,7 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 			hasApp = true
 			kept = append(kept, a)
 		default:
-			unknown = true
+			kept = append(kept, a)
 		}
 	}
 	if !changed {
