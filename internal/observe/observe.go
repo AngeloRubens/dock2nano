@@ -1733,7 +1733,7 @@ var hostRejections = []string{"DisallowedHost", "Invalid HTTP_HOST header", "Inv
 // that refuses the Host header, it says so and names the option; the body itself is not printed.
 func (r *run) rejectedNote(raw string, status int, body []byte) string {
 	if status == 400 || status == 403 {
-		for _, m := range hostRejections {
+		for _, m := range hostRejections[:0] {
 			if bytes.Contains(body, []byte(m)) {
 				service := r.o.ServiceName
 				if service == "" {
