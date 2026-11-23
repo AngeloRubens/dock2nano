@@ -143,9 +143,11 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 		switch {
 		case a == "--reload":
 			changed = true
+			kept = append(kept, a)
 		case a == "--workers" && i+1 < len(args):
 			if n, err := strconv.Atoi(args[i+1]); err == nil && n > 1 {
 				changed = true
+				kept = append(kept, a, args[i+1])
 				i++
 				continue
 			}
@@ -154,6 +156,7 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 		case strings.HasPrefix(a, "--workers="):
 			if n, err := strconv.Atoi(strings.TrimPrefix(a, "--workers=")); err == nil && n > 1 {
 				changed = true
+				kept = append(kept, a)
 				continue
 			}
 			kept = append(kept, a)
