@@ -1897,9 +1897,8 @@ func (httpProber) Get(ctx context.Context, url, host string) (int, []byte, error
 		}
 		return 0, nil, nil
 	}
-	limited := io.LimitReader(resp.Body, probeBodyLimit)
-	head, _ := io.ReadAll(io.LimitReader(limited, ProbeBodyHead))
-	io.Copy(io.Discard, limited)
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, ProbeBodyHead))
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return resp.StatusCode, head, nil
 }
