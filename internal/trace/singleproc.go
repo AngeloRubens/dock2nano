@@ -204,9 +204,16 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 		case name == "--reload" && !hasValue:
 			changed = true
 		case uvicornReloadValues[name]:
-			if !hasValue {
-				i++
+			if hasValue {
+				kept = append(kept, a)
+				break
 			}
+			if i+1 >= len(args) {
+				unknown = true
+				break
+			}
+			i++
+			kept = append(kept, a, args[i])
 		case name == "--workers":
 			if !hasValue {
 				if i+1 >= len(args) {
