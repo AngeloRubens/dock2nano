@@ -42,7 +42,7 @@ func TestProcessesItemSuggestsTheCommand(t *testing.T) {
 		{"django", "/usr/local/bin/python3", []string{"python", "manage.py", "runserver", "0.0.0.0:8000"},
 			[]string{"{tool} convert ... --command 'web=python manage.py runserver 0.0.0.0:8000 --noreload'", "review it", "nothing was changed"}, []string{"assumed"}},
 		{"uvicorn", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4", "--port", "80"},
-			[]string{"--command 'web=uvicorn app:app --port 80 --workers 1'", "review it"}, []string{"--workers 4"}},
+			[]string{"--command 'web=uvicorn app:app --workers 1 --port 80'", "review it"}, []string{"--workers 4"}},
 		{"gunicorn with the worker of uvicorn", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", "0.0.0.0:5000", "main:app"},
 			[]string{"--command 'web=uvicorn main:app --host 0.0.0.0 --port 5000 --workers 1'", "review it"}, []string{"assumed"}},
 		{"gunicorn without a bind", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "main:app"},
