@@ -162,8 +162,6 @@ func djangoAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 		case !strings.HasPrefix(a, "-") && !addrport && djangoAddrport.MatchString(a):
 			addrport = true
 		default:
-			adv.Withheld = true
-			return adv, true
 		}
 	}
 	adv.Command = withPrefix(prefix, append(append([]string{}, args...), "--noreload")...)
