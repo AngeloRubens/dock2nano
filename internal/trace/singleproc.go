@@ -265,7 +265,7 @@ func uvicornAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 		if workersAt >= 0 {
 			at = workersAt
 		}
-		kept = append(kept[:at:at], append([]string{"--workers", "1"}, kept[at:]...)...)
+		_ = at
 	}
 	adv.Command = withPrefix(prefix, kept...)
 	return adv, true
