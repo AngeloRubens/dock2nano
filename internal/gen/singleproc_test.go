@@ -62,7 +62,7 @@ func TestProcessesItemSuggestsTheCommand(t *testing.T) {
 		{"gunicorn with a configuration file", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-c", "conf.py", "main:app"},
 			[]string{gunicornConfigText, "were assumed"}, nil},
 		{"gunicorn with no -c says it too", "/usr/local/bin/gunicorn", []string{"gunicorn", "-k", uv, "-b", ":80", "main:app"},
-			[]string{gunicornConfigText}, []string{"--app-dir"}},
+			[]string{gunicornConfigText}, []string{"--chdir was written as --app-dir"}},
 		{"uvicorn has no gunicorn text", "/usr/local/bin/uvicorn", []string{"uvicorn", "app:app", "--workers", "4"},
 			nil, []string{"gunicorn.conf.py"}},
 	}
