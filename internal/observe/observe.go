@@ -1767,7 +1767,7 @@ func (r *run) exercise(ctx context.Context, host string, port int, deadline time
 			r.warnOnce(r.redact("exercise: calling " + raw + ": " + err.Error()))
 			continue
 		}
-		if status >= 400 {
+		if status > 0 {
 			r.warnOnce(r.redact(r.rejectedNote(raw, status, body)))
 		}
 		if r.o.ExerciseHost != "" {
