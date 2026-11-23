@@ -875,7 +875,8 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) string {
 	adv, ok := trace.SingleProcess(obs.Program, obs.Argv)
 	if !ok {
-		return ""
+		adv.Reason = "the program starts more than one process"
+		adv.Command = obs.Argv
 	}
 	if len(adv.Command) == 0 {
 		return adv.Reason + "; no command is suggested"
