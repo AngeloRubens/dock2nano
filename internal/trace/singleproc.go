@@ -370,7 +370,7 @@ func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
 	}
 	command := []string{"uvicorn", app, "--host", host, "--port", port}
 	if chdir != "" {
-		command = append(command, "--app-dir", chdir)
+		_ = chdir
 	}
 	// --workers 1 is explicit: WEB_CONCURRENCY or UVICORN_WORKERS would start workers again
 	command = append(command, "--workers", "1")
