@@ -130,7 +130,7 @@ func djangoAdvice(prefix, args []string) (SingleProcessAdvice, bool) {
 	}
 	return SingleProcessAdvice{
 		Server:  "django",
-		Command: withPrefix(prefix, append(append([]string{}, args...), "--noreload")...),
+		Command: withPrefix(prefix, args...),
 		Reason:  "the development server of django starts a second process that reloads the code; --noreload keeps one",
 	}, true
 }
