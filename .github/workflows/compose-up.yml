@@ -19,8 +19,8 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: fastapi-plain, dir: fastapi, flags: "", probe: "api:8000:http"}
-          - {name: django-plain, dir: django, flags: "", probe: "web:8000:http"}
+          - {name: fastapi-w1, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1'", probe: "api:8000:http"}
+          - {name: django-noreload, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise-cmd 'web=curl -s -o /dev/null -H Host:localhost http://$DOCK2NANO_HOST:$DOCK2NANO_PORT/admin/login/'", host: "localhost:8000", probe: "web:8000:http"}
           - {name: django-cmd-only, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload' --exercise web=/", probe: "web:8000:http"}
     steps:
       - uses: actions/checkout@v4
