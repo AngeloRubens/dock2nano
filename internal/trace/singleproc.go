@@ -292,10 +292,7 @@ var gunicornValues = map[string]bool{
 
 // uvicornWorkers are the worker classes of gunicorn that run uvicorn.
 var uvicornWorkers = map[string]bool{
-	"uvicorn.workers.UvicornWorker":    true,
-	"uvicorn.workers.UvicornH11Worker": true,
-	"uvicorn_worker.UvicornWorker":     true,
-	"uvicorn_worker.UvicornH11Worker":  true,
+	"uvicorn.workers.UvicornWorker": true,
 }
 
 func gunicornAdvice(args []string) (SingleProcessAdvice, bool) {
