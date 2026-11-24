@@ -19,7 +19,7 @@ var missingSourceOld = regexp.MustCompile(`failed to compute cache key: "([^"\n]
 var copyFrom = regexp.MustCompile(`(?mi)>>>\s+(?:COPY|ADD)\s[^\n]*--from=`)
 
 // failedRun matches the line docker prints when a RUN step ends with an error.
-var failedRun = regexp.MustCompile(`process ".*" did not complete successfully`)
+var failedRun = regexp.MustCompile(`process "[^"\n]*" did not complete successfully`)
 
 // buildHint reads the text of a failed docker build and returns a short hint
 // for the two causes that are common and that the user can act on, or "" for
