@@ -953,7 +953,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
-			isInit := IsInit(last[process].Path)
+			isInit := false // change reverted: the init wrappers are not passed over
 			if !launcher && !isInit && !shells[path.Base(last[process].Path)] {
 				break
 			}
@@ -1106,23 +1106,8 @@ func ConfigurationFiles(sysroot string) []string {
 // into the directory the link leads to (where it is not there already) and the link takes its place.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
-	if info, err := os.Lstat(destination); err == nil {
-		if !info.IsDir() {
-			return nil
-		}
-		target := filepath.Join(filepath.Dir(destination), text)
-		if rel, err := filepath.Rel(sysroot, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil
-		}
-		if ti, err := os.Stat(target); err != nil || !ti.IsDir() {
-			return nil
-		}
-		if err := mergeInto(destination, target); err != nil {
-			return fmt.Errorf("link %s: %w", destination, err)
-		}
-		if err := os.RemoveAll(destination); err != nil {
-			return fmt.Errorf("link %s: %w", destination, err)
-		}
+	if _, err := os.Lstat(destination); err == nil {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return fmt.Errorf("link %s: %w", destination, err)
