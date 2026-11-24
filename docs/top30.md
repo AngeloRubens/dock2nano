@@ -64,4 +64,90 @@ Each row, following the instructions of the tool and of docs/ only:
 
 Every job prints lines that start with ROW: the record of the table. A failed row prints its first error line as "ROW first error".
 
-Rules: no Dockerfile edited, no environment given, no retry of the tuning. Extra row runs: none so far (stated in the results).
+Rules: no Dockerfile edited, no environment given, no retry of the tuning. Extra row runs: one, for filebrowser (a CI infrastructure failure, see Results).
+
+## Results
+
+Run 45432518617 (workflow top30, branch check/top30, commit a3d780f). Each job used: dock2nano a3d780f (feat/barenames 5677ee9 merged, which contains feat/modules 35e8082), ops 2177c549df3fab2662d6386042c74bec859275bd (the pin of compose-up.yml). Run 45431721230 (commit 8de0e48, base feat/modules without barenames) was cancelled as superseded and is not a result.
+
+Counts of 30: converted 18 (convert exit 0, compose.yaml written); started 11 (ops compose up ok); answered 6 (the probe got an HTTP status or an open TCP port); green 5 (2xx/3xx or open port).
+
+Extra row run: filebrowser, job 138581409098 failed in the step that builds dock2nano, with "##[error] ... github.com/go-ini/ini@v1.52.0: read https://proxy.golang.org/... stream error: stream ID 525; INTERNAL_ERROR". Rerun of that job alone (job 138596712813, same run): the row ran and the docker build failed. The rerun is the only extra run.
+
+Convert was not run for the 12 rows whose docker build failed (my choice, not in the instructions): what dock2nano reports for those Dockerfiles is not measured.
+
+| row | repository | converted | started | probe | run id (job) | first error / reason |
+| --- | --- | --- | --- | --- | --- | --- |
+| whoami | traefik/whoami | yes | yes | success, 200 on 80 | 45432518617 (138581408988) | none |
+| httpbin | postmanlabs/httpbin | yes | yes | no answer (000 x24) | 45432518617 (138581408983) | console: "OSError: [Errno 38] Function not implemented" at os.fork in gunicorn spawn_worker |
+| echo-server | jmalloc/echo-server | no | no | not run | 45432518617 (138581408924) | docker build: "/artifacts/build/release/linux/amd64/echo-server": not found |
+| datasette | simonw/datasette | no | no | not run | 45432518617 (138581408894) | docker build: "HTTP error 404 while getting https://github.com/simonw/datasette/archive/refs/tags/.zip" (VERSION empty) |
+| kanboard | kanboard/kanboard | yes | no | not run | 45432518617 (138581408379) | ops compose up 3 of 3: "ip timeout" |
+| ttyd | tsl0922/ttyd | no | no | not run | 45432518617 (138581408878) | docker build: "/dist/amd64/ttyd": not found |
+| gitea | go-gitea/gitea | yes | no | not run | 45432518617 (138581409132) | ops compose up 3 of 3: "ip timeout" |
+| gogs | gogs/gogs | yes | no | not run | 45432518617 (138581408958) | ops compose up 3 of 3: "ip timeout" |
+| filebrowser | filebrowser/filebrowser | no | no | not run | 45432518617 (rerun 138596712813; first try 138581409098 infra) | docker build: "/filebrowser": not found |
+| changedetection | dgtlmoon/changedetection.io | yes | yes | success, 200 on 5000 | 45432518617 (138581408801) | none |
+| dashy | lissy93/dashy | yes | yes | no answer (000 x24) | 45432518617 (138581408865) | after the wait ops instance list shows only dns; console has no program line |
+| homepage | gethomepage/homepage | yes | yes | reached, 400 x24 | 45432518617 (138581408805) | body: {"error":"Host validation failed. See logs for more details."} (the probe sends Host ip:port) |
+| verdaccio | verdaccio/verdaccio | yes | yes | no answer (000 x24) | 45432518617 (138581408914) | after the wait ops instance list shows only dns; console has no program line |
+| http-echo | mendhak/docker-http-https-echo | yes | yes | success, 200 on 8080 | 45432518617 (138581409210) | none |
+| shlink | shlinkio/shlink | no | no | not run | 45432518617 (138581409134) | docker build: "Failed to download rr", "1 of 1 download(s) failed" |
+| directus | directus/directus | yes | yes | no answer (000 x24) | 45432518617 (138581409306) | after the wait ops instance list shows only dns; console has no program line |
+| ntfy | binwiederhier/ntfy | no | no | not run | 45432518617 (138581408916) | docker build: "/ntfy": not found |
+| mailpit | axllent/mailpit | yes | yes | success, 200 on 8025 | 45432518617 (138581408755) | none (EXPOSE lists 1025 first; probe is 8025) |
+| coredns | coredns/coredns | no | no | not run | 45432518617 (138581408912) | docker build: "/coredns": not found |
+| prometheus | prometheus/prometheus | no | no | not run | 45432518617 (138581409499) | docker build: "/.build/linux-amd64/prometheus": not found |
+| etcd | etcd-io/etcd | no | no | not run | 45432518617 (138581409055) | docker build: "/etcd--linux-amd64/etcd": not found |
+| syncthing | syncthing/syncthing | yes | no | not run | 45432518617 (138581408927) | ops compose up 3 of 3: "ip timeout" |
+| wallos | ellite/Wallos | yes | yes | no answer (000 x24) | 45432518617 (138581408904) | after the wait ops instance list shows only dns; console has no program line |
+| excalidraw | excalidraw/excalidraw | yes | yes | success, 200 on 80 | 45432518617 (138581408774) | none |
+| tile38 | tidwall/tile38 | no | no | not run | 45432518617 (138581408715) | docker build: "/packages/tile38--linux-amd64/tile38-benchmark": not found |
+| redlib | redlib-org/redlib | no | no | not run | 45432518617 (138581409145) | docker build: RUN curl of the release tarball "did not complete successfully: exit code: 1" |
+| homarr | ajnart/homarr | no | no | not run | 45432518617 (138581408680) | docker build: "/.next/static": not found |
+| glance | glanceapp/glance | yes | no | not run | 45432518617 (138581409083) | ops compose up 3 of 3: "ip timeout" |
+| linkwarden | linkwarden/linkwarden | yes | no | not run | 45432518617 (138581408940) | ops compose up 3 of 3: "ip timeout" (the report also prints a Prisma error: container stopped with status 1) |
+| reactive-resume | reactive-resume/reactive-resume | yes | no | not run | 45432518617 (138581408967) | ops compose up 3 of 3: "ip timeout" |
+
+Not converted, quoted from the report (converted rows only): homepage: "unsupported dockerfile: not converted: line 45: COPY --link". Healthcheck notes (not run by ops compose): dashy, excalidraw, homepage, kanboard, wallos. Process notes ("unsupported processes ... started N child processes ... nanos has no fork"): httpbin, verdaccio, dashy, gitea. Other notes printed: "warning: port N could not be asked for /: dial tcp ...: connect: connection refused" (most converted rows), "could not read /proc/net/tcp ... exit status 126/128" (whoami, syncthing, glance), "approximated user" (http-echo), "note expose: expose and the EXPOSE of the image ... do not publish a port" (changedetection, http-echo).
+
+Post-up: no report printed a "then, once X is up" line in any of the 18 converted rows, so no post-up command ran.
+
+Address of each started row: from the console "assigned 192.168.33.N" line (ops instance logs).
+
+## Observed failure causes, grouped
+
+Fork or CI: filebrowser first try, job 138581409098: "stream error: stream ID 525; INTERNAL_ERROR" from proxy.golang.org while building dock2nano (infrastructure, rerun allowed).
+
+Missing file in the build context (prebuilt binary or build output not in the repository): ntfy "/ntfy": not found; coredns "/coredns": not found; prometheus "/.build/linux-amd64/prometheus": not found; etcd "/etcd--linux-amd64/etcd": not found; ttyd "/dist/amd64/ttyd": not found; echo-server "/artifacts/build/release/linux/amd64/echo-server": not found; tile38 "/packages/tile38--linux-amd64/tile38-benchmark": not found; homarr "/.next/static": not found; filebrowser "/filebrowser": not found.
+
+Network or build argument: datasette "HTTP error 404 while getting https://github.com/simonw/datasette/archive/refs/tags/.zip" (VERSION is empty, no value given); shlink "Failed to download rr"; redlib curl of the release tarball, exit code 1.
+
+Program: httpbin "OSError: [Errno 38] Function not implemented" (os.fork, gunicorn workers; nanos has no fork, as docs/limits.md "No fork" says).
+
+Ip timeout, ops compose up failed 3 of 3: kanboard, gitea, gogs, syncthing, glance, linkwarden, reactive-resume ("ip timeout" in up.log, every try).
+
+No answer, instance gone or silent: verdaccio, wallos, directus, dashy, httpbin (see above). Not diagnosed: the instance list after the wait shows only dns, and the console has no program line.
+
+Port or Host: homepage 400 "Host validation failed" (the probe sends the address as Host; the same effect is described in docs/coverage.md for django).
+
+## Documentation check
+
+Every item: file and line, what was unclear, missing, wrong, or contradicted by the tool output.
+
+1. README.md, named in the brief as the first document to read: there is no README.md at the root of the repository (checked at check/top30). Nothing else in the docs describes the usage of convert as a whole. Guess: the usage text of the tool (cmd/app.go, lines 37 to 76) was used as the instruction.
+2. --dockerfile mode: not in docs/ at all (grep of docs/*.md finds no --dockerfile, no --name, no --context). The only description is the usage text, cmd/app.go lines 49 to 53. What I had to guess: that the context default is the Dockerfile directory and that the service name is the directory name (cmd/app.go line 53 says so; I relied on it).
+3. CLAUDE.md line 12: "Si chiama ops (ops pkg from-docker --observe, ops compose) per cio che ops gia fa". Contradicted: the tool never runs the ops binary (it prints the commands; there is no exec of ops in internal/ or cmd/). The observation runs through docker with the code in internal/observe.
+4. docs/limits.md line 122: the observation is described as "from-docker --observe, a port of nanovms/ops#1802". Contradicted by the code (see 3). Also, the ops fork branches named for it (feat/from-docker-trace, feat/from-dockerfile in AngeloRubens/ops) are not on top of the 2177c549 pin (diverged), so a reader cannot reproduce the observation with the pin.
+5. docs/limits.md line 142: "ops compose up panics inside ops when the dns instance is late; the tool needs retries". The tool prints one ops compose up command and no retry; a user who runs the printed command gets no retry. What I had to guess: the number of tries (I used three, as compose-up.yml does).
+6. Printed next steps (cmd/app.go nextSteps, about line 466 onward): "sudo env OPS_HOME=... PATH="$PATH" ops compose up -f ..." is printed with no note on the ip timeout that all 7 failed rows showed. Missing.
+7. Report notes that no doc explains (grep of docs/ finds only docs/results.md line 39 for "could not be asked"): "warning: port N could not be asked for /: dial tcp ...: connection refused"; "note expose: expose and the EXPOSE of the image ... do not publish a port"; "approximated user"; "unsupported processes: ... nanos has no fork" (docs/limits.md has a No fork section, but the printed text does not point to it); "could not read /proc/net/tcp ... exit status 126". Missing.
+8. Dockerfile instructions the tool does not convert: "unsupported dockerfile: not converted: line 45: COPY --link" (homepage) is printed, but no doc lists the Dockerfile instructions that are not converted (docs/limits.md has no Dockerfile section). Missing.
+9. --seconds: default 30 (cmd/app.go line 58); no doc says how long a Dockerfile service needs to be observed. compose-up.yml uses 90 in CI, which is not written in the docs. I used the default.
+10. The docker build of a Dockerfile that copies a file not in the repository (12 rows): the tool's own error is not known to me because I did not run convert for them (see Results). The docs say nothing about a missing build input for a Dockerfile.
+11. EXPOSE with a variable (homepage "EXPOSE $PORT", verdaccio "EXPOSE $VERDACCIO_PORT", http-echo "EXPOSE $HTTP_PORT $HTTPS_PORT"): no doc says which port the probe should use; I used the value of the ENV or ARG of the Dockerfile.
+12. Post-up: no row printed a post-up line, so the step in the printed next steps was not exercised; the docs and the printed text could not be checked on a real run here.
+
+## What is not measured
+
+Conversion of the 12 rows with a docker build failure. Post-up scripts. Any program that answered 200 beyond the first try. The cause of the no-answer rows (verdaccio, wallos, directus, dashy, httpbin except the fork error). The ip timeout causes (only the first line of up.log is quoted).
