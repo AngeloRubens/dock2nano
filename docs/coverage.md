@@ -63,3 +63,17 @@ Every sample of docker/awesome-compose that has a compose file with a published 
 - Services of a row that are not in its probe list start with the rest but are not asked.
 
 Reading of run 45372721961 (2026-11-24, ops master, nightly nanos): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
+
+Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measured on the fork CI):
+
+| sample | change | result | run id |
+|---|---|---|---|
+| nginx-golang-mysql | --short-names | green | 45383667105 |
+| nginx-aspnet-mysql | --short-names | proxy reached, status 502 (the backend does not answer through it) | 45383667105 |
+| nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
+| spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
+| gitea-postgres | --short-names | red: the program chosen is the supervisor s6-svscan (fork), the guest reboots | 45383667105 |
+| nextcloud-postgres, nextcloud-redis-mariadb | --short-names | red: apache2 prefork needs fork, nothing listens | 45383667105 |
+| angular | /proc/self/stat for node (commit e2a2a4a) | green, answer 200 | 45384816850 |
+
+Causes found by reading the logs, not fixed: nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 has no known one-process setting (the option -X is a guess not yet run); gitea needs the choice of the listening child instead of the supervisor. The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
