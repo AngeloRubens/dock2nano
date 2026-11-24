@@ -22,7 +22,7 @@ Each entry says whether it is a hard limit (it comes from nanos, ops or the natu
 | JVM crashes with compiled code | open | petclinic, no run id recorded |
 | ops compose reports ip timeout although the guest has an address | gap in ops | runs recorded in the project notes only as a matrix |
 | Hub postgres package has no entrypoint | gap | see manual-changes.md |
-| Init wrappers (tini, dumb-init) chosen as the program | gap, fixed | before: runs 45462110286 and 45467614282 (dashy, verdaccio 000 x24); after: run 45489113069 (200 on both) |
+| Init wrappers (tini, dumb-init) chosen as the program | gap, fixed | before: dashy run 45467614282 and verdaccio run 45462110286 (000 x24); after: run 45489113069 (200 on both) |
 | Process supervisors (s6-svscan, runsvdir, supervisord) | hard limit, one recipe measured | run 45489113069: gitea answers 200 with command gitea web; kanboard and wallos with php -S did not answer |
 | Programs that need a config file, variables or another service | not a limit of nanos, printed by the tool | run 45485671510 (docker run of the image alone fails the same way), run 45489113069 (glance 200 with its config) |
 | Files opened through a linked directory (pnpm node_modules) | gap, fixed | reactive-resume, console of run 45467614282 before, run 45489113069 after |
@@ -158,7 +158,7 @@ Cause: many images start the program through a tiny init (ENTRYPOINT ["/sbin/tin
 
 Kind: gap of the tool, fixed. The observation now passes over an init that has exactly one running child, as it does for a shell or a package manager launcher, and names it in the report ("init passed over").
 
-Evidence: before, dashy (tini, program node server.js) and verdaccio (dumb-init) answered 000 x24 in runs 45462110286 and 45467614282; the console had only the address line, and run 45485671510 measured every port from 1 to 10000 closed with nmap and package.manifest with Program /sbin/tini (dashy). After, run 45489113069 (tool commit 7a77d52): dashy 200 and verdaccio 200 on the first try. wallos also starts through dumb-init, but its command is startup.sh, which starts nginx, php-fpm and crond: see Process supervisors.
+Evidence: before, dashy (tini, program node server.js) and verdaccio (dumb-init) answered 000 x24 (dashy in run 45467614282, verdaccio in run 45462110286); the console had only the address line, and run 45485671510 measured every port from 1 to 10000 closed with nmap and package.manifest with Program /sbin/tini (dashy). After, run 45489113069 (tool commit 7a77d52): dashy 200 and verdaccio 200 on the first try. wallos also starts through dumb-init, but its command is startup.sh, which starts nginx, php-fpm and crond: see Process supervisors.
 
 ## Process supervisors (s6-svscan, runsvdir, supervisord)
 
@@ -172,11 +172,17 @@ Way out, measured only where stated. Run the one server as the only process, wit
 - wallos: command ["php", "-S", "0.0.0.0:80", "-t", "/var/www/html"] behind dumb-init. Measured: same silent result, run 45489113069. The original command (startup.sh) starts nginx, php-fpm and crond, which needs a fork each.
 - gogs: its entrypoint start.sh runs its arguments, so command ["/app/gogs/gogs", "web"] is the candidate. Not tried. The image alone does not run in docker either without /data/gogs/conf/app.ini (docker run of the image, run 45485671510: FATAL custom config not found), so a config must be given by a bind mount.
 
+Which supervisors the note names: s6-svscan, runsvdir and supervisord, by the name of the file wherever it is (/usr/bin, /command of s6-overlay, a versioned folder of s6, /sbin or /usr/sbin for runit), and supervisord when python runs it as a script. The note is covered by unit tests only. No run showed it on a real image: in run 45489113069 the supervisor of gitea, gogs and kanboard was the program, but that run is older than the note; and wallos is not an example, since its program there was busybox sh startup.sh (a shell script that starts three servers), for which only the "processes" item of the report appears.
+
+A shell that starts its program next to a background loop ("(while :; do sleep 60; done) & java -jar x") is not passed over: the sleep, started through a forked subshell, counts as a second child, so the observation stops at the shell. Known gap, not fixed.
+
+If the observation keeps an init as the program (it has no child, or more than one), the report says so ("init kept"); unit-tested only.
+
 ## Programs that need a config file, variables or another service
 
 Cause: some images do not start without what the user gives them in the compose file of the project: glance needs /app/config/glance.yml, reactive-resume needs APP_URL, AUTH_SECRET and DATABASE_URL (and a postgres), linkwarden needs DATABASE_URL (Prisma, error P1012), gogs needs app.ini. Converted from the Dockerfile alone (--dockerfile) there is nothing to give them. The same error is what docker prints when the image is run alone (docker run of the image, run 45485671510), so it is not nanos. The observation says it ("the container stopped with status 1 ... Log: ...").
 
-Kind: not a limit of nanos or of the tool; use the docker-compose.yml of the project (-f), which has the bind mount and the variables. Measured: glance with a compose file that binds docs/glance.yml answers 200 on 8080 on the first try, run 45489113069. reactive-resume with the three variables and an unreachable DATABASE_URL starts the program and stops at the database ("Running database migrations", ECONNREFUSED 5432): it needs a postgres service next to it (not tried). linkwarden also needs a postgres (not tried).
+Kind: not a limit of nanos or of the tool; use the docker-compose.yml of the project (-f), which has the bind mount and the variables. Measured: glance with a compose file that binds docs/glance.yml answers 200 on 8080 on the first try, run 45489113069. reactive-resume with the three variables and an unreachable DATABASE_URL starts the program and stops at the database ("Running database migrations", ECONNRESET 127.0.0.1:5432): it needs a postgres service next to it (not tried). linkwarden also needs a postgres (not tried).
 
 ## Files opened through a linked directory
 
@@ -188,13 +194,19 @@ Kind: gap of the tool, fixed: when the link is carried, what the directory holds
 
 Cause: the traced container starts as root and the program runs as the user of the image through strace -u; docker had set HOME=/root, where that user cannot write. directus (user node) runs pm2, which writes /root/.pm2: mkdir EACCES in the strace file of run 45485671510, the container stopped with status 1, and the observation took the last short command (node cli.js bootstrap) for the program.
 
-Kind: gap of the tool, fixed: HOME is the home of the user in /etc/passwd of the image unless the image or the options set HOME. Measured: the observation of directus now ends with program node docker-entrypoint.cjs (run 45489113069). The row still does not answer: the console shows "futex op 3 not implemented" twice (FUTEX_REQUEUE, see above) and then nothing, and the entrypoint starts pm2-runtime, which forks. Which of the two stops it is not measured (HYPOTHESIS).
+Kind: gap of the tool, fixed: HOME is the home of the user in /etc/passwd of the image unless the image or the options set HOME. To read it the tool now creates one more container that is never started (and runs docker cp for /etc/passwd) for each image that runs as a named user; before, only a numeric uid was looked up. Measured: the observation of directus now ends with program node docker-entrypoint.cjs (run 45489113069). The row still does not answer: the console shows "futex op 3 not implemented" twice (FUTEX_REQUEUE, see above) and then nothing, and the entrypoint starts pm2-runtime, which forks. Which of the two stops it is not measured (HYPOTHESIS).
 
 ## A program started through a thread
 
 Cause: a Go program (RoadRunner, rr, of shlink) starts its children from any of its threads. The thread has no execve of its own, so the observation did not see the children as children of rr, took the youngest php worker for the program, and the package ran bin/roadrunner-worker.php.
 
-Kind: gap of the tool, fixed: the starter of a process is the nearest process that executed a program. Measured: shlink now has rr serve -c config/roadrunner/.rr.yml as its program (run 45492200295). The row still does not answer: rr stopped at once with "chdir /etc/shlink/config/roadrunner/config/roadrunner: no such file or directory" on the console of the guest (the same command works in docker; why the path is doubled on nanos is not known), and rr starts its php workers as child processes, which nanos cannot do (hard limit, see No fork).
+Kind: gap of the tool, fixed: the starter of a process is the nearest process that executed a program (also for the commands reported as not run and for the launchers a program started). Measured: shlink has rr serve -c config/roadrunner/.rr.yml as its program (run 45492200295). The row still does not answer, see the next section and No fork.
+
+## The working directory of the program
+
+Cause: the package took the working directory from /proc/<pid>/cwd at the end of the observation, where the program is, not where it started. rr starts in /etc/shlink (WORKDIR of the Dockerfile, and the entrypoint ends in exec ./bin/rr serve -c config/roadrunner/.rr.yml) and changes to the folder of its config; the manifest then had cwd /etc/shlink/config/roadrunner and rr stopped with "chdir /etc/shlink/config/roadrunner/config/roadrunner: no such file or directory" (console of run 45492200295). That was a bug of the tool, not of nanos.
+
+Kind: gap of the tool, fixed: the directory is the one the process has at its execve line, read from the trace (chdir calls followed), and /proc is used only when the trace does not know it. Measured: the manifest of shlink now has cwd /etc/shlink and rr gets as far as starting its plugins (run 45496410983). The row is still red: rr then stops with "jobs_plugin_serve: WorkerAllocate: static_pool_allocate_workers: fork/exec /usr/local/bin/php: function not implemented", and compose up reports ip timeout because the guest ends. That is the no-fork limit: RoadRunner starts a php process for each worker, and there is no single-process mode.
 
 ## The version of the build comes from git tags
 
