@@ -303,9 +303,10 @@ var sharesDirectory = regexp.MustCompile(`\bCLONE_(THREAD|FS)\b`)
 // cloneStart matches a clone call that strace cut in two, on its first line.
 var cloneStart = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:clone3?|fork|vfork)\(.*<unfinished \.\.\.>`)
 
-// pidChanged is what strace writes at the end of the execve of a thread that is not the leader:
-// the process goes on under the pid of the leader.
-var pidChanged = regexp.MustCompile(`<pid changed to (\d+) \.\.\.>`)
+// pidChanged is what strace writes at the end of the execve of a thread that is not the leader (the
+// result comes on a "<... execve resumed>" line of the leader, after the "superseded" line, which
+// hands the state of the thread to the leader).
+var pidChanged = regexp.MustCompile(`<pid changed to \d+ \.\.\.>`)
 
 type scanned struct {
 	paths, executed, created []string
@@ -442,11 +443,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		if !ok {
 			continue
 		}
-		execPid := pid
-		unfinished := strings.Contains(after, "<unfinished ...>")
-		if changed := pidChanged.FindStringSubmatch(after); changed != nil {
-			unfinished, execPid = true, changed[1]
-		}
+		unfinished := strings.Contains(after, "<unfinished ...>") || pidChanged.MatchString(after)
 		if !unfinished {
 			result, found := ResultOf(after)
 			if !found || strings.HasPrefix(result, "-") {
@@ -478,7 +475,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			if collect {
 				ran[name]++
 				if unfinished {
-					waitingExec[execPid] = name
+					waitingExec[pid] = name
 				}
 			}
 		case "chdir":
@@ -812,7 +809,7 @@ func ListeningPorts(table string) []int {
 	return ports
 }
 
-var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*(\) += 0 *|<unfinished \.\.\.>|<pid changed to (\d+) \.\.\.>)$`)
+var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*(\) += 0 *|<unfinished \.\.\.>|<pid changed to \d+ \.\.\.>)$`)
 var exitedLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)\+\+\+ (?:exited|killed)`)
 
 // Exec is a program the trace saw started: the pid, the file that was executed, the argv as the
@@ -963,17 +960,13 @@ func FinalExec(trace []byte) (Exec, bool) {
 			delete(gone, from)
 		} else if m := execveLine.FindStringSubmatch(text); m != nil {
 			process := m[1] + m[2]
-			if m[5] != "" {
-				// a thread that is not the leader: the process goes on under the pid of the leader
-				process = m[5]
-			}
 			var argv []string
 			if prefix := pidPrefix.FindStringSubmatch(text); prefix != nil {
 				if _, after, _, ok := FirstQuoted(text[len(prefix[0])+len("execve("):]); ok {
 					argv = parseArgv(after)
 				}
 			}
-			if strings.HasPrefix(m[4], "<unfinished") || m[5] != "" {
+			if strings.HasPrefix(m[4], "<unfinished") || strings.HasPrefix(m[4], "<pid changed") {
 				previous, had := last[process]
 				waiting[process] = before{previous: previous, hadPrevious: had, wasGone: gone[process], historyLen: len(history[process])}
 			} else {

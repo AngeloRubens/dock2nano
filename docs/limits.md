@@ -28,7 +28,7 @@ Each entry says whether it is a hard limit (it comes from nanos, ops or the natu
 | Files opened through a linked directory (pnpm node_modules) | gap, fixed | reactive-resume, console of run 45467614282 before, run 45489113069 after |
 | The home of the user of the image in the observation | gap, fixed | directus, run 45485671510 (EACCES under /root/.pm2) |
 | The version of the build comes from git tags | workflow only | syncthing, run 45485671510 (200 with a full clone) |
-| A program started by the process of the image through a thread | gap, fixed | shlink, run 45485671510 before, run 45492200295 after |
+| A program started by the process of the image through a thread | gap, fixed | shlink: the php worker taken as the program is in the reports of runs 45462110286 and 45489113069; after the fix, run 45492200295 |
 
 ## No fork
 
@@ -162,7 +162,7 @@ Evidence: before, dashy (tini, program node server.js) and verdaccio (dumb-init)
 
 ## Process supervisors (s6-svscan, runsvdir, supervisord)
 
-Cause: some images start every service as a child of a supervisor. s6-svscan (gitea, gogs, kanboard) starts one process per service (web server, sshd, cron); nanos has no fork, so the supervisor cannot run. The consoles of gitea, gogs and kanboard were empty and ops reported ip timeout (runs 45462110286, 45467614282, 45485671510).
+Cause: some images start every service as a child of a supervisor. s6-svscan (gitea, gogs, kanboard) starts one process per service (web server, sshd, cron); nanos has no fork, so the supervisor cannot run. The consoles of gitea, gogs and kanboard were empty and ops reported ip timeout (runs 45462110286 and 45485671510).
 
 Kind: hard limit for the supervisor. The tool prints "supervisor: <name> is a process supervisor ..." with the way out.
 
@@ -200,13 +200,15 @@ Kind: gap of the tool, fixed: HOME is the home of the user in /etc/passwd of the
 
 Cause: a Go program (RoadRunner, rr, of shlink) starts its children from any of its threads. The thread has no execve of its own, so the observation did not see the children as children of rr, took the youngest php worker for the program, and the package ran bin/roadrunner-worker.php.
 
+A thread that is not the leader and calls execve is written by strace as "T execve(... <pid changed to N ...>" then "N +++ superseded by execve in pid T +++" and "N <... execve resumed>) = 0" (read from a real trace of strace 5.16 made by a reviewer; not captured in a CI run of this project). The tool had read both lines the other way round and dropped the execve; it now reads them as strace writes them.
+
 Kind: gap of the tool, fixed: the starter of a process is the nearest process that executed a program (also for the commands reported as not run and for the launchers a program started). Measured: shlink has rr serve -c config/roadrunner/.rr.yml as its program (run 45492200295). The row still does not answer, see the next section and No fork.
 
 ## The working directory of the program
 
 Cause: the package took the working directory from /proc/<pid>/cwd at the end of the observation, where the program is, not where it started. rr starts in /etc/shlink (WORKDIR of the Dockerfile, and the entrypoint ends in exec ./bin/rr serve -c config/roadrunner/.rr.yml) and changes to the folder of its config; the manifest then had cwd /etc/shlink/config/roadrunner and rr stopped with "chdir /etc/shlink/config/roadrunner/config/roadrunner: no such file or directory" (console of run 45492200295). That was a bug of the tool, not of nanos.
 
-Kind: gap of the tool, fixed: the directory is the one the process has at its execve line, read from the trace (chdir calls followed), and /proc is used only when the trace does not know it. Measured: the manifest of shlink now has cwd /etc/shlink and rr gets as far as starting its plugins (run 45496410983). The row is still red: rr then stops with "jobs_plugin_serve: WorkerAllocate: static_pool_allocate_workers: fork/exec /usr/local/bin/php: function not implemented", and compose up reports ip timeout because the guest ends. That is the no-fork limit: RoadRunner starts a php process for each worker, and there is no single-process mode.
+Kind: gap of the tool, fixed: the directory is the one the process has at its execve line, read from the trace (chdir calls followed, threads and CLONE_FS clones sharing one directory as in the kernel), and /proc is used only when the trace does not know it. Known gap: a relative chdir("..") after a chdir through a symbolic link is followed lexically, where the kernel goes to the parent of what the link leads to. Measured: the manifest of shlink now has cwd /etc/shlink and rr gets as far as starting its plugins (run 45496410983). The row is still red: rr then stops with "jobs_plugin_serve: WorkerAllocate: static_pool_allocate_workers: fork/exec /usr/local/bin/php: function not implemented", and compose up reports ip timeout because the guest ends. That is the no-fork limit: RoadRunner starts a php process for each worker, and there is no single-process mode.
 
 ## The version of the build comes from git tags
 
