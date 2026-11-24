@@ -1,9 +1,11 @@
 name: top30
-# The 30 most starred public projects of the matrix in docs/top30.md (each one a root Dockerfile and a
-# port it listens on), converted unmodified: docker builds the image, dock2nano converts the Dockerfile
-# (--dockerfile) to a nanos package and a compose.yaml, ops compose up starts it, and the strict probe
-# asks the port (2xx or 3xx, or an open TCP port is green). Every row prints "ROW" lines: that is the
-# measured record. Runs on a push to a check/** branch and by hand.
+# Rows of the matrix in docs/top30.md (each one a root Dockerfile and a port it listens on), converted
+# unmodified: docker builds the image, dock2nano converts the Dockerfile (--dockerfile) to a nanos package
+# and a compose.yaml, ops compose up starts it, and the strict probe asks the port (2xx or 3xx, or an open
+# TCP port is green). Every row prints "ROW" lines: that is the measured record. Runs on a push to a
+# check/** branch and by hand. This matrix is the 23 rows of the follow-up run (docs/top30.md, section
+# Follow-up): the 12 whose docker build failed (convert is run on them as it is), the 7 with ip timeout,
+# and the 4 with no answer. The other 7 rows of run 45432518617 answered and are not rerun.
 on:
   push:
     branches: ['check/**']
@@ -20,8 +22,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: whoami, repo: traefik/whoami, sha: 1ce75d01b6978863647da42557a707a479da3a51, port: "80", probe: http}
-          - {name: httpbin, repo: postmanlabs/httpbin, sha: 2c4572bb82727dca9f9fe56b835d2232bc15d531, port: "8080", probe: http}
           - {name: echo-server, repo: jmalloc/echo-server, sha: 332dd6e8153b4315a3581a990f0b849f914a9a93, port: "8080", probe: http}
           - {name: datasette, repo: simonw/datasette, sha: 775e8ba28525c6f7ca9552f126f1f88261978c2a, port: "8001", probe: http}
           - {name: kanboard, repo: kanboard/kanboard, sha: 58a2605058219b1d20b32f98d78872a5b1d9ff12, port: "80", probe: http}
@@ -29,21 +29,16 @@ jobs:
           - {name: gitea, repo: go-gitea/gitea, sha: b1a6cdadc83ebf4a33a69af8d457cc7f623f2d22, port: "3000", probe: http}
           - {name: gogs, repo: gogs/gogs, sha: c2380640f6f0829354bb85a7cca4402e1adfa0d4, port: "3000", probe: http}
           - {name: filebrowser, repo: filebrowser/filebrowser, sha: 833d908884d5c801f30f5c098d7977177eb3a36b, port: "80", probe: http}
-          - {name: changedetection, repo: dgtlmoon/changedetection.io, sha: d29009b3478b2c6c523872787ac562a784c818f7, port: "5000", probe: http}
           - {name: dashy, repo: lissy93/dashy, sha: ea81d6cbdcb56b81fc20e2b466f6af6a8ad42293, port: "8080", probe: http}
-          - {name: homepage, repo: gethomepage/homepage, sha: a1e3a5fd26d6f55aaccdf1be000913eddba666fc, port: "3000", probe: http}
           - {name: verdaccio, repo: verdaccio/verdaccio, sha: 13e5bc79fefc2b41118216cd2fdc095209f0a330, port: "4873", probe: http}
-          - {name: http-echo, repo: mendhak/docker-http-https-echo, sha: 184fd2ab87a9dfbac4d25f1260f6028df855aead, port: "8080", probe: http}
           - {name: shlink, repo: shlinkio/shlink, sha: 80599b89ff9b4ae0f9d19e849e6b747a94dde99c, port: "8080", probe: http}
           - {name: directus, repo: directus/directus, sha: 4856582eec1ea426f115b79a875c44c819fe0b9d, port: "8055", probe: http}
           - {name: ntfy, repo: binwiederhier/ntfy, sha: 889b6f071acd6a6ab5dcc7cc802a8a9b457cf2c0, port: "80", probe: http}
-          - {name: mailpit, repo: axllent/mailpit, sha: d54514ceb52c377307464850ddbaedbcbe70e1de, port: "8025", probe: http}
           - {name: coredns, repo: coredns/coredns, sha: a0606842e8fa7136e8157494d92d4beb098221e1, port: "53", probe: tcp}
           - {name: prometheus, repo: prometheus/prometheus, sha: ad8f26eed18a6aabfd9729bb281c6a3e53beabe9, port: "9090", probe: http}
           - {name: etcd, repo: etcd-io/etcd, sha: 1f940dc7ecd194bfc4d1de602c5f0f3aef87586f, port: "2379", probe: tcp}
           - {name: syncthing, repo: syncthing/syncthing, sha: 992ae894a44d8831bc92e002f68b4f20e5735117, port: "8384", probe: http}
           - {name: wallos, repo: ellite/Wallos, sha: 6e43a0d819973f82d55b20e48367fe7605737651, port: "80", probe: http}
-          - {name: excalidraw, repo: excalidraw/excalidraw, sha: 542ad76fa6968b370a48de4ed2491a5b308cdbc0, port: "80", probe: http}
           - {name: tile38, repo: tidwall/tile38, sha: 34f86375d07fa89d90a4afb5132a8e35af1583e4, port: "9851", probe: tcp}
           - {name: redlib, repo: redlib-org/redlib, sha: ba116c1186f6b0f9d45f0ae50c827e13eb2f5ea2, port: "8080", probe: http}
           - {name: homarr, repo: ajnart/homarr, sha: c5873c6e481144cd18a70139ef23ac04ca8ab158, port: "7575", probe: http}
@@ -117,7 +112,15 @@ jobs:
           echo "ROW docker_build=$bld seconds=$(( $(date +%s) - s ))"
           if [ "$bld" = fail ]; then
             echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
-            echo "ROW convert not run: the docker build failed"; exit 1
+            # the tool is run on the Dockerfile as it is, with the same flags as below; the tool builds the image itself
+            cd "$GITHUB_WORKSPACE"
+            "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1
+            xexit=$?
+            echo "ROW convert after the failed docker build: convert_exit=$xexit; output of the tool, first 12 lines:"
+            head -12 "$R/report-after-build-fail.txt" | cut -c1-300
+            echo "ROW convert after the failed docker build: convert_exit=$xexit, output lines=$(wc -l < "$R/report-after-build-fail.txt")"
+            echo "ROW convert after the failed docker build: compose.yaml written: $([ -f "$R/compose-after-build-fail/compose.yaml" ] && echo yes || echo no)"
+            echo "ROW convert run after the failed docker build: the row stops here"; exit 1
           fi
 
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
@@ -150,6 +153,11 @@ jobs:
             echo "ROW compose_up=failed attempt=$attempt"
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
+            # the instance and its console, before the down of the next try removes them
+            sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            echo "ROW attempt=$attempt console of $NAME: $(wc -l < "$R/console-attempt-$attempt.txt") lines; first lines:"
+            head -6 "$R/console-attempt-$attempt.txt" | cut -c1-200
             if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
           done
           if [ "$up_ok" != 1 ]; then
@@ -197,6 +205,17 @@ jobs:
           echo "=== console of $NAME, last 25 lines"; tail -25 "$R/console.txt" | cut -c1-250
           [ "$probe" = success ] && exit 0
           exit 1
+      - name: instance list and console (before the down step removes the instance)
+        if: always()
+        run: |
+          N=${{ matrix.name }}
+          mkdir -p "/tmp/out/$N"
+          sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
+          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
+          echo "=== ROW ops instance list (end of the row), exit of the list is in the artifact"
+          sed 's/\x1b\[[0-9;]*m//g' "/tmp/out/$N/instances-final.txt" | cut -c1-200
+          echo "=== ROW ops instance logs $N (end of the row): $(wc -l < "/tmp/out/$N/console-final.txt") lines"
+          cut -c1-250 "/tmp/out/$N/console-final.txt"
       - name: down
         if: always()
         run: |
