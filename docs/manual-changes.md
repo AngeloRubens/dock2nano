@@ -63,7 +63,7 @@ The nginx exit "host not found in upstream backend.service" needed exec_wait_for
 
 ## sparkjava-mysql
 
-Red without flags (known red in the matrix of 2026-11-13). With --short-names on the fork build of ops with the dns_search commit f3ee91e (not a release) the backend resolved db, then failed on a missing tzdb.dat because the observation never reached that file. Still manual or open.
+Red without flags with a released ops (known red in the matrix of 2026-11-13). Green with no flags on ops master 2177c549 (run 45393646760, backend 200, db open); open only for a released ops (up to 0.1.47). With --short-names on the fork build of ops with the dns_search commit f3ee91e (not a release) the backend resolved db, then failed on a missing tzdb.dat because the observation never reached that file (no run id recorded).
 
 ## postgres (hub package)
 

@@ -816,8 +816,9 @@ func TestBareNamesNoteIsPrintedWithoutShortNames(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	p := mustGen(t, newInput(&fake{}, db, web))
 	want1(t, p, "", plan.Note, "bare names", "bare package names (db, web) resolve with an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47)")
-	want1(t, p, "", plan.Note, "bare names", "with a released ops (up to 0.1.47) write <pkg>.service")
+	want1(t, p, "", plan.Note, "bare names", "with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write <pkg>.service")
 	want1(t, p, "", plan.Note, "bare names", "the package name resolves, not the compose name")
+	want1(t, p, "", plan.Note, "bare names", "The source of ops 0.1.47 has no dns_search.")
 	want1(t, p, "", plan.Note, "bare names", "works only with such an ops")
 	if strings.Contains(itemsOf(p, "", plan.Note, "bare names")[0].Message, "--short-names") {
 		t.Error("the note tells to pass --short-names")
@@ -847,7 +848,7 @@ func TestBareNamesNoteIsAlsoPrintedWithAFindingInAFile(t *testing.T) {
 func TestBarePackageNameInAFileIsNotUnresolvableWithoutShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, false, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "which may name service backend")
-	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as backend.service)")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write it as backend.service)")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
 	if strings.Contains(m, "does not resolve") || strings.Contains(m, "Even in the .service form") {
 		t.Errorf("the bare package name is reported as unresolvable: %q", m)
@@ -2500,7 +2501,7 @@ func TestNameAtStartComposeNameInDefaultMode(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server My_App:80;"}, false, "proxy", "My_App"))
 	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
-	for _, w := range []string{"my-app.service", "write it as my-app.service, the name the dns answers. my-app alone also resolves with an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47); with a released ops (up to 0.1.47) write it as my-app.service", "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)"} {
+	for _, w := range []string{"my-app.service", "write it as my-app.service, the name the dns answers. my-app alone also resolves with an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47); a released ops (up to 0.1.47; read from the source of 0.1.47, not run) does not resolve my-app alone", "Even in the .service form, an nginx upstream looked up at start failed under ops compose; the guest had no address yet when nginx exited (nanovms/ops#1813)"} {
 		if !strings.Contains(m, w) {
 			t.Errorf("message lacks %q: %q", w, m)
 		}
@@ -2516,7 +2517,7 @@ func TestNameAtStartBareNameWithShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "(the order of compose.yaml) did not help")
 	want1(t, p, "proxy", plan.Note, "name at start", "literal IP")
-	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as backend.service)")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write it as backend.service)")
 }
 
 func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
@@ -2678,7 +2679,7 @@ func TestEnvNoteListsVariablesNamingAnyOtherService(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
 	p := mustGen(t, newInput(&fake{}, db, web))
-	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47, read from its source, not run) write <pkg>.service: web: DB_HOST.")
+	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write <pkg>.service: web: DB_HOST.")
 	if strings.Contains(itemsOf(p, "", plan.Note, "service names")[0].Message, "never resolve") {
 		t.Error("an equal name is said to never resolve")
 	}
@@ -2691,5 +2692,29 @@ func TestEnvNoteListsVariablesNamingAnyOtherService(t *testing.T) {
 		in.ShortNames = sn
 		p = mustGen(t, in)
 		want1(t, p, "", plan.Note, "service names", "differs from its package name were not rewritten and never resolve, with or without --short-names (write <pkg>.service): web: DB_HOST.")
+	}
+}
+
+func TestShortNamesSameRefsSentenceKeepsTheReleasedOpsCaveat(t *testing.T) {
+	web, db := svc("web"), svc("db")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
+	in := newInput(&fake{}, db, web)
+	in.ShortNames = true
+	p := mustGen(t, in)
+	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write <pkg>.service: web: DB_HOST.")
+}
+
+func TestBareValueOfDifferingPackageNameIsListed(t *testing.T) {
+	// compose name My_Db, package name my-db: the value my-db is the bare package name
+	for _, sn := range []bool{false, true} {
+		web, db := svc("web"), svc("My_Db")
+		web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "my-db", Set: true}, {Name: "OTHER", Value: "my-dbx", Set: true}}
+		in := newInput(&fake{}, db, web)
+		in.ShortNames = sn
+		p := mustGen(t, in)
+		want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47; read from the source of 0.1.47, not run) write <pkg>.service: web: DB_HOST.")
+		if strings.Contains(itemsOf(p, "", plan.Note, "service names")[0].Message, "never resolve") {
+			t.Error("a bare package name is said to never resolve")
+		}
 	}
 }

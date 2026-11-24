@@ -70,7 +70,7 @@ Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measu
 
 | sample | change | result | run id |
 |---|---|---|---|
-| nginx-golang-mysql | --short-names | green | 45383667105 ; also green with no flags and ops 2177c549 (run 45393646760, branch check/ops-master, commit af6f942) |
+| nginx-golang-mysql | --short-names | green; also green with no flags and ops 2177c549 (branch check/ops-master, commit af6f942) | 45383667105, 45393646760 |
 | nginx-aspnet-mysql | --short-names | proxy answered 502 at the first try (run 45383667105, the probe did not retry); with the retry loop fixed (run 45387284406, branch check/fix-aspnet-sn at 4b7c336) 24 tries over about 5 minutes ended with the last try getting no HTTP response (000), and a 502 page of an earlier try stayed in the body file; a later run of the loop (45392317073, check/fixes-loop) got 000 on all 24 tries, with no 502 at all; not a success; the backend behind the proxy was not diagnosed | 45383667105, 45387284406, 45392317073 |
 | nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
 | spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
