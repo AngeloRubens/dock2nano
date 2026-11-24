@@ -153,7 +153,7 @@ jobs:
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
-                code=$(curl -s -m 5 -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                code=$(curl -s -m 5 -H "Host: localhost" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
                 case "$code" in 2*|3*|4*) break;; esac
               else
                 if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
