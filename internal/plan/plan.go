@@ -22,10 +22,8 @@ type Plan struct {
 type ComposeFile struct {
 	Packages []ComposePackage `yaml:"packages"`
 	// DNSSearch is the search domains of the unikernels (dns_search): with "service" a program
-	// that asks for db is also answered for db.service, the name ops registers, but only with an
-	// ops that includes nanovms/ops#1815. A released ops (up to 0.1.47, read from its source, not
-	// run) ignores the key silently (plain yaml.Unmarshal), so it reads the file either way.
-	// Empty leaves the key out.
+	// that asks for db is also answered for db.service, the name ops registers. Empty leaves the
+	// key out, so that an ops without the option reads the file.
 	DNSSearch []string `yaml:"dns_search,omitempty"`
 }
 

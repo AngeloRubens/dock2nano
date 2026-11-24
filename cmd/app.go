@@ -63,7 +63,7 @@ Flags of convert:
                      the package name (db; the compose name only when it equals it) and not only
                      as db.service. Read only by an ops that includes nanovms/ops#1815 (ops master
                      since 2177c54), which already uses that search line by default; a released ops
-                     (up to 0.1.47, read from its source, not run) ignores it, so write <pkg>.service there
+                     (up to 0.1.47) ignores it, so write <pkg>.service there
   --exercise [SVC=]REQ  ask the program for something once it is up, so that the files it opens
                      only to answer are carried: /health is asked of the first port the image
                      exposes, http://container:9000/ping names the port (can be repeated); with
