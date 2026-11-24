@@ -64,10 +64,10 @@ func writeMachineFiles(sysroot, arch, program string, opened []string) ([]string
 			wrote = append(wrote, sharedMemory)
 		}
 	}
-	if arch != "amd64" && arch != "x86_64" {
-		return wrote, nil
+	var names []string
+	if arch == "amd64" || arch == "x86_64" {
+		names = []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"}
 	}
-	names := []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"}
 	if isNode(program) {
 		names = append(names, selfStatName)
 	}
