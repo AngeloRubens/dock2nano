@@ -70,7 +70,7 @@ Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measu
 
 | sample | change | result | run id |
 |---|---|---|---|
-| nginx-golang-mysql | --short-names | green | 45383667105 |
+| nginx-golang-mysql | --short-names | green; also green with no flags and ops 2177c549 (branch check/ops-master, commit af6f942) | 45383667105, 45393646760 |
 | nginx-aspnet-mysql | --short-names | proxy answered 502 at the first try (run 45383667105, the probe did not retry); with the retry loop fixed (run 45387284406, branch check/fix-aspnet-sn at 4b7c336) 24 tries over about 5 minutes ended with the last try getting no HTTP response (000), and a 502 page of an earlier try stayed in the body file; a later run of the loop (45392317073, check/fixes-loop) got 000 on all 24 tries, with no 502 at all; not a success; the backend behind the proxy was not diagnosed | 45383667105, 45387284406, 45392317073 |
 | nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
 | spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
@@ -79,6 +79,8 @@ Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measu
 | angular | /proc/self/stat for node (commit e2a2a4a) | green, answer 200 | 45384816850 |
 
 Causes read from the logs, not fixed and not yet confirmed by a run (hypotheses): nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 may need a one-process setting (the option -X is a guess not yet run); gitea may need the choice of the listening child instead of the supervisor (not yet run). The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
+
+Run 45393646760 (2026-11-24, branch check/ops-master, commit af6f942, ops 2177c549, each job with the flags of its row): green with no flags: nginx-golang, sparkjava-mysql (backend 200, db open), nginx-golang-mysql (proxy 200), flask-redis; green with --short-names: nginx-golang-plain; red: nginx-golang-postgres, nginx-aspnet-mysql and spring-postgres.
 
 Revert checks of the machine note and the bare names note (2026-11-24, branches from 9321c5d with the change removed and the tests kept):
 
