@@ -207,8 +207,12 @@ func Write(p *plan.Plan, o Options) (written []string, err error) {
 	for _, s := range p.Services {
 		if s.PostUp == "" {
 			if o.Force && s.PostUpFile != "" {
-				if err = removeOldScript(&j, scriptPath(s)); err != nil {
+				var note string
+				if note, err = removeOldScript(&j, scriptPath(s)); err != nil {
 					return nil, err
+				}
+				if note != "" {
+					written = append(written, note)
 				}
 			}
 			continue
@@ -334,23 +338,35 @@ func writeCompose(j *journal, path string, c plan.ComposeFile, force bool) error
 // new plan has none for the service, and the old one would be run by mistake.
 // It is moved aside, and put back when the call fails, and removed when it
 // succeeds. A file that is not ours is left alone.
-func removeOldScript(j *journal, path string) error {
+func removeOldScript(j *journal, path string) (note string, err error) {
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.Mode().IsRegular() {
-		return nil
+		return "", nil
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte(plan.PostUpMarker)) && !bytes.Contains(data, []byte(plan.PostUpMarkerOld)) {
-		return nil
+	if err != nil || !bytes.Contains(data, []byte(plan.PostUpMarker)) {
+		return "", nil
+	}
+	// ours only when the header is the second line, as the tool writes it
+	lines := bytes.SplitN(data, []byte("\n"), 3)
+	if len(lines) < 2 || string(lines[1]) != plan.PostUpHeader {
+		return KeptPrefix + "the header was changed: " + path, nil
 	}
 	old := fmt.Sprintf("%s.stale-%d", path, os.Getpid())
 	if err := os.Rename(path, old); err != nil {
-		return err
+		return "", err
 	}
 	j.onFail(func() { os.Rename(old, path) })
 	j.onOK(func() { os.Remove(old) })
-	return nil
+	return RemovedPrefix + path, nil
 }
+
+// The entries of the list that Write returns that are not paths written: the
+// script of an earlier run that was removed, or kept because it was changed.
+const (
+	RemovedPrefix = "removed (script of an earlier run): "
+	KeptPrefix    = "not removed: "
+)
 
 // writeFileAtomic writes data to path through a temporary file in the same
 // folder, with the given mode. A file that exists is replaced only with force;

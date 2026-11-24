@@ -53,9 +53,9 @@ rows:
         databases, run 44910340290).
     post_up_script: |
       #!/bin/sh
-      # This is the post-up script written by the converter of your compose file, to
-      # be run by you after "ops compose up": ops compose does not run it. Read it
-      # before you run it.
+      # post-up script written by the converter of your compose file
+      # To be run by you after "ops compose up": ops compose does not run it. Read
+      # it before you run it.
       # It does NOT do all that the entrypoint of the postgres image does (the
       # files of /docker-entrypoint-initdb.d are not handled). It creates, each
       # one only if it is absent:
@@ -72,6 +72,10 @@ rows:
       [[if HUB_PWENV]]# The password is the variable POSTGRES_PASSWORD of the shell that runs this
       # script. Export it first; sudo drops it unless you run the script with
       # sudo --preserve-env=POSTGRES_PASSWORD (and PGHOST, POSTUP_TRIES if you set them).
+      # This way of giving the password was run only as far as the sudo line and
+      # the message that the password was set (run 45409545710); the answer of the
+      # backend after it was 404, not investigated. Only the password from a file
+      # was run end to end (run 45405259016).
       [[end]][[if HUB_PWFILE]]# The password is read from the file {HUB_PWFILE:sh} when the script runs.
       [[end]]# The statement CREATE ROLE with OWNER was never run against the package in a
       # CI run; CREATE DATABASE and a password change were run (one run, no owner:
@@ -95,6 +99,8 @@ rows:
       PGCONNECT_TIMEOUT=5
       export PGCONNECT_TIMEOUT
       unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER
+      unset PGHOSTADDR PGREQUIREAUTH PGCHANNELBINDING PGGSSENCMODE PGTARGETSESSIONATTRS
+      unset PGSSLCERT PGSSLKEY PGSSLROOTCERT
 
       instance={HUB_INSTANCE:sh}
       if [ "$#" -ge 1 ] && [ -n "$1" ]; then
@@ -253,7 +259,6 @@ rows:
       postgres does not exist there (run 44909583390).
       The database has to exist before the application connects: in run
       44908630495 the backend connected about 43 s after CREATE DATABASE
-      (run 45395987354: about 50 s after the start of the instances)
       (13:29:34.95; HikariPool-1 starting at 13:30:17.893) and ops compose up
       starts all instances together, so a sooner connection fails unless the
       application retries.

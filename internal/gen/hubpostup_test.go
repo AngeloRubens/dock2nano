@@ -184,7 +184,7 @@ func TestEntrypointItemSaysTheScriptIsRunByTheUserAndNotByOps(t *testing.T) {
 	if len(e) != 1 {
 		t.Fatalf("%+v", e)
 	}
-	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "2 to 4 minutes at most", "run 44908630495", "run 45395987354", "sudo --preserve-env", "may exit", "timing was not measured", "start the database first", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
+	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "2 to 4 minutes at most", "run 44908630495", "sudo --preserve-env", "may exit", "timing was not measured", "start the database first", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
 		if !strings.Contains(e[0].Message, want) {
 			t.Errorf("the item lacks %q: %s", want, e[0].Message)
 		}
@@ -623,13 +623,13 @@ func TestPostUpScriptDoesNotNameTheToolAndCarriesTheMarker(t *testing.T) {
 
 func TestPostUpScriptUnsetsTheVariablesOfPsqlThatWouldChangeTheConnectionAndExplainsThePassword(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_PASSWORD=x")
-	for _, want := range []string{"unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER", "standard_conforming_strings", "printf is a builtin", "run 45405259016", "sudo --preserve-env=POSTGRES_PASSWORD"} {
+	for _, want := range []string{"unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER", "unset PGHOSTADDR PGREQUIREAUTH PGCHANNELBINDING PGGSSENCMODE PGTARGETSESSIONATTRS", "unset PGSSLCERT PGSSLKEY PGSSLROOTCERT", "standard_conforming_strings", "printf is a builtin", "run 45405259016", "sudo --preserve-env=POSTGRES_PASSWORD"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the script lacks %q:\n%s", want, s)
 		}
 	}
-	out, log, err := runScript(t, s, "", []string{"PGPORT=1", "PGUSER=evil", "PGDATABASE=x", "PGOPTIONS=-c x"}, "10.0.0.7")
-	if err != nil || !strings.Contains(log, "-U postgres -d template1") {
+	out, log, err := runScript(t, s, "", []string{"PGPORT=1", "PGUSER=evil", "PGDATABASE=x", "PGOPTIONS=-c x", "PGHOSTADDR=10.9.9.9"}, "10.0.0.7")
+	if err != nil || !strings.Contains(log, "-U postgres -d template1") || !strings.Contains(log, "-h 10.0.0.7 ") {
 		t.Errorf("%v\n%s\n%s", err, out, log)
 	}
 }
@@ -670,5 +670,30 @@ func TestPostUpScriptTheCommentOfThePasswordSaysTheFileOnlyWhenThereIsAFile(t *t
 	s = postUpFor(t, u, "POSTGRES_DB=shop")
 	if !strings.Contains(s, "# The password is read from the file '/srv/p.txt' when the script runs.") {
 		t.Errorf("%s", s)
+	}
+}
+
+func TestPostUpScriptIsRefusedForAPasswordPathWithAControlCharacterWithItsOwnReason(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.PasswordFile = "/srv/a\nb/password.txt"
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/x"}
+	items := ApplyHubWhole(u, obs)
+	if s := PostUpScript(u, obs); s != "" {
+		t.Errorf("a script was made:\n%s", s)
+	}
+	e := hubFind(items, "hub entrypoint")
+	if len(e) != 1 || !strings.Contains(e[0].Message, "No script is written for it: the path of the password file holds a control character") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestEntrypointItemSaysWhatWasRunForThePasswordFromAVariable(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD=hunter2"}
+	e := hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 || !strings.Contains(e[0].Message, "run 45409545710") || !strings.Contains(e[0].Message, "only the password from a file was run end to end, in run 45405259016") {
+		t.Errorf("%+v", e)
 	}
 }

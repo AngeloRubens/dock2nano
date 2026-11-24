@@ -371,8 +371,19 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	fmt.Fprint(a.Stdout, gen.Render(p.Report))
 	fmt.Fprintln(a.Stdout)
 	fmt.Fprintln(a.Stdout, "Written:")
+	var olds []string
 	for _, w := range written {
+		if strings.HasPrefix(w, output.RemovedPrefix) || strings.HasPrefix(w, output.KeptPrefix) {
+			olds = append(olds, w)
+			continue
+		}
 		fmt.Fprintf(a.Stdout, "  %s\n", w)
+	}
+	if len(olds) > 0 {
+		fmt.Fprintln(a.Stdout, "Scripts of an earlier run:")
+		for _, w := range olds {
+			fmt.Fprintf(a.Stdout, "  %s\n", w)
+		}
 	}
 	a.nextSteps(home, composePath, p.Services)
 
@@ -477,7 +488,9 @@ func (a *App) nextSteps(home, composePath string, services []plan.Service) {
 		if len(s.PostUpPreserve) > 0 {
 			keep = strings.Join(s.PostUpPreserve, ",")
 		}
-		fmt.Fprintf(a.Stdout, "  then, once %s is up: sudo --preserve-env=%s env %sPATH=\"$PATH\" %s    (ops compose does not run it; see the report for what it creates; sudo and OPS_HOME are for ops instance list and logs, and --preserve-env keeps the variables that the script reads, names only; export them first. Without root, give the address of the instance as its argument)\n", s.Name, keep, prefix, shellQuote(script))
+		// the instance is named after the package, not after the compose service
+		instance := strings.TrimSuffix(strings.TrimPrefix(s.PostUpFile, "post-up-"), ".sh")
+		fmt.Fprintf(a.Stdout, "  then, once %s is up: sudo --preserve-env=%s env %sPATH=\"$PATH\" sh %s    (ops compose does not run it; see the report for what it creates; sudo and OPS_HOME are for ops instance list and logs, and --preserve-env keeps the variables that the script reads, names only; export them first. Without root, give the address of the instance as its argument)\n", instance, keep, prefix, shellQuote(script))
 	}
 }
 

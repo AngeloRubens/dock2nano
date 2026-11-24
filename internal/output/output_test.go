@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -1085,7 +1086,7 @@ func TestWriteForceRemovesTheScriptOfAnEarlierRunWhenThereIsNone(t *testing.T) {
 		t.Error("the script of the earlier run is still there")
 	}
 	for _, w := range written {
-		if strings.Contains(w, "post-up") {
+		if strings.Contains(w, "post-up") && !strings.HasPrefix(w, RemovedPrefix) {
 			t.Errorf("a script is listed as written: %v", written)
 		}
 	}
@@ -1141,18 +1142,50 @@ func TestWriteRollbackPutsTheOldScriptBack(t *testing.T) {
 	}
 }
 
-func TestWriteForceRemovesTheScriptOfAnEarlierVersionWithTheOldMarker(t *testing.T) {
-	dir := t.TempDir()
+func writeForced(t *testing.T, dir, name, content string) ([]string, string) {
+	t.Helper()
 	src := filepath.Join(dir, "src")
 	put(t, filepath.Join(src, "web"), "b", 0o755)
-	stale := filepath.Join(dir, "post-up-web.sh")
-	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarkerOld+", to be run by you\n", 0o755)
+	stale := filepath.Join(dir, name)
+	put(t, stale, content, 0o755)
 	p := onePlan(src)
-	p.Services[0].PostUpFile = "post-up-web.sh"
-	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+	p.Services[0].PostUpFile = name
+	written, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true})
+	if err != nil {
 		t.Fatal(err)
 	}
+	return written, stale
+}
+
+func TestWriteForceSaysWhenItRemovesTheScriptOfAnEarlierRun(t *testing.T) {
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\n"+plan.PostUpHeader+"\nrest\n")
 	if exists(stale) {
-		t.Error("the script of an earlier version is still there")
+		t.Error("the script is still there")
+	}
+	if !slices.Contains(written, RemovedPrefix+stale) {
+		t.Errorf("the removal is not listed: %v", written)
+	}
+}
+
+func TestWriteForceKeepsAndReportsAScriptWhoseHeaderWasChanged(t *testing.T) {
+	// the marker is in the file, but not as the second line
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\n# mine now\n# "+plan.PostUpMarker+"\n")
+	if !exists(stale) {
+		t.Error("an edited script was removed")
+	}
+	if !slices.Contains(written, KeptPrefix+"the header was changed: "+stale) {
+		t.Errorf("the kept script is not reported: %v", written)
+	}
+}
+
+func TestWriteForceLeavesAFileWithoutTheMarkerAloneAndSilent(t *testing.T) {
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\necho mine\n")
+	if !exists(stale) {
+		t.Error("a file of the user was removed")
+	}
+	for _, w := range written {
+		if strings.HasPrefix(w, RemovedPrefix) || strings.HasPrefix(w, KeptPrefix) {
+			t.Errorf("a file that is not ours is reported: %v", written)
+		}
 	}
 }

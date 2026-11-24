@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -37,7 +38,7 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 		t.Errorf("file name %q", svc.PostUpFile)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "from the variable POSTGRES_PASSWORD of the shell that runs it", "sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
+	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "from the variable POSTGRES_PASSWORD of the shell that runs it", "sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my-db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
@@ -144,14 +145,18 @@ func TestPostUpScriptReadsThePasswordFromTheFileOfTheSecretOnTheHost(t *testing.
 	}
 }
 
-func TestPostUpScriptNeverHoldsThePasswordOfTheFileOfTheSecret(t *testing.T) {
+// A regression guard, not a test of the change: it also passes when the post-up
+// script is not generated at all.
+func TestRegressionGuardPostUpScriptNeverHoldsThePasswordOfTheFileOfTheSecret(t *testing.T) {
 	h := pgWhole(t, springPG, func(h *hubHarness) { h.write("db/password.txt", "needle-value-9\n") })
 	if strings.Contains(h.plan.Services[0].PostUp, "needle-value-9") || strings.Contains(h.stdout.String(), "needle-value-9") || strings.Contains(h.stderr.String(), "needle-value-9") {
 		t.Errorf("the password is in the script or the report")
 	}
 }
 
-func TestPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
+// A regression guard, not a test of the change: with --no-hub the service is
+// not converted, with or without the post-up script.
+func TestRegressionGuardPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
 	h := newHubHarness(t, "postgres:16", func(sysroot string) *observe.Result {
 		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres"}, UID: -1, GID: -1}
 	})
@@ -184,7 +189,7 @@ func TestPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
 func TestNextStepLineKeepsThePasswordVariableThroughSudoWithoutItsValue(t *testing.T) {
 	h := pgWhole(t, myDB+"      POSTGRES_DB: example\n      POSTGRES_PASSWORD: hunter2\n", nil)
 	out := h.stdout.String()
-	if !strings.Contains(out, "then, once my_db is up: sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env ") {
+	if !strings.Contains(out, "then, once my-db is up: sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env ") {
 		t.Errorf("the line does not keep the variables through sudo:\n%s", out)
 	}
 	if strings.Contains(out, "hunter2") || strings.Contains(out, "POSTGRES_PASSWORD=") {
@@ -205,7 +210,24 @@ func TestReportAndFileAgreeForAServiceNameOfMoreThan63Characters(t *testing.T) {
 	if len(h.plan.Services) != 1 || h.plan.Services[0].PostUp == "" {
 		t.Fatalf("no script for a long name of the service:\n%s", out)
 	}
-	if strings.Contains(out, "No script is written for it") || !strings.Contains(out, "then, once "+name+" is up") {
+	if strings.Contains(out, "No script is written for it") || !strings.Contains(out, "then, once "+strings.TrimSuffix(strings.TrimPrefix(h.plan.Services[0].PostUpFile, "post-up-"), ".sh")+" is up") {
 		t.Errorf("the report and the file disagree:\n%s", out)
+	}
+}
+
+func TestNextStepLineNeverReadsTheScriptPathAsAnAssignment(t *testing.T) {
+	var out bytes.Buffer
+	a := &App{Stdout: &out}
+	svc := plan.Service{Name: "my_db", PostUp: "#!/bin/sh\n", PostUpFile: "post-up-my-db.sh", PostUpPreserve: []string{"POSTGRES_PASSWORD", "PGHOST", "POSTUP_TRIES"}}
+	a.nextSteps("/home/u/.ops", "/srv/a=b/compose.yaml", []plan.Service{svc})
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "then, once") {
+			line = l
+		}
+	}
+	cmd, _, _ := strings.Cut(line, "    (")
+	if !strings.HasSuffix(cmd, ` env OPS_HOME=/home/u/.ops PATH="$PATH" sh /srv/a=b/post-up-my-db.sh`) || !strings.Contains(cmd, "once my-db is up") {
+		t.Errorf("%s", line)
 	}
 }
