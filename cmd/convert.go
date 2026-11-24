@@ -473,11 +473,7 @@ func (a *App) nextSteps(home, composePath string, services []plan.Service) {
 			continue
 		}
 		script := filepath.Join(filepath.Dir(composePath), s.PostUpFile)
-		keep := "PGHOST,POSTUP_TRIES"
-		if len(s.PostUpPreserve) > 0 {
-			keep = strings.Join(s.PostUpPreserve, ",")
-		}
-		fmt.Fprintf(a.Stdout, "  then, once %s is up: sudo --preserve-env=%s env %sPATH=\"$PATH\" %s    (ops compose does not run it; see the report for what it creates; sudo and OPS_HOME are for ops instance list and logs, and --preserve-env keeps the variables that the script reads, names only; export them first. Without root, give the address of the instance as its argument)\n", s.Name, keep, prefix, shellQuote(script))
+		fmt.Fprintf(a.Stdout, "  then, once %s is up: sudo env %sPATH=\"$PATH\" %s    (ops compose does not run it; see the report for what it creates; sudo and OPS_HOME are for ops instance list and logs, and --preserve-env keeps the variables that the script reads, names only; export them first. Without root, give the address of the instance as its argument)\n", s.Name, prefix, shellQuote(script))
 	}
 }
 
