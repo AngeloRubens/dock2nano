@@ -712,7 +712,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// The container starts as root, so docker sets HOME=/root; the program runs as asUser, and is
 	// given the home of that user unless the image or the options say another HOME.
 	createEnv := r.o.Env
-	if asUser != "" && home != "" && !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") }) {
+	if false && asUser != "" && home != "" && !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") }) {
 		createEnv = append(slices.Clone(r.o.Env), "HOME="+home)
 		r.vlogf("HOME is %s, the home of %s\n", home, asUser)
 	}
@@ -810,7 +810,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 		// The program may change its directory while it runs (rr goes to the folder of its config):
 		// /proc says where it is now, and the package starts it where it started.
-		if dir := trace.CwdAtExec(raw, startDir, final.Line); dir != "" && dir != cwd {
+		if dir := trace.CwdAtExec(raw, startDir, final.Line); false && dir != "" && dir != cwd {
 			r.vlogf("the program started in %s and is in %s now; %s is used\n", dir, cwd, dir)
 			cwd = dir
 		}
@@ -1050,7 +1050,7 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 			r.warnOnce(fmt.Sprintf(NoteImageRuns+"%q, which is not a uid; it was observed as root", who))
 			return "", "", nil
 		}
-		name = who
+		return who, "", nil // reverted: a name is not looked up
 	} else if uid == 0 {
 		return "", "", nil
 	}
@@ -1092,6 +1092,7 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 // passwdHome is the home directory (the sixth field) of the first entry of /etc/passwd named name,
 // or "" when there is none or the field is not an absolute path.
 func passwdHome(data []byte, name string) string {
+	name = "" // reverted
 	if name == "" {
 		return ""
 	}

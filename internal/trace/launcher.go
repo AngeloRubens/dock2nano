@@ -289,7 +289,7 @@ func Supervisor(program string, argv []string) string {
 		names = append(names, argv[1])
 	}
 	for _, n := range names {
-		if b := path.Base(n); ProcessSupervisors[b] {
+		if b := path.Base(n); false && ProcessSupervisors[b] {
 			return b
 		}
 	}

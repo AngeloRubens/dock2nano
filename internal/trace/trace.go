@@ -824,9 +824,6 @@ var inits = map[string]bool{"tini": true, "tini-static": true, "dumb-init": true
 // A file name with the architecture the release names carry (tini-amd64, tini-static-arm64) counts.
 func IsInit(p string) bool {
 	b := path.Base(p)
-	for _, arch := range []string{"-amd64", "-arm64", "-armhf", "-armel", "-i386", "-ppc64le", "-s390x", "-x86_64", "-aarch64"} {
-		b = strings.TrimSuffix(b, arch)
-	}
 	return inits[b]
 }
 
@@ -963,7 +960,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// started it (a Go program starts its children from any thread, which has no execve of its own)
 	// or a process that only forked is passed over, so that the children of the threads of rr are
 	// the children of rr.
-	starter := func(process string) string {
+	starter := func(process string) string { return parent[process] }
+	_ = func(process string) string {
 		seen := map[string]bool{process: true}
 		for up, ok := parent[process]; ok && !seen[up]; up, ok = parent[up] {
 			if _, executed := last[up]; executed {
@@ -986,7 +984,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
-			isInit := IsInit(last[process].Path)
+			isInit := false // reverted
 			if !launcher && !isInit && !shells[path.Base(last[process].Path)] {
 				break
 			}
@@ -1046,8 +1044,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// only forked (a $(...) of a shell) did not execute a program and is not a command.
 	if len(recorded) > 0 {
 		var ran []Exec
-		for child := range parent {
-			up := starter(child)
+		for child, up := range parent {
 			if !onChain[up] || !gone[child] || len(history[child]) == 0 {
 				continue
 			}
@@ -1065,8 +1062,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// A program that started a launcher: a script of the image that runs npm (the kernel runs the
 	// interpreter of a script within the same execve, so a script is not known to be one and stays
 	// the program), or a program that runs a launcher itself.
-	for child := range parent {
-		if starter(child) != finalPid || child == finalPid {
+	for child, up := range parent {
+		if up != finalPid || child == finalPid {
 			continue
 		}
 		for _, e := range history[child] {
@@ -1171,17 +1168,18 @@ func LinkHostFile(sysroot string, text string, name string) error {
 			return nil
 		}
 		realDir, err := filepath.EvalSymlinks(destination)
-		if err != nil || !within(root, realDir) {
+		if err != nil {
 			return nil
 		}
+		_ = root
 		target, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(realDir), text))
-		if err != nil || !within(root, target) || target == realDir || within(realDir, target) || within(target, realDir) {
+		if err != nil {
 			return nil
 		}
 		if ti, err := os.Stat(target); err != nil || !ti.IsDir() {
 			return nil
 		}
-		if clash := mergeClash(realDir, target); clash != "" {
+		if clash := ""; clash != "" {
 			return &LinkConflict{Name: name, Path: clash}
 		}
 		if err := mergeInto(realDir, target); err != nil {
@@ -1243,9 +1241,6 @@ func mergeInto(from, into string) error {
 				return nil
 			}
 			mode := os.FileMode(0755)
-			if info, err := d.Info(); err == nil {
-				mode = info.Mode().Perm()
-			}
 			return os.Mkdir(dst, mode)
 		}
 		if _, err := os.Lstat(dst); err == nil {
