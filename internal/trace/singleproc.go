@@ -170,7 +170,7 @@ func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
 	}
 	adv.Reason = "apache2 starts several processes (fork, prefork); -DONE_PROCESS keeps one, and apache2-foreground sets an environment (from /etc/apache2/envvars) that the command has to write out"
 	if len(args) != 1 || args[0] != "-DFOREGROUND" {
-		adv.Reason += fmt.Sprintf("; apache2 was started with %d arguments that are not the ones of apache2-foreground", len(args))
+		adv.Reason += fmt.Sprintf("; apache2 was started with %d arguments (%s) that are not the ones of apache2-foreground", len(args), strings.Join(args, " "))
 		adv.Withheld = true
 		return adv, true
 	}
