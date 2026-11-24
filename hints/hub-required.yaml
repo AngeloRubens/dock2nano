@@ -71,7 +71,7 @@ rows:
       [[if HUB_PWENV]]# The password is the variable POSTGRES_PASSWORD of the shell that runs this
       # script (export it first), or else the file of the secret.
       [[end]]# The statement CREATE ROLE with OWNER was never run against the package in a
-      # CI run; CREATE DATABASE and ALTER ROLE were (one run, no owner).
+      # CI run; CREATE DATABASE and a password change were (one run, no owner).
       # Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
       # Without an address it uses PGHOST, then the PRIVATE IPS column of
       # ops instance list for the instance {HUB_INSTANCE}, and then the last
@@ -186,7 +186,7 @@ rows:
         {{ printf '%s' 'ALTER ROLE {POSTGRES_USER,HUB_SUPERUSER:ident} PASSWORD '; printf "'%s';\n" "$esc"; }} | psql_su >/dev/null 2>&1 || {{ echo "failed: could not set the password of the role" >&2; exit 1; }}
         echo "set the password of the role"
       else
-        echo "no password is set: the password was not found (POSTGRES_PASSWORD is empty in this shell, or the file is empty)"
+        echo "no password is set: the password was not found (the variable of the compose file is empty in this shell, or the file is empty)"
       fi
       [[end]]echo "done"
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
