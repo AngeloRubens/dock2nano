@@ -808,6 +808,12 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		if out, ok := r.procRead(ctx, id, "working directory", []string{"readlink", base + "cwd"}); ok {
 			cwd = strings.TrimSpace(string(out))
 		}
+		// The program may change its directory while it runs (rr goes to the folder of its config):
+		// /proc says where it is now, and the package starts it where it started.
+		if dir := trace.CwdAtExec(raw, startDir, final.Line); dir != "" && dir != cwd {
+			r.vlogf("the program started in %s and is in %s now; %s is used\n", dir, cwd, dir)
+			cwd = dir
+		}
 		if out, ok := r.procRead(ctx, id, "executable", []string{"readlink", base + "exe"}); ok {
 			exe = strings.TrimSpace(string(out))
 		}
@@ -1091,7 +1097,7 @@ func passwdHome(data []byte, name string) string {
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Split(line, ":")
-		if len(f) < 6 || f[0] != name || strings.HasPrefix(f[0], "#") {
+		if len(f) < 6 || strings.HasPrefix(f[0], "#") || f[0] != name {
 			continue
 		}
 		if h := strings.TrimSpace(f[5]); strings.HasPrefix(h, "/") {
@@ -1620,7 +1626,13 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	// place puts what link leads to under name: a link with the text it had, or a copy
 	place := func(link, name string) error {
 		if text, ok := relative[name]; ok {
-			return trace.LinkHostFile(sysroot, text, name)
+			err := trace.LinkHostFile(sysroot, text, name)
+			var clash *trace.LinkConflict
+			if errors.As(err, &clash) {
+				r.warnOnce(r.redact(NoteNotCarried + name + ": " + clash.Error()))
+				return nil
+			}
+			return err
 		}
 		return trace.CopyHostFile(sysroot, link, name)
 	}

@@ -1657,10 +1657,21 @@ func TestPassedOverInitIsNamedAndExplained(t *testing.T) {
 	o := in.Services["web"].Observed
 	o.PassedOver = []string{"tini"}
 	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (tini)")
+	// an init alone is not a launcher: the npm wording is not added for it
+	wantNone(t, mustGen(t, in), "web", plan.Note, "launcher passed over")
 	o.PassedOver = []string{"dumb-init", "sh -c"}
 	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (dumb-init)")
+	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "sh -c (outermost first)")
+	wantNoText(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "dumb-init")
 	o.PassedOver = []string{`npm (script "start")`}
 	wantNoText(t, mustGen(t, in), "web", plan.Note, "init passed over", "init")
+}
+
+func TestAnInitThatStaysTheProgramIsReported(t *testing.T) {
+	in, _ := launcherInput(t, "/sbin/tini", []string{"/sbin/tini", "--", "a"}, "")
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "init kept", "the program is an init (tini)")
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "init kept")
 }
 
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {

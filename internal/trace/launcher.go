@@ -268,9 +268,6 @@ func launcherLabel(name string, rest []string) string {
 var supervisors = map[string]bool{
 	"nodemon": true, "ts-node-dev": true, "node-dev": true, "pm2-runtime": true, "pm2": true,
 	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
-	// process supervisors of images (found in the bin directories): they start each service of the
-	// image as a child process
-	"s6-svscan": true, "runsvdir": true, "supervisord": true,
 }
 
 // ProcessSupervisors are the supervisors that start every service of the image, not one program.
@@ -281,6 +278,21 @@ var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsvdir": true, "s
 // run by node or itself), and gives its
 // name, or "" when it is not. Nothing is passed over for it: it is only named.
 func Supervisor(program string, argv []string) string {
+	// A process supervisor is told by its file name, wherever it is: s6-overlay puts it in
+	// /command, runit in /sbin or /usr/sbin, and supervisord is a script that python runs (the
+	// program is then the interpreter and the script is the first argument).
+	names := []string{program}
+	if len(argv) > 0 {
+		names = append(names, argv[0])
+	}
+	if len(argv) > 1 && strings.HasPrefix(argv[1], "/") {
+		names = append(names, argv[1])
+	}
+	for _, n := range names {
+		if b := path.Base(n); ProcessSupervisors[b] {
+			return b
+		}
+	}
 	files := []string{program}
 	if interp, args := interpreterOf(program, argv); interp == "node" || interp == "nodejs" {
 		files = nil

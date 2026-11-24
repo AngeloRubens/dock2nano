@@ -874,6 +874,10 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	launcher := g.launcherNote(s, obs)
 	g.passedOverNote(s, obs)
 	supervisor := g.supervisorNote(s, obs)
+	if trace.IsInit(obs.Program) {
+		g.add(s.Name, plan.Unsupported, "init kept", fmt.Sprintf("the program is an init (%s): the observation did not find exactly one program that it started and that was still running, so the init was kept. An init starts its program as a child process, which nanos cannot do, so the package may not start. Run the program the init starts directly: command: in the compose file, or --command SERVICE=CMD with the entrypoint of the image removed (entrypoint: [] in the compose file)", path.Base(obs.Program)))
+		supervisor = true
+	}
 	g.childLauncherNote(s, obs, supervisor)
 	if obs.Children > 0 {
 		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
@@ -1100,8 +1104,14 @@ func firstArg(argv []string) string {
 // the program or beside it and are not run by the package.
 func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	const where = "Read the original commands in the CMD or ENTRYPOINT of the Dockerfile and in the scripts of package.json"
-	if len(obs.PassedOver) > 0 {
-		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(obs.PassedOver), ", then "), where))
+	var passed []string
+	for _, l := range obs.PassedOver {
+		if !trace.IsInit(l) {
+			passed = append(passed, l)
+		}
+	}
+	if len(passed) > 0 {
+		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(passed), ", then "), where))
 	}
 	for _, l := range obs.PassedOver {
 		if trace.IsInit(l) {
@@ -1167,8 +1177,7 @@ func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result, s
 		return
 	}
 	who := "the program, a script of the image or an init,"
-	switch path.Base(obs.Program) {
-	case "tini", "tini-static", "dumb-init":
+	if trace.IsInit(obs.Program) {
 		supervisor = true
 	}
 	if supervisor {

@@ -564,7 +564,8 @@ func TestObserveSuccess(t *testing.T) {
 		}
 		equal(t, "mode of "+name, st.Mode().Perm(), want)
 	}
-	equal(t, "working dir", res.WorkingDir, "/srv")
+	// /proc says /srv, where the program is when it is read; it started in /app, the directory of the image
+	equal(t, "working dir", res.WorkingDir, "/app")
 	equal(t, "configuration files", res.ConfigurationFiles, []string{"/etc/app.conf"})
 	equal(t, "image", res.Image, s.d.cfg)
 	equal(t, "exposed ports", res.ExposedPorts, []int(nil))
@@ -2524,7 +2525,7 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 		`the image runs as "4294967296", which is not a uid; it was observed as root`,
 	})
 
-	// a name that holds digits is a name
+	// a name that holds digits is a name (a regression guard: it passes without the lookup of names too)
 	s := newScene(t)
 	s.d.cfg.User = "12ab"
 	res, err := s.observe(t, context.Background())
@@ -3562,4 +3563,28 @@ func TestObserveFileOpenedThroughALinkedDirectoryKeepsTheLink(t *testing.T) {
 			t.Errorf("%s: %v", f, err)
 		}
 	}
+}
+
+// rr (shlink) starts in /etc/shlink and goes to the folder of its config: the package has to start
+// it where it started, or it resolves its relative config path from the wrong place.
+func TestObserveWorkingDirectoryIsWhereTheProgramStartedNotWhereItEnded(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.WorkingDir = "/etc/shlink"
+	s.d.traceTxt = `10 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+10 execve("./bin/rr", ["./bin/rr", "serve", "-c", "config/roadrunner/.rr.yml"], 0x7ffd /* 4 vars */) = 0
+10 chdir("/etc/shlink/config/roadrunner") = 0
+10 openat(AT_FDCWD, ".rr.yml", O_RDONLY) = 3
+`
+	s.d.exec["cat /proc/10/cmdline"] = "./bin/rr\x00serve\x00-c\x00config/roadrunner/.rr.yml\x00"
+	s.d.exec["cat /proc/10/environ"] = "A=1\x00"
+	s.d.exec["readlink /proc/10/cwd"] = "/etc/shlink/config/roadrunner\n"
+	s.d.exec["readlink /proc/10/exe"] = "/etc/shlink/bin/rr\n"
+	s.d.exec["cat /proc/10/status"] = statusText(999, 999)
+	s.d.files["/etc/shlink/bin/rr"] = entry{data: "rr", mode: 0755}
+	s.d.files["/etc/shlink/config/roadrunner/.rr.yml"] = entry{data: "x"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "working dir", res.WorkingDir, "/etc/shlink")
 }

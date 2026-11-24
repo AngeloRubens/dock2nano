@@ -259,6 +259,16 @@ func CreatedPaths(trace []byte, workingDir string, from int) []string {
 
 type scanned struct {
 	paths, executed, created []string
+	// execCwd is the working directory of the process on each line of an execve, before it
+	execCwd map[int]string
+}
+
+// CwdAtExec is the working directory the process had on the trace line of its execve (counted from
+// 0), read the way TouchedPaths reads it, starting from workingDir. It is "" when that is not
+// known (a fchdir came before) or when the line is not an execve. A program that changes its
+// directory while it runs ends in another one: this is where it started.
+func CwdAtExec(trace []byte, workingDir string, line int) string {
+	return scan(trace, workingDir, 0).execCwd[line]
 }
 
 // openFlags gives the flags of an open, openat or openat2 call, from the text after the path.
@@ -285,6 +295,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 	waitingExec := map[string]string{}
 	waitingChdir := map[string]string{}
 	active := ""
+	execCwd := map[int]string{}
 
 	for i, line := range strings.Split(string(trace), "\n") {
 		collect := i >= from
@@ -394,6 +405,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 
 		switch call[1] {
 		case "execve":
+			execCwd[i] = cwd[pid]
 			if collect {
 				ran[name]++
 				if unfinished {
@@ -421,7 +433,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		}
 	}
 
-	var r scanned
+	r := scanned{execCwd: execCwd}
 	for p, n := range ran {
 		if n > 0 {
 			seen[p] = true
@@ -809,7 +821,14 @@ func parseArgv(after string) []string {
 var inits = map[string]bool{"tini": true, "tini-static": true, "dumb-init": true, "catatonit": true, "docker-init": true}
 
 // IsInit tells whether the program at p is one of the init wrappers (tini, dumb-init, ...).
-func IsInit(p string) bool { return inits[path.Base(p)] }
+// A file name with the architecture the release names carry (tini-amd64, tini-static-arm64) counts.
+func IsInit(p string) bool {
+	b := path.Base(p)
+	for _, arch := range []string{"-amd64", "-arm64", "-armhf", "-armel", "-i386", "-ppc64le", "-s390x", "-x86_64", "-aarch64"} {
+		b = strings.TrimSuffix(b, arch)
+	}
+	return inits[b]
+}
 
 // FinalExec is the program the image ends up running, chosen among the processes still running when
 // the trace ends (all of them, if none is). Only an execve that succeeded counts: on a single line,
@@ -1027,7 +1046,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// only forked (a $(...) of a shell) did not execute a program and is not a command.
 	if len(recorded) > 0 {
 		var ran []Exec
-		for child, up := range parent {
+		for child := range parent {
+			up := starter(child)
 			if !onChain[up] || !gone[child] || len(history[child]) == 0 {
 				continue
 			}
@@ -1045,8 +1065,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// A program that started a launcher: a script of the image that runs npm (the kernel runs the
 	// interpreter of a script within the same execve, so a script is not known to be one and stays
 	// the program), or a program that runs a launcher itself.
-	for child, up := range parent {
-		if up != finalPid || child == finalPid {
+	for child := range parent {
+		if starter(child) != finalPid || child == finalPid {
 			continue
 		}
 		for _, e := range history[child] {
@@ -1109,6 +1129,24 @@ func ConfigurationFiles(sysroot string) []string {
 	return found
 }
 
+// LinkConflict is returned by LinkHostFile when the directory that files opened through the link
+// left cannot be merged into the directory the link leads to, because one of them holds a file where
+// the other holds a directory. Nothing was moved and the directory is still there; the link is not
+// made.
+type LinkConflict struct {
+	Name, Path string
+}
+
+func (c *LinkConflict) Error() string {
+	return "the directory " + c.Name + " and the one its link leads to disagree on what " + c.Path + " is (a file or a directory); the directory was kept and the link was not made"
+}
+
+// within says whether p is below root (not root itself). Both are clean, real paths.
+func within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // LinkHostFile makes a symbolic link with the text it had at name in sysroot, unless something is
 // there already. The text is relative, so it leads to the same file from the new place as it did in
 // the image, provided that file was carried.
@@ -1118,25 +1156,41 @@ func ConfigurationFiles(sysroot string) []string {
 // ../.pnpm/x/node_modules/x, makes a directory x with a.js in it, and the program then finds its
 // other files (dist/b.js) beside a.js only through the link. What the directory holds is moved
 // into the directory the link leads to (where it is not there already) and the link takes its place.
+// Links that are in the sysroot already are followed to where they really lead, and nothing is
+// touched unless both directories are really below sysroot (an image may have a link that goes
+// out through /.., which on this machine is not the root of the image). The first error is a
+// *LinkConflict when a file and a directory meet; nothing has been moved then.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
 	if info, err := os.Lstat(destination); err == nil {
 		if !info.IsDir() {
 			return nil
 		}
-		target := filepath.Join(filepath.Dir(destination), text)
-		if rel, err := filepath.Rel(sysroot, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		root, err := filepath.EvalSymlinks(sysroot)
+		if err != nil {
+			return nil
+		}
+		realDir, err := filepath.EvalSymlinks(destination)
+		if err != nil || !within(root, realDir) {
+			return nil
+		}
+		target, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(realDir), text))
+		if err != nil || !within(root, target) || target == realDir || within(realDir, target) || within(target, realDir) {
 			return nil
 		}
 		if ti, err := os.Stat(target); err != nil || !ti.IsDir() {
 			return nil
 		}
-		if err := mergeInto(destination, target); err != nil {
+		if clash := mergeClash(realDir, target); clash != "" {
+			return &LinkConflict{Name: name, Path: clash}
+		}
+		if err := mergeInto(realDir, target); err != nil {
 			return fmt.Errorf("link %s: %w", destination, err)
 		}
-		if err := os.RemoveAll(destination); err != nil {
+		if err := os.RemoveAll(realDir); err != nil {
 			return fmt.Errorf("link %s: %w", destination, err)
 		}
+		destination = realDir
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return fmt.Errorf("link %s: %w", destination, err)
@@ -1147,8 +1201,33 @@ func LinkHostFile(sysroot string, text string, name string) error {
 	return nil
 }
 
+// mergeClash gives the first path (relative to from) where from holds a directory and into holds
+// something that is not one, or the other way round, or "" when there is none.
+func mergeClash(from, into string) string {
+	clash := ""
+	filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || clash != "" {
+			return nil
+		}
+		rel, err := filepath.Rel(from, p)
+		if err != nil || rel == "." {
+			return nil
+		}
+		other, err := os.Lstat(filepath.Join(into, rel))
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() != other.IsDir() {
+			clash = filepath.ToSlash(rel)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return clash
+}
+
 // mergeInto moves what is under the directory from into the directory into, keeping what is in
-// into already.
+// into already. A directory made keeps the mode it had. mergeClash has been asked first.
 func mergeInto(from, into string) error {
 	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -1160,7 +1239,14 @@ func mergeInto(from, into string) error {
 		}
 		dst := filepath.Join(into, rel)
 		if d.IsDir() {
-			return os.MkdirAll(dst, 0755)
+			if _, err := os.Lstat(dst); err == nil {
+				return nil
+			}
+			mode := os.FileMode(0755)
+			if info, err := d.Info(); err == nil {
+				mode = info.Mode().Perm()
+			}
+			return os.Mkdir(dst, mode)
 		}
 		if _, err := os.Lstat(dst); err == nil {
 			return nil

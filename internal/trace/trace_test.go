@@ -941,6 +941,18 @@ func TestUnescapeStrace(t *testing.T) {
 	}
 }
 
+func TestIsInit(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/sbin/tini": true, "/usr/bin/dumb-init": true, "/usr/local/bin/tini-static": true, "/tini-amd64": true,
+		"/tini-static-arm64": true, "/usr/bin/catatonit": true, "/sbin/docker-init": true,
+		"/usr/bin/tinyproxy": false, "/app/tini-app": false, "/bin/sh": false,
+	} {
+		if got := IsInit(p); got != want {
+			t.Errorf("IsInit(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 func TestFinalExec(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -990,7 +1002,7 @@ func TestFinalExec(t *testing.T) {
 6     clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 8
 8     execve("/usr/local/bin/php", ["php", "worker.php"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "1", Path: "./bin/rr", Argv: []string{"./bin/rr", "serve"}, Line: 1}, true},
-		{"tini with two running children stays", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
+		{"guard, passes without the init change too: tini with two running children stays", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
