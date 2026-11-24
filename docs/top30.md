@@ -45,20 +45,23 @@ Columns: service name (the --name of the conversion), repository, commit (the de
 | linkwarden | linkwarden/linkwarden | 24adcc146ba3 | Dockerfile | 3000 | http | web app that needs a database (Node) | needs a PostgreSQL database and a secret: expected start or first-request failure without them |
 | reactive-resume | reactive-resume/reactive-resume | 897bcf8e740a | Dockerfile | 3000 | tcp | web app that needs a database (Node) | needs a PostgreSQL database and secrets: expected failure without them; probe is TCP 3000 |
 
-Base of the branch: feat/modules at 35e8082 (the --dockerfile mode is in this branch and not in main).
+Base of the branch: check/top30 is feat/barenames at 5677ee9 (which contains feat/modules at 35e8082, the --dockerfile mode) plus the workflow and this file. The tool is built in each job from that checkout.
 
 ## Method
 
-The workflow is .github/workflows/top30.yml on branch check/top30 (fork AngeloRubens/dock2nano). It has one job per row, fail-fast off, and runs on a push to a check/** branch and by hand. Each job:
+The workflow is .github/workflows/top30.yml on branch check/top30 (fork AngeloRubens/dock2nano). It has one job per row, fail-fast off, and runs on a push to a check/** branch and by hand. Each job prints its commits: "ROW dock2nano commit" (the checkout) and "ROW ops commit" (the ops build).
 
-1. Installs ops from source at 2177c549 and the nightly nanos kernel, as compose-up.yml does (qemu, no KVM).
-2. Fetches the repository at the pinned commit with depth 1, unmodified.
-3. Builds the image with docker build (timed), in the job.
-4. Converts it with dock2nano: convert --dockerfile Dockerfile --context . --name SERVICE --pull --seconds 90. Conversion is not run when the docker build fails.
-5. Runs ops compose up on the compose.yaml that dock2nano wrote, up to three tries as in compose-up.yml.
-6. Waits 60 seconds, reads the address of the instance from ops instance logs, and probes the port with the strict probe of compose-up.yml: 24 tries, 10 seconds apart; 2xx or 3xx, or an open TCP port, is green; 4xx and 5xx are "reached, not a success"; no answer is red. The codes of the tries are printed.
+Ops: built from nanovms/ops 2177c549df3fab2662d6386042c74bec859275bd, the pin of compose-up.yml, with the nightly nanos kernel copied in as compose-up.yml does. The fork branches feat/from-docker-trace and feat/from-dockerfile (AngeloRubens/ops) are not on top of that pin (diverged: 10 behind and 10 ahead, and 10 behind and 94 ahead), and the tool does not call from-docker: it observes with its own code (internal/observe, through docker), so no fork build is used.
 
-Every job prints lines that start with ROW. Those lines are the record of the table: ROW docker_build, ROW convert_exit, ROW report lines (what the report says is not converted), ROW compose_up, ROW address, ROW codes of the tries, ROW probe, and ROW result. A row that fails prints its first error line as ROW first error.
+Each row, following the instructions of the tool and of docs/ only:
 
-Rules followed: no Dockerfile edited, no retry of the tuning (no --command, --with, --exercise flags, no environment given), one row run at most extra and only for a CI infrastructure failure (the number of extra runs is stated in the results).
+1. Clones the repository at the pinned commit into a directory named after the row, so that the default name of the conversion (the name of the context directory) is the row name. Nothing is edited.
+2. Builds the image with docker build (timed in the job; the conversion builds it again).
+3. Runs convert --dockerfile PATH -o DIR --ops-home OPS_HOME --pull, the flags of the usage text. The default observation time (30 seconds) is used; no --command, --with, --exercise or --name flag.
+4. Runs the printed next-step lines exactly as printed: the ops pkg get line (once), then the ops compose up line. docs/limits.md says ops compose up needs retries, so up to three tries are made, with ops compose down between them.
+5. Runs each printed post-up command ("then, once X is up: ...") as printed, if the report prints one.
+6. Waits 60 seconds, reads the address from ops instance logs, and probes with the strict probe of compose-up.yml: 24 tries, 10 seconds apart; 2xx or 3xx, or an open TCP port, is green; 4xx and 5xx are "reached, not a success"; no answer is red.
 
+Every job prints lines that start with ROW: the record of the table. A failed row prints its first error line as "ROW first error".
+
+Rules: no Dockerfile edited, no environment given, no retry of the tuning. Extra row runs: none so far (stated in the results).

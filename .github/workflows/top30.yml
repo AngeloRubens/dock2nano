@@ -80,7 +80,7 @@ jobs:
           done
           sudo install /tmp/ops /usr/local/bin/ops
           ops pkg get eyberg/ops-dns:0.0.1
-      - name: the row (source, docker build, convert, compose up, probe)
+      - name: the row (source, docker build, convert, the printed commands, probe)
         env:
           NAME: ${{ matrix.name }}
           REPO: ${{ matrix.repo }}
@@ -91,35 +91,38 @@ jobs:
           set -u
           R=/tmp/out/$NAME
           mkdir -p "$R"
-          srcok=no; bld=not-run; conv=no; started=no; probe=not-run
+          srcok=no; bld=not-run; conv=no; started=no; probe=not-run; upn=0
           finish() {
-            echo "ROW result name=$NAME source=$srcok docker_build=$bld converted=$conv started=$started probe=$probe"
+            echo "ROW result name=$NAME source=$srcok docker_build=$bld converted=$conv started=$started probe=$probe ops=$(git -C /tmp/ops-src rev-parse --short HEAD 2>/dev/null) dock2nano=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)"
           }
           trap finish EXIT
           echo "ROW name=$NAME repo=$REPO sha=$SHA port=$PORT probe=$KIND"
-          
-          # 1. the source at the pinned commit, unmodified
-          rm -rf /tmp/src && mkdir -p /tmp/src && cd /tmp/src
+          echo "ROW dock2nano commit: $(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          echo "ROW ops commit: $(git -C /tmp/ops-src rev-parse HEAD)"
+
+          # 1. the source at the pinned commit, unmodified. The directory is named after the row, so the
+          # default name of the conversion (the name of the context directory) is the row name.
+          rm -rf "/tmp/w/$NAME" && mkdir -p "/tmp/w/$NAME" && cd "/tmp/w/$NAME"
           git init -q && git remote add origin "https://github.com/$REPO.git"
           if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
             srcok=yes; echo "ROW source=ok $(git log --oneline -1 | cut -c1-100)"
-            echo "ROW dockerfile: $(ls -la /tmp/src/Dockerfile | cut -c1-120)"
           else
             echo "ROW source=fail: git fetch or checkout of $SHA"; exit 1
           fi
-          
-          # 2. build with docker (the image is built by hand to time it; the conversion builds it again)
+          [ -f Dockerfile ] || { echo "ROW no Dockerfile at the root"; exit 1; }
+
+          # 2. build with docker (timed here; the conversion builds the image again)
           s=$(date +%s)
-          if docker build -t "top30-$NAME" -f /tmp/src/Dockerfile /tmp/src > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
+          if docker build -t "top30-$NAME" "/tmp/w/$NAME" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
           echo "ROW docker_build=$bld seconds=$(( $(date +%s) - s ))"
           if [ "$bld" = fail ]; then
             echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
             echo "ROW convert not run: the docker build failed"; exit 1
           fi
-          
-          # 3. convert with dock2nano: one Dockerfile as one service
+
+          # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
-          DOCK2NANO_KEEP_TRACE="$R" "$RUNNER_TEMP/d2n" convert --dockerfile /tmp/src/Dockerfile --context /tmp/src --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull --seconds 90 > "$R/report.txt" 2>&1
+          "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
           cexit=$?
           cat "$R/report.txt" | cut -c1-300
           echo "ROW convert_exit=$cexit"
@@ -130,35 +133,43 @@ jobs:
             echo "ROW first error of the conversion: $(grep -i -m1 "error" "$R/report.txt" | cut -c1-300)"
             exit 1
           fi
-          echo "ROW compose.yaml:"; cat "$R/compose/compose.yaml" | cut -c1-200
-          
-          # 4. ops compose up, three tries as in compose-up.yml
-          cd "$R/compose"
+          echo "ROW compose.yaml:"; cut -c1-200 "$R/compose/compose.yaml"
+
+          # 4. the commands that the "Next steps" of the report print, run exactly as printed.
+          # the ops pkg line is "(once, if you do not have it yet)"; the up line is "sudo env ... ops compose up -f ..."
+          pkgcmd=$(grep -m1 "ops pkg get" "$R/report.txt" | sed -e 's/^ *//' -e 's/ *(once.*$//')
+          echo "ROW printed pkg command: $pkgcmd"
+          [ -n "$pkgcmd" ] && eval "$pkgcmd" 2>&1 | tail -2
+          upcmd=$(grep -m1 "ops compose up -f" "$R/report.txt" | sed -e 's/^ *//')
+          echo "ROW printed up command: $upcmd"
+          # limits.md documents that ops compose up needs retries (the dns instance can be late): up to three tries
           up_ok=0
           for attempt in 1 2 3; do
-            if sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f "$R/compose/compose.yaml" --show-debug > "$R/up.log" 2>&1; then
-              up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break
-            fi
+            upn=$attempt
+            if eval "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
             echo "ROW compose_up=failed attempt=$attempt"
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
             if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
           done
           if [ "$up_ok" != 1 ]; then
-            echo "ROW first error of ops compose up: $(grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" "$R/up.log" | grep -i -m1 "error\|fail\|fatal\|timeout" | cut -c1-300)"
+            echo "ROW first error of ops compose up: $(grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" "$R/up.log" | grep -i -m1 "error\|fail\|fatal\|timeout\|panic" | cut -c1-300)"
             exit 1
           fi
           started=yes
-          
-          # 5. the strict probe: 2xx or 3xx, or an open TCP port, is the only green
+
+          # 5. post-up scripts: the report says "then, once X is up: <command>", the user runs it; run the printed command
+          grep "then, once" "$R/report.txt" | sed -e 's/^.*is up: //' -e 's/    (ops compose does not run it.*$//' | while IFS= read -r pu; do
+            echo "ROW printed post-up command: $pu"; sleep 30; eval "$pu" 2>&1 | tail -5
+          done
+
+          # 6. the strict probe: 2xx or 3xx, or an open TCP port, is the only green
           sleep 60
           sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
           sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" | tail -1 | awk '{print $2}')
           echo "ROW address=${ip:-none}"
-          if [ -z "$ip" ]; then
-            probe=no-address; echo "ROW probe=no-address"; exit 1
-          fi
+          if [ -z "$ip" ]; then probe=no-address; echo "ROW probe=no-address"; exit 1; fi
           codes=""; code=""
           for i in $(seq 1 24); do
             if [ "$KIND" = http ]; then
@@ -184,7 +195,7 @@ jobs:
           echo "ROW probe=$probe"
           if [ "$KIND" = http ]; then head -c 300 "$R/body.last.txt" 2>/dev/null; echo; fi
           echo "=== console of $NAME, last 25 lines"; tail -25 "$R/console.txt" | cut -c1-250
-          if [ "$probe" = success ]; then exit 0; fi
+          [ "$probe" = success ] && exit 0
           exit 1
       - name: down
         if: always()
