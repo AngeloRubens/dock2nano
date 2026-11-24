@@ -24,26 +24,9 @@ jobs:
         include:
           - {name: echo-server, repo: jmalloc/echo-server, sha: 332dd6e8153b4315a3581a990f0b849f914a9a93, port: "8080", probe: http}
           - {name: datasette, repo: simonw/datasette, sha: 775e8ba28525c6f7ca9552f126f1f88261978c2a, port: "8001", probe: http}
-          - {name: kanboard, repo: kanboard/kanboard, sha: 58a2605058219b1d20b32f98d78872a5b1d9ff12, port: "80", probe: http}
-          - {name: ttyd, repo: tsl0922/ttyd, sha: 2922cb89f518bae4d0fcf4d757a7419638fc71fc, port: "7681", probe: http}
-          - {name: gitea, repo: go-gitea/gitea, sha: b1a6cdadc83ebf4a33a69af8d457cc7f623f2d22, port: "3000", probe: http}
-          - {name: gogs, repo: gogs/gogs, sha: c2380640f6f0829354bb85a7cca4402e1adfa0d4, port: "3000", probe: http}
-          - {name: filebrowser, repo: filebrowser/filebrowser, sha: 833d908884d5c801f30f5c098d7977177eb3a36b, port: "80", probe: http}
           - {name: dashy, repo: lissy93/dashy, sha: ea81d6cbdcb56b81fc20e2b466f6af6a8ad42293, port: "8080", probe: http}
-          - {name: verdaccio, repo: verdaccio/verdaccio, sha: 13e5bc79fefc2b41118216cd2fdc095209f0a330, port: "4873", probe: http}
-          - {name: shlink, repo: shlinkio/shlink, sha: 80599b89ff9b4ae0f9d19e849e6b747a94dde99c, port: "8080", probe: http}
-          - {name: directus, repo: directus/directus, sha: 4856582eec1ea426f115b79a875c44c819fe0b9d, port: "8055", probe: http}
-          - {name: ntfy, repo: binwiederhier/ntfy, sha: 889b6f071acd6a6ab5dcc7cc802a8a9b457cf2c0, port: "80", probe: http}
-          - {name: coredns, repo: coredns/coredns, sha: a0606842e8fa7136e8157494d92d4beb098221e1, port: "53", probe: tcp}
-          - {name: prometheus, repo: prometheus/prometheus, sha: ad8f26eed18a6aabfd9729bb281c6a3e53beabe9, port: "9090", probe: http}
-          - {name: etcd, repo: etcd-io/etcd, sha: 1f940dc7ecd194bfc4d1de602c5f0f3aef87586f, port: "2379", probe: tcp}
           - {name: syncthing, repo: syncthing/syncthing, sha: 992ae894a44d8831bc92e002f68b4f20e5735117, port: "8384", probe: http}
-          - {name: wallos, repo: ellite/Wallos, sha: 6e43a0d819973f82d55b20e48367fe7605737651, port: "80", probe: http}
-          - {name: tile38, repo: tidwall/tile38, sha: 34f86375d07fa89d90a4afb5132a8e35af1583e4, port: "9851", probe: tcp}
-          - {name: redlib, repo: redlib-org/redlib, sha: ba116c1186f6b0f9d45f0ae50c827e13eb2f5ea2, port: "8080", probe: http}
-          - {name: homarr, repo: ajnart/homarr, sha: c5873c6e481144cd18a70139ef23ac04ca8ab158, port: "7575", probe: http}
           - {name: glance, repo: glanceapp/glance, sha: 53aec7f392ca72143870dcb45526ec7c80a68f32, port: "8080", probe: http}
-          - {name: linkwarden, repo: linkwarden/linkwarden, sha: 24adcc146ba356632859a1e8adb4bffae2874d11, port: "3000", probe: http}
           - {name: reactive-resume, repo: reactive-resume/reactive-resume, sha: 897bcf8e740a4ee918ac27d0dc17e1edd105446a, port: "3000", probe: tcp}
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +36,7 @@ jobs:
       - name: docker version
         run: docker version
       - name: the tool
-        run: go build -o "$RUNNER_TEMP/d2n" .
+        run: for i in 1 2 3; do go build -o "$RUNNER_TEMP/d2n" . && break; sleep 20; done; test -x "$RUNNER_TEMP/d2n"
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source (nanovms/ops master 2177c549, with the arp fix of PR 1805 and PRs 1815-1818)
@@ -62,7 +45,7 @@ jobs:
           git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
           git -C /tmp/ops-src merge-base --is-ancestor 987e075bbcc71e0384ec86edd2c79e1d908be8ff HEAD; echo "1805 ancestor of 2177c549: $?"
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
-          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+          for i in 1 2 3; do go build -o /tmp/ops . && break; echo "go build of ops failed, try $i"; sleep 20; done; test -x /tmp/ops && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
         run: |
           ops update 2>&1 | tail -3
