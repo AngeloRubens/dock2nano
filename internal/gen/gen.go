@@ -1102,8 +1102,7 @@ func firstArg(argv []string) string {
 func passedLauncher(labels []string) bool {
 	for _, l := range labels {
 		name, _, _ := strings.Cut(l, " ")
-		switch name {
-		case "npm", "npx", "yarn", "yarnpkg", "pnpm", "pnpx", "corepack":
+		if trace.IsLauncherName(name) {
 			return true
 		}
 	}

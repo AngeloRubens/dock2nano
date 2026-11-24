@@ -56,7 +56,7 @@ func TestCwdAtExec(t *testing.T) {
 		{"a line that is not an execve", `1     chdir("/w") = 0
 1     openat(AT_FDCWD, "/etc/x", O_RDONLY) = 3
 `, "openat", "/", ""},
-		// the real thing, strace 5.16: a thread of the leader changes directory, a vfork child of another
+		// modelled on strace 5.16 (the fixture is written by hand): a thread of the leader changes directory, a vfork child of another
 		// thread executes: all of them share the directory
 		{"a thread and its leader share the directory", `1     execve("/bin/sh", ["sh"], 0x1 /* 1 var */) = 0
 1     clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS, child_tid=0x7f, tls=0x7f}, 88) = 5
@@ -71,6 +71,22 @@ func TestCwdAtExec(t *testing.T) {
 1     chdir("/shared") = 0
 5     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
 `, "/bin/a", "/app", "/shared"},
+		{"a child seen before the resumed line of its clone with CLONE_FS keeps its chdir", `1     clone(child_stack=0x1, flags=CLONE_VM|CLONE_FS|SIGCHLD <unfinished ...>
+7     chdir("/tmp") = 0
+1     <... clone resumed>, tls=0x1) = 7
+1     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+`, "/bin/a", "/app", "/tmp"},
+		{"a child seen first while another process was active copies its parent", `1     chdir("/data") = 0
+9     chdir("/other") = 0
+1     clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+9     chdir("/elsewhere") = 0
+7     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+1     <... clone resumed>) = 7
+`, `execve("/bin/a"`, "/", "/data"},
+		{"a thread made without CLONE_FS has its own copy of the directory", `1     clone(child_stack=0x1, flags=CLONE_VM|CLONE_SIGHAND|CLONE_THREAD|SIGCHLD) = 5
+5     chdir("/threaddir") = 0
+1     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+`, "/bin/a", "/app", "/app"},
 		{"a thread that execs under the pid of the leader", `7     chdir("/srv") = 0
 7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
 8     chdir("/other") = 0

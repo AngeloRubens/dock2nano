@@ -21,6 +21,7 @@ package trace
 
 import (
 	"debug/elf"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -296,9 +297,11 @@ func (c cwdSet) share(child, parent string) {
 	c[child] = c[parent]
 }
 
-// sharesDirectory tells whether a clone call shares the working directory with its parent: a
-// thread does, and so does a clone with CLONE_FS.
-var sharesDirectory = regexp.MustCompile(`\bCLONE_(THREAD|FS)\b`)
+// sharesDirectory tells whether a clone call shares the working directory with its parent: only a
+// clone with CLONE_FS does (a thread made without it has a copy, as in the kernel). Not modelled:
+// unshare(CLONE_FS), which ends the sharing later, and chroot and setns, which change what a path
+// is read against.
+var sharesDirectory = regexp.MustCompile(`\bCLONE_FS\b`)
 
 // cloneStart matches a clone call that strace cut in two, on its first line.
 var cloneStart = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:clone3?|fork|vfork)\(.*<unfinished \.\.\.>`)
@@ -344,6 +347,10 @@ func scan(trace []byte, workingDir string, from int) scanned {
 	ran := map[string]int{}
 	cwd := cwdSet{}
 	pendingShare := map[string]bool{}
+	// the processes whose clone call was cut in two and is not finished: strace often writes the first
+	// line of the child before the resumed line of the parent
+	var cloning []string
+	chdirDone := map[string]bool{}
 	waitingExec := map[string]string{}
 	waitingChdir := map[string]string{}
 	active := ""
@@ -357,8 +364,16 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		}
 		pid := prefix[1] + prefix[2]
 		if !cwd.has(pid) {
-			if active != "" {
-				cwd.copyOf(pid, active)
+			parent := active
+			for k := len(cloning) - 1; k >= 0; k-- {
+				if cloning[k] != pid {
+					// a process seen for the first time while a clone is open is its child
+					parent = cloning[k]
+					break
+				}
+			}
+			if parent != "" {
+				cwd.copyOf(pid, parent)
 			} else {
 				cwd.set(pid, workingDir)
 			}
@@ -368,6 +383,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 
 		if cs := cloneStart.FindStringSubmatch(line); cs != nil {
 			pendingShare[pid] = sharesDirectory.MatchString(line)
+			cloning = append(cloning, pid)
 		}
 		if child := forkLine.FindStringSubmatch(line); child != nil {
 			shared := sharesDirectory.MatchString(line)
@@ -375,7 +391,20 @@ func scan(trace []byte, workingDir string, from int) scanned {
 				shared = pendingShare[pid]
 			}
 			delete(pendingShare, pid)
+			if strings.Contains(line, "<... ") {
+				for k := len(cloning) - 1; k >= 0; k-- {
+					if cloning[k] == pid {
+						cloning = append(cloning[:k], cloning[k+1:]...)
+						break
+					}
+				}
+			}
 			if shared {
+				if cwd.has(child[3]) && chdirDone[child[3]] {
+					// the child changed directory before the line that says it was made: it is the
+					// directory of both
+					cwd.set(pid, cwd.get(child[3]))
+				}
 				cwd.share(child[3], pid)
 			} else if !cwd.has(child[3]) {
 				cwd.copyOf(child[3], pid)
@@ -418,6 +447,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 					delete(waitingChdir, pid)
 					if found && result == "0" {
 						cwd.set(pid, dir)
+						chdirDone[pid] = true
 					}
 				}
 			}
@@ -435,6 +465,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 				waitingChdir[pid] = ""
 			} else if result, found := ResultOf(args); found && result == "0" {
 				cwd.set(pid, "")
+				chdirDone[pid] = true
 			}
 			continue
 		}
@@ -484,6 +515,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 				waitingChdir[pid] = name
 			} else {
 				cwd.set(pid, name)
+				chdirDone[pid] = true
 			}
 		case "creat":
 			note(seen)
@@ -567,6 +599,9 @@ func IsConsoleLink(p string) bool {
 // opening a log that was a link to the console works. A failure is returned, with the path it
 // happened on.
 func CarryConsoleLink(sysroot string, name string) error {
+	if !InsideSysroot(sysroot, filepath.Join(sysroot, name)) {
+		return &LinkSkipped{name, "it is, through a link of the image, outside the package"}
+	}
 	if err := os.MkdirAll(filepath.Join(sysroot, path.Dir(name)), 0755); err != nil {
 		return fmt.Errorf("carry console link %s: %w", name, err)
 	}
@@ -598,9 +633,12 @@ func CopyHostFile(sysroot string, from string, to string) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
+	if !InsideSysroot(sysroot, source) {
+		return &LinkSkipped{to, "what it copies (" + from + ") is, through a link of the image, outside the package"}
+	}
 	info, err := os.Stat(source)
 	if err != nil {
-		return fmt.Errorf("copy %s: %w", source, err)
+		return fmt.Errorf("copy %s: %w", scrub(sysroot, source), err)
 	}
 	if !parentInside(sysroot, filepath.Dir(destination)) {
 		return &LinkSkipped{to, "its directory is, through a link of the image, outside the package"}
@@ -890,7 +928,7 @@ func parseArgv(after string) []string {
 // initName is the file name of an init: tini, tini-static, dumb-init, catatonit, docker-init, with
 // the architecture of a release (tini-amd64, tini-static-arm64) or its version and architecture
 // (dumb-init_1.2.5_x86_64).
-var initName = regexp.MustCompile(`^(?:tini|tini-static|dumb-init|catatonit|docker-init)(?:_[0-9][0-9.]*)?(?:[-_](?:amd64|arm64|armhf|armel|i386|ppc64le|s390x|x86_64|aarch64))?$`)
+var initName = regexp.MustCompile(`^(?:tini|tini-static|dumb-init|catatonit|docker-init)(?:_[0-9][0-9.]*)?(?:[-_](?:amd64|arm64|armhf|armel|i386|ppc64le|ppc64el|s390x|x86_64|aarch64|mips|mipsel|mips64el|riscv64))?$`)
 
 // IsInit tells whether the program at p is one of the init wrappers (tini, dumb-init, ...).
 func IsInit(p string) bool { return initName.MatchString(path.Base(p)) }
@@ -1214,23 +1252,54 @@ func within(root, p string) bool {
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// parentInside says whether the directory dir, or the nearest directory of it that exists, is the
-// sysroot or below it once the links already in the sysroot are followed: an image may have a link
-// that goes out through /.., which on this machine is not the root of the image.
-func parentInside(sysroot, dir string) bool {
+// resolveNearest resolves the links of p as far as p exists: the nearest directory of it that exists
+// is resolved, and the part that does not exist yet is added to it.
+func resolveNearest(p string) (string, error) {
+	rest := ""
+	for d := p; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			resolved, err := filepath.EvalSymlinks(d)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(resolved, rest), nil
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
+		if filepath.Dir(d) == d {
+			return "", fmt.Errorf("no part of %s exists", p)
+		}
+	}
+}
+
+// InsideSysroot says whether p, with the links already in the sysroot followed as far as p exists,
+// is the sysroot or below it. An image may have a link that goes out through /.., which on this
+// machine is not the root of the image: a file written through it would land on this machine.
+func InsideSysroot(sysroot, p string) bool {
 	root, err := filepath.EvalSymlinks(sysroot)
 	if err != nil {
 		return false
 	}
-	for d := dir; ; d = filepath.Dir(d) {
-		if _, err := os.Lstat(d); err == nil {
-			resolved, err := filepath.EvalSymlinks(d)
-			return err == nil && (resolved == root || within(root, resolved))
-		}
-		if filepath.Dir(d) == d {
-			return false
-		}
+	resolved, err := resolveNearest(p)
+	return err == nil && (resolved == root || within(root, resolved))
+}
+
+func parentInside(sysroot, dir string) bool { return InsideSysroot(sysroot, dir) }
+
+func mustResolve(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
 	}
+	return p
+}
+
+// scrub takes the path of the sysroot out of the text of an error: the report names paths of the
+// image, not of this machine.
+func scrub(sysroot, text string) string {
+	for _, root := range []string{mustResolve(sysroot), sysroot} {
+		text = strings.ReplaceAll(text, root+string(filepath.Separator), "/")
+		text = strings.ReplaceAll(text, root, "/")
+	}
+	return text
 }
 
 // LinkHostFile makes a symbolic link with the text it had at name in sysroot, unless something is
@@ -1253,18 +1322,18 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		}
 		root, err := filepath.EvalSymlinks(sysroot)
 		if err != nil {
-			return &LinkSkipped{name, "the sysroot cannot be resolved: " + err.Error()}
+			return &LinkSkipped{name, "the sysroot cannot be resolved: " + scrub(sysroot, err.Error())}
 		}
 		realDir, err := filepath.EvalSymlinks(destination)
 		if err != nil {
-			return &LinkSkipped{name, "the directory cannot be resolved: " + err.Error()}
+			return &LinkSkipped{name, "the directory cannot be resolved: " + scrub(sysroot, err.Error())}
 		}
 		if !within(root, realDir) {
-			return &LinkSkipped{name, "the directory is, through a link of the image, outside the package (" + realDir + ")"}
+			return &LinkSkipped{name, "the directory is, through a link of the image, outside the package"}
 		}
 		target, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(realDir), text))
 		if err != nil {
-			return &LinkSkipped{name, "what the link leads to (" + text + ") is not in the package: " + err.Error()}
+			return &LinkSkipped{name, "what the link leads to (" + text + ") is not in the package: " + scrub(sysroot, err.Error())}
 		}
 		if !within(root, target) {
 			return &LinkSkipped{name, "the link leads outside the package (" + text + ")"}
@@ -1279,14 +1348,27 @@ func LinkHostFile(sysroot string, text string, name string) error {
 			return &LinkSkipped{name, "the directory and the one its link leads to disagree on what " + clash + " is (a file or a directory); the directory was kept and the link was not made"}
 		}
 		if err := mergeInto(realDir, target); err != nil {
-			return &LinkSkipped{name, "the files could not be moved to the directory the link leads to, and were put back: " + err.Error()}
+			why := "the files could not be moved to the directory the link leads to: " + scrub(sysroot, err.Error())
+			var me *mergeError
+			if errors.As(err, &me) && len(me.unrestored) > 0 {
+				why += "; these files could not be put back and are in the directory the link leads to: " + scrub(sysroot, strings.Join(me.unrestored, ", "))
+			} else {
+				why += "; what was moved was put back"
+			}
+			return &LinkSkipped{name, why}
 		}
 		if err := os.RemoveAll(realDir); err != nil {
 			return fmt.Errorf("link %s: %w", destination, err)
 		}
 		destination = realDir
-	} else if !parentInside(sysroot, filepath.Dir(destination)) {
-		return &LinkSkipped{name, "its directory is, through a link of the image, outside the package"}
+	} else {
+		if !parentInside(sysroot, filepath.Dir(destination)) {
+			return &LinkSkipped{name, "its directory is, through a link of the image, outside the package"}
+		}
+		// the link must not lead out of the sysroot either: a writer that follows it would write on this machine
+		if dir, err := resolveNearest(filepath.Dir(destination)); err != nil || !InsideSysroot(sysroot, filepath.Join(dir, text)) {
+			return &LinkSkipped{name, "the link would lead out of the package (" + text + "), which is a path of this machine there; the link was not made"}
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return fmt.Errorf("link %s: %w", destination, err)
@@ -1322,11 +1404,22 @@ func mergeClash(from, into string) string {
 	return clash
 }
 
+// mergeError is the error of mergeInto when something failed. unrestored are the files that were moved
+// and could not be put back (their names, relative to the directory they came from).
+type mergeError struct {
+	err        error
+	unrestored []string
+}
+
+func (e *mergeError) Error() string { return e.err.Error() }
+func (e *mergeError) Unwrap() error { return e.err }
+
 // mergeInto moves what is under the directory from into the directory into, keeping what is in
 // into already. A directory made keeps the mode it had; it is made writable while the files go in
 // and its mode is set at the end, and the directories of from are made writable too (a directory
-// of mode 0555 cannot be emptied by its owner). If something fails the files are put back and the
-// modes are restored. mergeClash has been asked first.
+// of mode 0555 cannot be emptied by its owner). If something fails the files are put back, the
+// directories made are removed and the modes are restored; a *mergeError names what could not be
+// put back. mergeClash has been asked first.
 func mergeInto(from, into string) (err error) {
 	type dirMode struct {
 		path string
@@ -1342,8 +1435,12 @@ func mergeInto(from, into string) (err error) {
 			}
 			return
 		}
+		me := &mergeError{err: err}
 		for i := len(moved) - 1; i >= 0; i-- {
-			os.Rename(moved[i][1], moved[i][0])
+			if rerr := os.Rename(moved[i][1], moved[i][0]); rerr != nil {
+				rel, _ := filepath.Rel(from, moved[i][0])
+				me.unrestored = append(me.unrestored, filepath.ToSlash(rel))
+			}
 		}
 		for i := len(made) - 1; i >= 0; i-- {
 			os.Remove(made[i].path)
@@ -1351,6 +1448,7 @@ func mergeInto(from, into string) (err error) {
 		for i := len(sources) - 1; i >= 0; i-- {
 			os.Chmod(sources[i].path, sources[i].mode)
 		}
+		err = me
 	}()
 	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

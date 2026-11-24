@@ -1693,6 +1693,14 @@ func TestAnInitThatStaysTheProgramIsReported(t *testing.T) {
 	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "init kept")
 }
 
+func TestPassedLauncherNames(t *testing.T) {
+	for label, want := range map[string]bool{"npm": true, `npm (script "x")`: true, "yarn": true, "pnpm": true, "corepack": true, "sh -c": false, "tini": false, "node": false} {
+		if got := passedLauncher([]string{label}); got != want {
+			t.Errorf("passedLauncher(%q) = %v, want %v", label, got, want)
+		}
+	}
+}
+
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {
 	labels := []string{`npm (script "start")`}
 	in, _ := launcherInput(t, "/entrypoint.sh", []string{"/entrypoint.sh"}, "")

@@ -705,14 +705,14 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	if r.o.User != "" {
 		imageUser = r.o.User
 	}
-	asUser, home, err := r.resolveUser(ctx, image, imageUser)
+	asUser, home, err := r.resolveUser(ctx, image, imageUser, env)
 	if err != nil {
 		return nil, err
 	}
 	// The container starts as root, so docker sets HOME=/root; the program runs as asUser, and is
 	// given the home of that user unless the image or the options say another HOME.
 	createEnv := r.o.Env
-	if asUser != "" && home != "" && !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") }) {
+	if asUser != "" && home != "" && !hasHome(env) {
 		createEnv = append(slices.Clone(r.o.Env), "HOME="+home)
 		r.vlogf("HOME is %s, the home of %s\n", home, asUser)
 	}
@@ -1038,7 +1038,7 @@ func (r *run) writeLocalNames(sysroot string) {
 // The home matters because the traced container starts as root: docker sets HOME to /root, and
 // strace -u does not change it, while a container started as that user has the home of the user
 // (pm2 and many programs write under HOME and fail with EACCES under /root).
-func (r *run) resolveUser(ctx context.Context, image, user string) (name, home string, err error) {
+func (r *run) resolveUser(ctx context.Context, image, user string, env []string) (name, home string, err error) {
 	who, _, _ := strings.Cut(user, ":")
 	if who == "" || who == "root" {
 		return "", "", nil
@@ -1080,7 +1080,7 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 		if isUID {
 			r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
 		}
-		if home == "" {
+		if home == "" && !hasHome(env) {
 			// docker would have given the program the home of its user; here HOME stays /root
 			text := fmt.Sprintf(NoteImageRuns+"%s, whose home directory is not known (%s); HOME was left as the container has it (/root), where that user may not be able to write", name, homeWhy(why))
 			r.warnOnce(r.redact(text))
@@ -1093,6 +1093,11 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 	}
 	r.warnOnce(r.redact(text))
 	return "", "", nil
+}
+
+// hasHome says whether the environment (the image's and the options') sets HOME.
+func hasHome(env []string) bool {
+	return slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") })
 }
 
 // homeWhy says why the home of a user is not known: /etc/passwd could not be read, or has no usable
@@ -1583,11 +1588,17 @@ func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (f
 		return fetched{kind: kindLink, link: hdr.Linkname}, nil
 	case mode.IsDir():
 		stop()
+		if !trace.InsideSysroot(sysroot, target) {
+			return fetched{}, fmt.Errorf("it is, through a link of the image, outside the package")
+		}
 		if err := os.MkdirAll(target, 0755); err != nil {
 			return fetched{}, &hostError{fmt.Errorf("making %s: %w", p, err)}
 		}
 		return fetched{kind: kindDir}, nil
 	case mode.IsRegular():
+		if !trace.InsideSysroot(sysroot, filepath.Dir(target)) {
+			return fetched{}, fmt.Errorf("its directory is, through a link of the image, outside the package")
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fetched{}, &hostError{fmt.Errorf("making the directory of %s: %w", p, err)}
 		}
@@ -1704,7 +1715,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 				// a log that is a link to the console of the container: an empty file takes its
 				// place, so that opening it works
 				for _, name := range names {
-					if err := trace.CarryConsoleLink(sysroot, name); err != nil {
+					if err := skipped(trace.CarryConsoleLink(sysroot, name)); err != nil {
 						return fmt.Errorf("observe: carrying the console link %s: %w", name, err)
 					}
 				}
