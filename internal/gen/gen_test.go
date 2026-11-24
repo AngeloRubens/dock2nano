@@ -2505,7 +2505,7 @@ func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
 	}
 }
 
-func TestNameAtStartOnlyNonResolvingNamesGiveTheEvenSentenceOnce(t *testing.T) {
+func TestRegressionGuardNameAtStartOnlyNonResolvingNamesGiveTheEvenSentenceOnce(t *testing.T) {
 	in := nameInput(map[string]string{"/etc/n.conf": "server My_App:80;\nserver Other_X:81;"}, false, "proxy", "My_App")
 	in.Services["Other_X"] = ServiceInput{Observed: observed("Other_X")}
 	in.Project.Services = append(in.Project.Services, svc("Other_X"))
