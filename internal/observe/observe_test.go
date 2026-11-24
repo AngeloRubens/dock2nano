@@ -704,7 +704,7 @@ func TestObserveUserOfTheImageRunsTheProgram(t *testing.T) {
 		if tc.want[0] == "--" {
 			wrapped = trace.WrapCommandAs(trace.TraceMount, loader, "", []string{"/entry.sh", "--serve"})
 		}
-		got := s.d.creates[1]
+		got := s.d.creates[len(s.d.creates)-1]
 		equal(t, "entrypoint for user "+tc.user, *got.Entrypoint, wrapped)
 		equal(t, "container user for "+tc.user, got.User, "0")
 		if tc.want[0] == "-u" && !strings.Contains(strings.Join(*got.Entrypoint, " "), " -u app -- ") {
