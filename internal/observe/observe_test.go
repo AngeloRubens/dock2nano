@@ -2516,7 +2516,7 @@ func TestPasswdNameSkipsCommentLines(t *testing.T) {
 func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	r := &run{once: map[string]bool{}}
 	for _, who := range []string{"99999999999", "4294967296:5"} {
-		got, home, err := r.resolveUser(context.Background(), "img:1", who)
+		got, home, err := r.resolveUser(context.Background(), "img:1", who, nil)
 		if err != nil || got != "" || home != "" {
 			t.Errorf("user %q: got %q, %q, %v, want root", who, got, home, err)
 		}
@@ -2554,16 +2554,21 @@ func TestObserveSaysWhenTheHomeOfTheUserIsNotKnown(t *testing.T) {
 		name     string
 		noPasswd bool
 		passwd   string
-		why      string
+		env      []string
+		options  []string
+		why      string // empty: no warning
 	}{
-		{"no entry", false, "root:x:0:0:root:/root:/bin/sh\n", "has no entry with an absolute home"},
-		{"a relative home", false, "node:x:1000:1000::home:/bin/sh\n", "has no entry with an absolute home"},
-		{"no /etc/passwd", true, "", "could not be read"},
+		{"no entry", false, "root:x:0:0:root:/root:/bin/sh\n", []string{"PATH=/usr/bin"}, nil, "has no entry with an absolute home"},
+		{"a relative home", false, "node:x:1000:1000::home:/bin/sh\n", []string{"PATH=/usr/bin"}, nil, "has no entry with an absolute home"},
+		{"no /etc/passwd", true, "", []string{"PATH=/usr/bin"}, nil, "could not be read"},
+		{"the image sets HOME: no warning", true, "", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
+		{"the options set HOME: no warning", false, "root:x:0:0:root:/root:/bin/sh\n", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScene(t)
 			s.d.cfg.User = "node"
-			s.d.cfg.Env = []string{"PATH=/usr/bin"}
+			s.d.cfg.Env = tc.env
+			s.o.Env = tc.options
 			if !tc.noPasswd {
 				s.d.files["/etc/passwd"] = entry{data: tc.passwd}
 			}
@@ -2573,11 +2578,14 @@ func TestObserveSaysWhenTheHomeOfTheUserIsNotKnown(t *testing.T) {
 			}
 			found := false
 			for _, w := range res.Warnings {
-				if strings.Contains(w, "node, whose home directory is not known") && strings.Contains(w, tc.why) {
+				if strings.Contains(w, "node, whose home directory is not known") {
 					found = true
+					if tc.why == "" || !strings.Contains(w, tc.why) {
+						t.Errorf("warning %q, want %q", w, tc.why)
+					}
 				}
 			}
-			if !found {
+			if tc.why != "" && !found {
 				t.Errorf("warnings = %q, want one that says the home of node is not known (%s)", res.Warnings, tc.why)
 			}
 		})
@@ -3674,4 +3682,71 @@ func TestObserveWorkingDirectoryFromTheTraceWhenTheProgramHadStopped(t *testing.
 		t.Fatal(err)
 	}
 	equal(t, "working dir", res.WorkingDir, "/etc/shlink/bin")
+}
+
+// an image link with more ".." than depth leads to this machine in the sysroot: it is not made, and a
+// later path under its name is written inside the package, never on this machine
+func TestObserveDoesNotWriteThroughALinkThatLeadsOutOfTheSysroot(t *testing.T) {
+	s := newScene(t)
+	host := filepath.Join(t.TempDir(), "host")
+	if err := os.MkdirAll(host, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(host, "passwd"), []byte("host"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	imageHost := filepath.ToSlash(host)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/a", O_RDONLY) = 8` + "\n" +
+		`11 openat(AT_FDCWD, "/b", O_RDONLY) = 9` + "\n"
+	s.d.files["/a"] = entry{link: strings.Repeat("../", 40) + strings.TrimPrefix(imageHost, "/")}
+	s.d.files[imageHost] = entry{dir: true}
+	s.d.files["/b"] = entry{link: "/a/passwd"}
+	s.d.files["/a/passwd"] = entry{data: "image"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(host, "passwd")); err != nil || string(data) != "host" {
+		t.Fatalf("the file of this machine is %q, %v", data, err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "lead out of the package") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q, want one that says the link leads out of the package", res.Warnings)
+	}
+}
+
+// fetch never writes through a link of the sysroot that leads out of it
+func TestFetchDoesNotWriteThroughALinkOutOfTheSysroot(t *testing.T) {
+	parent := t.TempDir()
+	sysroot := filepath.Join(parent, "sysroot")
+	host := filepath.Join(parent, "host")
+	for _, d := range []string{sysroot, host} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(host, "passwd"), []byte("host"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../host", filepath.Join(sysroot, "a")); err != nil {
+		t.Fatal(err)
+	}
+	d := &fakeDocker{t: t, files: map[string]entry{"/a/passwd": {data: "image"}, "/a/dir": {dir: true}}}
+	r := &run{d: d}
+	for _, p := range []string{"/a/passwd", "/a/dir"} {
+		if _, err := r.fetch(context.Background(), appID, sysroot, p); err == nil || !strings.Contains(err.Error(), "outside the package") {
+			t.Errorf("fetch %s: err = %v, want one that says outside the package", p, err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(host, "passwd")); err != nil || string(data) != "host" {
+		t.Errorf("the file of this machine is %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(host, "dir")); err == nil {
+		t.Errorf("a directory was made on this machine")
+	}
 }

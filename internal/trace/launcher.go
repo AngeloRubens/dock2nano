@@ -273,6 +273,10 @@ var supervisors = map[string]bool{
 // ProcessSupervisors are the supervisors that start every service of the image, not one program.
 var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsvdir": true, "supervisord": true}
 
+// IsLauncherName says whether name is one of the package manager launchers (npm, npx, yarn, yarnpkg,
+// pnpm, pnpx) or corepack, which starts one.
+func IsLauncherName(name string) bool { return launcherSet[name] || name == "corepack" }
+
 // Supervisor tells whether a program started as program with argv is one of the supervisors (by its
 // place: node_modules/.bin/<name>, node_modules/<name>/... or the bin directories of the launchers,
 // run by node or itself), and gives its
@@ -285,15 +289,23 @@ func Supervisor(program string, argv []string) string {
 	if len(argv) > 0 {
 		names = append(names, argv[0])
 	}
-	// the script an interpreter runs: the first argument that is not an option (python3 -u /usr/bin/supervisord)
+	// the script an interpreter runs: the first argument that is not an option or the value of one
+	// (python3 -u -W ignore /usr/bin/supervisord)
+	skipValue := false
+scriptArg:
 	for _, a := range argv[min(1, len(argv)):] {
-		if strings.HasPrefix(a, "-") {
-			continue
+		switch {
+		case skipValue:
+			skipValue = false
+		case a == "-W" || a == "-X" || a == "-Q" || a == "-c" || a == "-m":
+			skipValue = true
+		case strings.HasPrefix(a, "-"):
+		default:
+			if strings.HasPrefix(a, "/") {
+				names = append(names, a)
+			}
+			break scriptArg
 		}
-		if strings.HasPrefix(a, "/") {
-			names = append(names, a)
-		}
-		break
 	}
 	for _, n := range names {
 		if b := path.Base(n); ProcessSupervisors[b] {
