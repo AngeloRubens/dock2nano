@@ -12,7 +12,7 @@ import (
 var missingSource = regexp.MustCompile(`(?:failed to calculate checksum|failed to compute cache key)[^\n]*"([^"\n]+)": not found`)
 
 // failedRun matches the line docker prints when a RUN step ends with an error.
-var failedRun = regexp.MustCompile(`process "[^"\n]*" did not complete successfully`)
+var failedRun = regexp.MustCompile(`process ".*" did not complete successfully`)
 
 // buildHint reads the text of a failed docker build and returns a short hint
 // for the two causes that are common and that the user can act on, or "" for

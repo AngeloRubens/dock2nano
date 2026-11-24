@@ -34,6 +34,15 @@ func TestBuildHintFailedRun(t *testing.T) {
 	}
 }
 
+// the command of a RUN step can hold escaped double quotes (real output of the redlib build, run 45439008280)
+const runFailEscapedQuotesOut = `ERROR: failed to build: failed to solve: process "/bin/sh -c curl -L \"https://example.com/redlib.tar.gz\" |     tar xz -C /usr/local/bin/" did not complete successfully: exit code: 1`
+
+func TestBuildHintFailedRunWithEscapedQuotes(t *testing.T) {
+	if h := buildHint(runFailEscapedQuotesOut); !strings.Contains(h, "run docker build yourself to see the same error") {
+		t.Errorf("hint %q", h)
+	}
+}
+
 func TestBuildHintOther(t *testing.T) {
 	for _, s := range []string{"", "ERROR: failed to solve: no such file", `sh: foo: not found`, `process "/bin/sh -c x" exited`} {
 		if h := buildHint(s); h != "" {
