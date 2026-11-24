@@ -2529,6 +2529,7 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	// a name that holds digits is a name; it has no entry in /etc/passwd of the scene, which is said
 	s := newScene(t)
 	s.d.cfg.User = "12ab"
+	s.d.cfg.Env = []string{"PATH=/usr/bin"}
 	res, err := s.observe(t, context.Background())
 	if err != nil {
 		t.Fatal(err)
