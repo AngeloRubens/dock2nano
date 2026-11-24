@@ -48,7 +48,7 @@ func usesSharedMemory(opened []string) bool {
 // (on aarch64 the kernel answers for cpuinfo itself, and a file of ours in its place would stop it
 // from making its own). A file the sysroot already has is left alone. It returns the paths it
 // wrote.
-func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) {
+func writeMachineFiles(sysroot, arch, program string, opened []string) ([]string, error) {
 	var wrote []string
 	// the directory of shared memory is wanted on any architecture
 	if usesSharedMemory(opened) {
@@ -66,12 +66,20 @@ func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) 
 	if arch != "amd64" && arch != "x86_64" {
 		return wrote, nil
 	}
-	for _, name := range []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"} {
-		if strings.HasPrefix(name, "proc/") && strings.HasSuffix(name, "/stat") {
+	names := []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"}
+	if isNode(program) {
+		names = append(names, selfStatName)
+	}
+	for _, name := range names {
+		// node asks for its own resident memory at start, and the observation may not have opened
+		// the file, so the self file is not conditioned on what was opened
+		switch {
+		case name == selfStatName:
+		case strings.HasPrefix(name, "proc/") && strings.HasSuffix(name, "/stat"):
 			if !openedProcessStat(opened) {
 				continue
 			}
-		} else if !openedPath(opened, "/"+name) {
+		case !openedPath(opened, "/"+name):
 			continue
 		}
 		path := filepath.Join(sysroot, filepath.FromSlash(name))
@@ -82,6 +90,9 @@ func writeMachineFiles(sysroot, arch string, opened []string) ([]string, error) 
 			return wrote, err
 		}
 		says, ok := machineFiles[name]
+		if name == selfStatName {
+			says, ok = selfStat(), true
+		}
 		if !ok {
 			says = processStat(strings.Split(name, "/")[1])
 		}
@@ -122,5 +133,29 @@ func processStat(pid string) string {
 	for len(words) < 52 {
 		words = append(words, "0")
 	}
+	return strings.Join(words, " ") + "\n"
+}
+
+// selfStatName is the file node reads for its own resident memory; nanos has no /proc/self/stat,
+// and node 17 stops with "ENOENT: no such file or directory, uv_resident_set_memory".
+const selfStatName = "proc/self/stat"
+
+// isNode says whether the program is node.
+func isNode(program string) bool {
+	switch filepath.Base(program) {
+	case "node", "nodejs":
+		return true
+	}
+	return false
+}
+
+// selfStat is one plausible line of /proc/self/stat with the resident memory (the twenty-fourth
+// word, in pages) filled.
+func selfStat() string {
+	words := []string{"1", "(node)", "R", "0", "1", "1"}
+	for len(words) < 52 {
+		words = append(words, "0")
+	}
+	words[23] = "4096"
 	return strings.Join(words, " ") + "\n"
 }

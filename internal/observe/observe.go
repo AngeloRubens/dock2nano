@@ -931,7 +931,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 
 	r.writeLocalNames(sysroot)
-	machine, err := writeMachineFiles(sysroot, cfg.Architecture, touched)
+	machine, err := writeMachineFiles(sysroot, cfg.Architecture, program, touched)
 	if err != nil {
 		r.warnOnce(fmt.Sprintf(NoteMachineFiles+" for the package: %v", err))
 	}

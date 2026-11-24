@@ -10,7 +10,7 @@ import (
 
 func TestMachineFilesAreWrittenWhenOpened(t *testing.T) {
 	dir := t.TempDir()
-	wrote, err := writeMachineFiles(dir, "amd64", []string{"/etc/passwd", "/sys/devices/system/cpu/possible", "/proc/cpuinfo"})
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/etc/passwd", "/sys/devices/system/cpu/possible", "/proc/cpuinfo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestMachineFilesAreWrittenWhenOpened(t *testing.T) {
 
 func TestMachineFilesAreNotWrittenWhenNotOpened(t *testing.T) {
 	dir := t.TempDir()
-	wrote, err := writeMachineFiles(dir, "amd64", []string{"/etc/passwd"})
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/etc/passwd"})
 	if err != nil || len(wrote) != 0 {
 		t.Fatalf("wrote %v, %v", wrote, err)
 	}
@@ -41,7 +41,7 @@ func TestMachineFilesAreNotWrittenWhenNotOpened(t *testing.T) {
 
 func TestMachineFilesAreNotWrittenOnArm(t *testing.T) {
 	dir := t.TempDir()
-	wrote, err := writeMachineFiles(dir, "arm64", []string{"/proc/cpuinfo"})
+	wrote, err := writeMachineFiles(dir, "arm64", "/usr/bin/app", []string{"/proc/cpuinfo"})
 	if err != nil || len(wrote) != 0 {
 		t.Fatalf("wrote %v, %v", wrote, err)
 	}
@@ -52,7 +52,7 @@ func TestMachineFilesKeepWhatIsThere(t *testing.T) {
 	p := filepath.Join(dir, "proc", "cpuinfo")
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	os.WriteFile(p, []byte("mine"), 0o644)
-	wrote, err := writeMachineFiles(dir, "amd64", []string{"/proc/cpuinfo"})
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/proc/cpuinfo"})
 	if err != nil || len(wrote) != 0 {
 		t.Fatalf("wrote %v, %v", wrote, err)
 	}
@@ -63,7 +63,7 @@ func TestMachineFilesKeepWhatIsThere(t *testing.T) {
 
 func TestProcessStatFilesAreWrittenForTheFirstThreeProcesses(t *testing.T) {
 	dir := t.TempDir()
-	wrote, err := writeMachineFiles(dir, "amd64", []string{"/proc/2/stat"})
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/proc/2/stat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestProcessStatFilesAreWrittenForTheFirstThreeProcesses(t *testing.T) {
 
 func TestProcessStatIsNotWrittenForOtherProcFiles(t *testing.T) {
 	dir := t.TempDir()
-	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/proc/self/stat", "/proc/meminfo", "/proc/2/status"})
+	wrote, _ := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/proc/self/stat", "/proc/meminfo", "/proc/2/status"})
 	if len(wrote) != 0 {
 		t.Fatalf("wrote %v", wrote)
 	}
@@ -91,7 +91,7 @@ func TestProcessStatIsNotWrittenForOtherProcFiles(t *testing.T) {
 func TestSharedMemoryDirectoryIsMadeWhenTheProgramNamedIt(t *testing.T) {
 	for _, opened := range [][]string{{"/dev/shm"}, {"/dev/shm/psm_1"}} {
 		dir := t.TempDir()
-		wrote, err := writeMachineFiles(dir, "arm64", opened)
+		wrote, err := writeMachineFiles(dir, "arm64", "/usr/bin/app", opened)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func TestSharedMemoryDirectoryIsMadeWhenTheProgramNamedIt(t *testing.T) {
 
 func TestSharedMemoryDirectoryIsNotMadeOtherwise(t *testing.T) {
 	dir := t.TempDir()
-	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/dev/shmx", "/dev/null", "/dev"})
+	wrote, _ := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/dev/shmx", "/dev/null", "/dev"})
 	if len(wrote) != 0 {
 		t.Fatalf("wrote %v", wrote)
 	}
@@ -119,8 +119,29 @@ func TestSharedMemoryDirectoryIsNotMadeOtherwise(t *testing.T) {
 func TestSharedMemoryDirectoryIsKept(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "dev", "shm"), 0o700)
-	wrote, _ := writeMachineFiles(dir, "amd64", []string{"/dev/shm"})
+	wrote, _ := writeMachineFiles(dir, "amd64", "/usr/bin/app", []string{"/dev/shm"})
 	if len(wrote) != 0 {
 		t.Fatalf("wrote %v", wrote)
+	}
+}
+
+func TestSelfStatIsWrittenForNodeOnly(t *testing.T) {
+	dir := t.TempDir()
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/local/bin/node", []string{"/etc/passwd"})
+	if err != nil || len(wrote) != 1 || wrote[0] != "/proc/self/stat" {
+		t.Fatalf("wrote = %v, err = %v", wrote, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "proc", "self", "stat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := strings.Fields(string(b))
+	if len(words) != 52 || words[23] == "0" {
+		t.Errorf("stat = %q, want fifty-two words with the resident memory set", b)
+	}
+	other := t.TempDir()
+	wrote, _ = writeMachineFiles(other, "amd64", "/usr/bin/python3", []string{"/etc/passwd"})
+	if len(wrote) != 0 {
+		t.Errorf("wrote = %v for a program that is not node", wrote)
 	}
 }

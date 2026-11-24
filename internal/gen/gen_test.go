@@ -793,6 +793,21 @@ func TestServiceNamesNote(t *testing.T) {
 	wantNone(t, p, "", plan.Note, "service names")
 }
 
+func TestBareNamesNoteIsPrintedWithoutAFindingInAFile(t *testing.T) {
+	web, db := svc("web"), svc("db")
+	p := mustGen(t, newInput(&fake{}, db, web))
+	want1(t, p, "", plan.Note, "bare names", "bare service names (db, web) do not resolve under ops compose")
+	want1(t, p, "", plan.Note, "bare names", "--short-names")
+	want1(t, p, "", plan.Note, "bare names", "<name>.service")
+
+	in := newInput(&fake{}, db, web)
+	in.ShortNames = true
+	wantNone(t, mustGen(t, in), "", plan.Note, "bare names")
+
+	p, _ = one(t, &fake{}, web)
+	wantNone(t, p, "", plan.Note, "bare names")
+}
+
 func TestEnvironmentSharedNote(t *testing.T) {
 	web, db, cache := svc("web"), svc("db"), svc("cache")
 	web.Environment = []compose.EnvVar{{Name: "B_VAR", Value: "s3cret", Set: true}, {Name: "A_VAR", Value: "v", Set: true}}
