@@ -188,7 +188,7 @@ Kind: not a limit of nanos or of the tool; use the docker-compose.yml of the pro
 
 Cause: pnpm keeps a package once in node_modules/.pnpm and links it (node_modules/x -> ../../node_modules/.pnpm/x/node_modules/x). The observation copied the files the program opened under the name of the link, which made a real directory with only those files in the package, and the program then did not find the others beside them (reactive-resume: ERR_MODULE_NOT_FOUND for dist/standard.js, console of run 45467614282; the package had env-core/dist/index.js and package.json as real files, package-files of run 45485671510).
 
-Kind: gap of the tool, fixed: when the link is carried, what the directory holds is moved to the directory the link leads to and the link takes its place. Measured: run 45489113069, the module error is gone and the program runs up to its own error (database connection).
+Kind: gap of the tool, fixed: when the link is carried, what the directory holds is moved to the directory the link leads to and the link takes its place. The link is made, or the directory merged, only for a relative text that has ".." only at its start and leads inside the package as the directory really is on disk; an absolute text, a text that goes up again after a name (l/../x), a link that would lead out of the package, and a directory that holds a link with ".." or an absolute text are left as they are, with a line in the report. Measured: run 45489113069, the module error is gone and the program runs up to its own error (database connection).
 
 ## The home of the user of the image in the observation
 
