@@ -767,6 +767,25 @@ func TestNetworks(t *testing.T) {
 	wantNone(t, p, "web", plan.Unsupported, "network_mode")
 }
 
+func TestEnvNoteCaseOnlyDifferenceIsTheSameName(t *testing.T) {
+	web, db := svc("web"), svc("Db")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}, {Name: "DB_URL", Value: "Db", Set: true}}
+	p := mustGen(t, newInput(&fake{}, db, web))
+	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
+	if strings.Contains(msg, "never resolve") || strings.Contains(msg, "differs from its package name") {
+		t.Errorf("a name that differs only by case is said to never resolve: %q", msg)
+	}
+	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten")
+	want1(t, p, "", plan.Note, "service names", "web: DB_HOST, DB_URL.")
+}
+
+func TestEnvNoteListsComposeNameWithServiceSuffix(t *testing.T) {
+	web, db := svc("web"), svc("My_Db")
+	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "My_Db.service", Set: true}, {Name: "OK", Value: "my-db.service", Set: true}}
+	p := mustGen(t, newInput(&fake{}, db, web))
+	want1(t, p, "", plan.Note, "service names", "never resolve, with or without --short-names (write <pkg>.service): web: DB_HOST.")
+}
+
 func TestServiceNamesNote(t *testing.T) {
 	web, db := svc("web"), svc("My_Db")
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "My_Db", Set: true}, {Name: "URL", Value: "postgres://My_Db:5432/x", Set: true}, {Name: "SELF", Value: "web", Set: true}, {Name: "OTHER", Value: "My_Dbx", Set: true}}
@@ -777,7 +796,7 @@ func TestServiceNamesNote(t *testing.T) {
 	if msg != want {
 		t.Errorf("message = %q, want %q", msg, want)
 	}
-	for _, bad := range []string{"SELF", "OTHER", "postgres", "5432", "DB_HOST=", "=My_Db"} {
+	for _, bad := range []string{"SELF", "OTHER", "postgres", "5432", "DB_HOST: ", "My_Db:", "My_Dbx", "postgres://"} {
 		if strings.Contains(msg, bad) {
 			t.Errorf("message %q holds %s", msg, bad)
 		}
@@ -2390,10 +2409,10 @@ func TestShortNamesWritesDNSSearchAndChangesTheNote(t *testing.T) {
 		t.Errorf("DNSSearch = %v", p.Compose.DNSSearch)
 	}
 	msg := itemsOf(p, "", plan.Note, "service names")[0].Message
-	if !strings.Contains(msg, "by its package name, or as <pkg>.service (dns_search: [service]") || !strings.Contains(msg, "db -> db (or db.service)") || !strings.Contains(msg, "by its package name were not rewritten") || !strings.Contains(msg, "web: DB_HOST") {
+	if !strings.Contains(msg, "by its package name, or as <pkg>.service (dns_search: [service]") || !strings.Contains(msg, "db -> db.service") || strings.Contains(msg, "(or ") || !strings.Contains(msg, "by its package name were not rewritten") || !strings.Contains(msg, "web: DB_HOST") {
 		t.Errorf("note = %q", msg)
 	}
-	want1(t, p, "web", plan.Approximated, "ports[0]", "reachable at web (or web.service) and at the address")
+	want1(t, p, "web", plan.Approximated, "ports[0]", "reachable at web.service and at the address")
 }
 
 func TestWithoutShortNamesThereIsNoDNSSearch(t *testing.T) {
@@ -2647,7 +2666,10 @@ func TestNetworkNoteWithShortNamesSaysPackageName(t *testing.T) {
 	in := nameInput(map[string]string{"/etc/n.conf": "x"}, true, "proxy", "My_App")
 	p := mustGen(t, in)
 	want1(t, p, "", plan.Note, "service names", "by its package name")
-	want1(t, p, "", plan.Note, "service names", "my-app (or my-app.service)")
+	want1(t, p, "", plan.Note, "service names", "My_App -> my-app.service")
+	if strings.Contains(itemsOf(p, "", plan.Note, "service names")[0].Message, "(or ") {
+		t.Error("the note offers a bare name as an alternative")
+	}
 	want1(t, p, "", plan.Note, "service names", "only an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47) reads it, and it already puts service in the search line of resolv.conf by default")
 }
 
@@ -2656,7 +2678,7 @@ func TestEnvNoteListsVariablesNamingAnyOtherService(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	web.Environment = []compose.EnvVar{{Name: "DB_HOST", Value: "db", Set: true}}
 	p := mustGen(t, newInput(&fake{}, db, web))
-	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47) write <pkg>.service: web: DB_HOST.")
+	want1(t, p, "", plan.Note, "service names", "by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47, read from its source, not run) write <pkg>.service: web: DB_HOST.")
 	if strings.Contains(itemsOf(p, "", plan.Note, "service names")[0].Message, "never resolve") {
 		t.Error("an equal name is said to never resolve")
 	}
