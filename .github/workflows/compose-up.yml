@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: apache-php, dir: apache-php, flags: "--command 'web=apache2 -DONE_PROCESS -DFOREGROUND'", probe: "web:80:http"}
-          - {name: nextcloud-postgres, dir: nextcloud-postgres, flags: "--command 'nc=apache2 -DONE_PROCESS -DFOREGROUND'", probe: "nc:80:http"}
+          - {name: apache-php, dir: apache-php, flags: "--command 'web=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", probe: "web:80:http"}
+          - {name: nextcloud-postgres, dir: nextcloud-postgres, flags: "--command 'nc=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", probe: "nc:80:http"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
