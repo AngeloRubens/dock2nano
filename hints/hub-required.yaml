@@ -94,7 +94,6 @@ rows:
       export PGPASSFILE
       PGCONNECT_TIMEOUT=5
       export PGCONNECT_TIMEOUT
-      unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER
 
       instance={HUB_INSTANCE:sh}
       if [ "$#" -ge 1 ] && [ -n "$1" ]; then
