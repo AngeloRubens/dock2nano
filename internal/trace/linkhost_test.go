@@ -94,8 +94,14 @@ func TestLinkHostFileDoesNotFollowAnExistingLinkOutOfTheSysroot(t *testing.T) {
 	if err := LinkHostFile(root, "../y", "/a/b/x"); err != nil {
 		t.Fatal(err)
 	}
+	if info, err := os.Lstat(filepath.Join(host, "x")); err != nil || !info.IsDir() {
+		t.Errorf("the folder of this machine was replaced: %v, %v", info, err)
+	}
 	if _, err := os.Stat(filepath.Join(host, "x/precious")); err != nil {
 		t.Errorf("a file of this machine was touched: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "y/precious")); err == nil {
+		t.Errorf("a file of this machine was moved")
 	}
 	if _, err := os.Stat(filepath.Join(host, "y")); err == nil {
 		t.Errorf("a link or a file was made in the folder of this machine")
