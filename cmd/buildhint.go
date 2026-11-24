@@ -16,7 +16,7 @@ var missingSourceOld = regexp.MustCompile(`failed to compute cache key: "([^"\n]
 
 // copyFrom matches the failing instruction that docker prints on a ">>> "
 // line when it is a COPY or ADD that takes its files from a stage or image.
-var copyFrom = regexp.MustCompile(`(?mi)^\s*>>>\s+(?:COPY|ADD)\s[^\n]*--from=`)
+var copyFrom = regexp.MustCompile(`(?mi)>>>\s+(?:COPY|ADD)\s[^\n]*--from=`)
 
 // failedRun matches the line docker prints when a RUN step ends with an error.
 var failedRun = regexp.MustCompile(`process ".*" did not complete successfully`)
