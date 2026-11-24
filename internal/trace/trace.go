@@ -303,6 +303,9 @@ func (c cwdSet) share(child, parent string) {
 // is read against.
 var sharesDirectory = regexp.MustCompile(`\bCLONE_FS\b`)
 
+// resumedClone matches the resumed line of a clone, whatever the result.
+var resumedClone = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)<\.\.\. (?:clone3?|fork|vfork) resumed>`)
+
 // cloneStart matches a clone call that strace cut in two, on its first line.
 var cloneStart = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:clone3?|fork|vfork)\(.*<unfinished \.\.\.>`)
 
@@ -363,6 +366,12 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			continue
 		}
 		pid := prefix[1] + prefix[2]
+		if exitedLine.MatchString(line) {
+			// the pid may be given to another process later: it starts again from what its parent has
+			delete(cwd, pid)
+			delete(chdirDone, pid)
+			continue
+		}
 		if !cwd.has(pid) {
 			parent := active
 			for k := len(cloning) - 1; k >= 0; k-- {
@@ -385,20 +394,23 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			pendingShare[pid] = sharesDirectory.MatchString(line)
 			cloning = append(cloning, pid)
 		}
-		if child := forkLine.FindStringSubmatch(line); child != nil {
+		resumed := resumedClone.MatchString(line)
+		child := forkLine.FindStringSubmatch(line)
+		if resumed {
+			// the clone is finished, whatever it gave back (a number, -1, ?)
+			for k := len(cloning) - 1; k >= 0; k-- {
+				if cloning[k] == pid {
+					cloning = append(cloning[:k], cloning[k+1:]...)
+					break
+				}
+			}
+		}
+		if child != nil {
 			shared := sharesDirectory.MatchString(line)
-			if strings.Contains(line, "<... ") {
+			if resumed {
 				shared = pendingShare[pid]
 			}
 			delete(pendingShare, pid)
-			if strings.Contains(line, "<... ") {
-				for k := len(cloning) - 1; k >= 0; k-- {
-					if cloning[k] == pid {
-						cloning = append(cloning[:k], cloning[k+1:]...)
-						break
-					}
-				}
-			}
 			if shared {
 				if cwd.has(child[3]) && chdirDone[child[3]] {
 					// the child changed directory before the line that says it was made: it is the
@@ -406,9 +418,15 @@ func scan(trace []byte, workingDir string, from int) scanned {
 					cwd.set(pid, cwd.get(child[3]))
 				}
 				cwd.share(child[3], pid)
-			} else if !cwd.has(child[3]) {
+			} else if !cwd.has(child[3]) || !chdirDone[child[3]] {
+				// a child that did not change directory has what its real parent has: it may have been
+				// seen before, when another process had a clone open too, and been given the wrong one
 				cwd.copyOf(child[3], pid)
 			}
+			continue
+		}
+		if resumed {
+			delete(pendingShare, pid)
 			continue
 		}
 
@@ -1297,9 +1315,22 @@ func mustResolve(p string) string {
 func scrub(sysroot, text string) string {
 	for _, root := range []string{mustResolve(sysroot), sysroot} {
 		text = strings.ReplaceAll(text, root+string(filepath.Separator), "/")
-		text = strings.ReplaceAll(text, root, "/")
+		// the folder itself, when no name follows it ("/s" is not the start of "/s.old")
+		text = regexp.MustCompile(regexp.QuoteMeta(root)+`($|[^A-Za-z0-9._-])`).ReplaceAllString(text, "/$1")
 	}
 	return text
+}
+
+// scrubErr is the text of an error for the report: a path that does not exist or cannot be read is
+// said without the path (it may be a path of this machine), and the sysroot is taken out of the rest.
+func scrubErr(sysroot string, err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "it does not exist"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied"
+	}
+	return scrub(sysroot, err.Error())
 }
 
 // LinkHostFile makes a symbolic link with the text it had at name in sysroot, unless something is
@@ -1320,20 +1351,23 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		if !info.IsDir() {
 			return nil
 		}
+		if why := linkTextShape(text); why != "" {
+			return &LinkSkipped{name, why + " (" + text + ")"}
+		}
 		root, err := filepath.EvalSymlinks(sysroot)
 		if err != nil {
-			return &LinkSkipped{name, "the sysroot cannot be resolved: " + scrub(sysroot, err.Error())}
+			return &LinkSkipped{name, "the sysroot cannot be resolved: " + scrubErr(sysroot, err)}
 		}
 		realDir, err := filepath.EvalSymlinks(destination)
 		if err != nil {
-			return &LinkSkipped{name, "the directory cannot be resolved: " + scrub(sysroot, err.Error())}
+			return &LinkSkipped{name, "the directory cannot be resolved: " + scrubErr(sysroot, err)}
 		}
 		if !within(root, realDir) {
 			return &LinkSkipped{name, "the directory is, through a link of the image, outside the package"}
 		}
 		target, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(realDir), text))
 		if err != nil {
-			return &LinkSkipped{name, "what the link leads to (" + text + ") is not in the package: " + scrub(sysroot, err.Error())}
+			return &LinkSkipped{name, "what the link leads to (" + text + ") is not in the package: " + scrubErr(sysroot, err)}
 		}
 		if !within(root, target) {
 			return &LinkSkipped{name, "the link leads outside the package (" + text + ")"}
@@ -1344,14 +1378,17 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		if ti, err := os.Stat(target); err != nil || !ti.IsDir() {
 			return &LinkSkipped{name, "what the link leads to (" + text + ") is not a directory"}
 		}
+		if blocked := mergeBlocked(realDir); blocked != "" {
+			return &LinkSkipped{name, "the link " + blocked + " in the directory is absolute or goes up with .., and would end at another depth if it was moved; the directory was kept and the link was not made"}
+		}
 		if clash := mergeClash(realDir, target); clash != "" {
 			return &LinkSkipped{name, "the directory and the one its link leads to disagree on what " + clash + " is (a file or a directory); the directory was kept and the link was not made"}
 		}
 		if err := mergeInto(realDir, target); err != nil {
-			why := "the files could not be moved to the directory the link leads to: " + scrub(sysroot, err.Error())
+			why := "the files could not be moved to the directory the link leads to: " + scrubErr(sysroot, err)
 			var me *mergeError
 			if errors.As(err, &me) && len(me.unrestored) > 0 {
-				why += "; these files could not be put back and are in the directory the link leads to: " + scrub(sysroot, strings.Join(me.unrestored, ", "))
+				why += "; these files could not be put back and are in the directory the link leads to: " + scrub(sysroot, strings.Join(me.unrestored, ", ")) + "; the directories that were made there were left at mode 0700"
 			} else {
 				why += "; what was moved was put back"
 			}
@@ -1362,10 +1399,15 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		}
 		destination = realDir
 	} else {
+		if why := linkTextShape(text); why != "" {
+			return &LinkSkipped{name, why + " (" + text + "); the link was not made"}
+		}
 		if !parentInside(sysroot, filepath.Dir(destination)) {
 			return &LinkSkipped{name, "its directory is, through a link of the image, outside the package"}
 		}
-		// the link must not lead out of the sysroot either: a writer that follows it would write on this machine
+		// The link must not lead out of the sysroot either: a writer that follows it would write on this
+		// machine. Its text has only ".." at the start (linkTextShape), which is read from the directory
+		// as it really is (dir is resolved), so the join below is where a path through the link ends.
 		if dir, err := resolveNearest(filepath.Dir(destination)); err != nil || !InsideSysroot(sysroot, filepath.Join(dir, text)) {
 			return &LinkSkipped{name, "the link would lead out of the package (" + text + "), which is a path of this machine there; the link was not made"}
 		}
@@ -1377,6 +1419,47 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		return fmt.Errorf("link %s: %w", destination, err)
 	}
 	return nil
+}
+
+// linkTextShape refuses the texts of links that are not checked on disk: an absolute one, and one
+// that goes up again after a name (l/../x: where it ends depends on where l leads, which is not
+// known when the text is checked, and changes when l is made later). What is left, ".." at the start
+// and names, is checked against the directory the link is in, as it really is.
+func linkTextShape(text string) string {
+	if strings.HasPrefix(text, "/") {
+		return "the link text is absolute"
+	}
+	named := false
+	for _, part := range strings.Split(text, "/") {
+		switch part {
+		case "", ".":
+		case "..":
+			if named {
+				return "the link text goes up (..) again after a name"
+			}
+		default:
+			named = true
+		}
+	}
+	return ""
+}
+
+// mergeBlocked gives the first link under from (relative to it) whose text is absolute or has "..":
+// moved to a directory at another depth it would lead somewhere else, out of the sysroot at worst.
+func mergeBlocked(from string) string {
+	blocked := ""
+	filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || blocked != "" || d.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		text, err := os.Readlink(p)
+		if err != nil || strings.HasPrefix(text, "/") || strings.Contains("/"+text+"/", "/../") {
+			rel, _ := filepath.Rel(from, p)
+			blocked = filepath.ToSlash(rel)
+		}
+		return nil
+	})
+	return blocked
 }
 
 // mergeClash gives the first path (relative to from) where from holds a directory and into holds

@@ -56,7 +56,21 @@ R={
  'scrub-host-paths':[(T,'		text = strings.ReplaceAll(text, root+string(filepath.Separator), "/")\n		text = strings.ReplaceAll(text, root, "/")','		_ = root')],
  'supervisor-option-values':[(L,'a == "-W" || a == "-X" || a == "-Q" || a == "-c" || a == "-m"','false')],
  'launcher-name-corepack':[(L,'launcherSet[name] || name == "corepack"','launcherSet[name]')],
- 'init-names-more-arch':[(T,'|ppc64el|','|')],
+ 'init-arch-ppc64el':[(T,'|ppc64el|','|')],
+ 'init-arch-mips':[(T,'|mips|','|')],
+ 'init-arch-mipsel':[(T,'|mipsel|','|')],
+ 'init-arch-mips64el':[(T,'|mips64el|','|')],
+ 'init-arch-riscv64':[(T,'|riscv64))','))')],
+ 'link-text-dotdot-after-name':[(T,'			if named {','			if false && named {')],
+ 'link-text-absolute':[(T,'	if strings.HasPrefix(text, "/") {\n		return "the link text is absolute"','	if false {\n		return "the link text is absolute"')],
+ 'merge-blocked-links':[(T,'if blocked := mergeBlocked(realDir); blocked != "" {','if blocked := ""; blocked != "" {')],
+ 'copy-again-from-real-parent':[(T,'} else if !cwd.has(child[3]) || !chdirDone[child[3]] {','} else if !cwd.has(child[3]) {')],
+ 'clone-open-dropped-on-failure':[(T,'		if resumed {\n			// the clone is finished','		if resumed && child != nil {\n			// the clone is finished')],
+ 'exit-resets-pid':[(T,'			delete(cwd, pid)\n			delete(chdirDone, pid)\n			continue','			continue')],
+ 'supervisor-python-dash-c':[(L,'		case a == "-c":','		case false:')],
+ 'supervisor-python-dash-m':[(L,'names = append(names, mod[strings.LastIndex(mod, ".")+1:])','_ = mod')],
+ 'scrub-name-separator':[(T,'($|[^A-Za-z0-9._-])','($|.)')],
+ 'scrub-error-without-path':[(T,'	case errors.Is(err, fs.ErrNotExist):','	case false:')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:

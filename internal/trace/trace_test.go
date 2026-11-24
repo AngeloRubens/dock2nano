@@ -944,7 +944,7 @@ func TestUnescapeStrace(t *testing.T) {
 func TestIsInit(t *testing.T) {
 	for p, want := range map[string]bool{
 		"/sbin/tini": true, "/usr/bin/dumb-init": true, "/usr/local/bin/tini-static": true, "/tini-amd64": true,
-		"/tini-static-arm64": true, "/tini-mips64el": true, "/tini-ppc64el": true, "/usr/local/bin/dumb-init_1.2.5_x86_64": true, "/usr/bin/catatonit": true, "/sbin/docker-init": true,
+		"/tini-static-arm64": true, "/tini-mips64el": true, "/tini-mips": true, "/tini-mipsel": true, "/tini-riscv64": true, "/tini-ppc64el": true, "/usr/local/bin/dumb-init_1.2.5_x86_64": true, "/usr/bin/catatonit": true, "/sbin/docker-init": true,
 		"/usr/bin/tinyproxy": false, "/app/tini-app": false, "/bin/sh": false,
 	} {
 		if got := IsInit(p); got != want {

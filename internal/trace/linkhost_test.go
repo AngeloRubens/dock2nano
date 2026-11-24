@@ -112,8 +112,11 @@ func TestLinkHostFileKeepsTheDirectoryWhenAFileMeetsADirectory(t *testing.T) {
 	write(t, filepath.Join(root, "store/x/dist/sub"), "a file where the other has a directory")
 	err := LinkHostFile(root, "../store/x", "/pkg/x")
 	var left *LinkSkipped
-	if !errors.As(err, &left) || !strings.Contains(left.Why, "dist/sub") {
-		t.Fatalf("err = %v, want a *LinkSkipped that names dist/sub", err)
+	if !errors.As(err, &left) || !strings.Contains(left.Why, "disagree on what dist/sub is") {
+		t.Fatalf("err = %v, want a *LinkSkipped that says the two disagree on what dist/sub is", err)
+	}
+	if strings.Contains(left.Why, "put back") {
+		t.Errorf("the clash was found only when a move failed: %q", left.Why)
 	}
 	for _, f := range []string{"pkg/x/dist/a.js", "pkg/x/dist/sub/b.js"} {
 		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
@@ -128,7 +131,7 @@ func TestLinkHostFileKeepsTheDirectoryWhenAFileMeetsADirectory(t *testing.T) {
 func TestLinkHostFileKeepsTheModeOfTheDirectoriesItMoves(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, "pkg/x/private/a"), "a")
-	if err := os.Chmod(filepath.Join(root, "pkg/x/private"), 0700); err != nil {
+	if err := os.Chmod(filepath.Join(root, "pkg/x/private"), 0750); err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(root, "store/x/other"), "o")
@@ -136,8 +139,8 @@ func TestLinkHostFileKeepsTheModeOfTheDirectoriesItMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(root, "store/x/private"))
-	if err != nil || info.Mode().Perm() != 0700 {
-		t.Errorf("mode = %v, %v; want 0700", info, err)
+	if err != nil || info.Mode().Perm() != 0750 {
+		t.Errorf("mode = %v, %v; want 0750", info, err)
 	}
 }
 
@@ -369,5 +372,59 @@ func TestLinkHostFileMergeIsUndoneWhenAMoveFails(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(root, "pkg/x/sub")); err != nil || info.Mode().Perm() != 0555 {
 		t.Errorf("pkg/x/sub = %v, %v; want its mode 0555 back", info, err)
+	}
+}
+
+// a text that goes up again after a name is not where it seems: l leads to the root of the sysroot,
+// so l/../.. goes above it, where the text alone (read as ../ from the directory) is inside
+func TestLinkHostFileRefusesATextThatGoesUpAfterAName(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "a/b/c"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../..", filepath.Join(root, "a/b/c/l")); err != nil {
+		t.Fatal(err)
+	}
+	wantSkipped(t, LinkHostFile(root, "l/../..", "/a/b/c/n"), "goes up (..) again after a name")
+	if _, err := os.Lstat(filepath.Join(root, "a/b/c/n")); err == nil {
+		t.Errorf("the link was made")
+	}
+}
+
+func TestLinkHostFileRefusesAnAbsoluteText(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	wantSkipped(t, LinkHostFile(root, "/etc", "/a"), "is absolute")
+	// and for a directory that is there already
+	write(t, filepath.Join(root, "d/f"), "f")
+	wantSkipped(t, LinkHostFile(root, "/etc", "/d"), "is absolute")
+	mustExist(t, filepath.Join(root, "d/f"))
+}
+
+// a link inside the directory that goes up would end at another depth in the directory it is moved to
+func TestLinkHostFileDoesNotMoveALinkThatGoesUp(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "pkg/x/deep/f"), "f")
+	if err := os.Symlink("../../../../elsewhere", filepath.Join(root, "pkg/x/deep/up")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "store/x/other"), "o")
+	wantSkipped(t, LinkHostFile(root, "../store/x", "/pkg/x"), "deep/up")
+	mustExist(t, filepath.Join(root, "pkg/x/deep/f"))
+	if _, err := os.Lstat(filepath.Join(root, "store/x/deep")); err == nil {
+		t.Errorf("something was moved")
+	}
+}
+
+func TestScrubDoesNotTouchANameThatStartsLikeTheSysroot(t *testing.T) {
+	root := t.TempDir()
+	got := scrub(root, "rename "+root+"/a "+root+".old/b: failed in "+root)
+	if want := "rename /a " + root + ".old/b: failed in /"; got != want {
+		t.Errorf("scrub = %q, want %q", got, want)
+	}
+	if got := scrubErr(root, &os.PathError{Op: "lstat", Path: "/host/secret", Err: os.ErrNotExist}); strings.Contains(got, "/host") {
+		t.Errorf("scrubErr = %q holds a path", got)
 	}
 }
