@@ -139,8 +139,8 @@ Cause: ops often reports "ip timeout" although the guest has an address. Two cau
 
 Kind: gap in ops.
 
-Also: ops compose up panics inside ops when the dns instance is late. The tool does not retry: it prints one ops compose up command (see the next steps it prints), so run it again if it fails. The CI workflows of the project run it up to three times (docs/top30.md on the branch check/top30 records 3 tries per row).
+Also: ops compose up panics inside ops when the dns instance is late. The tool does not retry: it prints one ops compose up command (see the next steps it prints), so run it again if it fails. The CI workflows of the project run it up to three times (docs/top30.md on the branch check/top30 records 3 tries per row that reached ops compose up).
 
 ## Hub packages
 
-The hub package for postgres has no entrypoint: POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD and initdb.d are ignored, and the tool does not create the database; it prints the psql CREATE DATABASE command. A second boot after a kill fails on a stale postmaster.pid. Data retention is not measured. The branch for POSTGRES_USER different from the superuser is unit-tested only.
+The hub package for postgres has no entrypoint: POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD and initdb.d are ignored, and ops compose up does not create the database. The tool writes post-up-<package>.sh next to compose.yaml, which creates the database and the user with psql, and prints the command to run it by hand once the instance is up (ops compose does not run it). Not measured: the script is covered by unit tests only, no CI run of it is recorded in this document. A second boot after a kill fails on a stale postmaster.pid. Data retention is not measured. The branch for POSTGRES_USER different from the superuser is unit-tested only.
