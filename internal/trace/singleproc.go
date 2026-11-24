@@ -159,16 +159,7 @@ func apacheAdvice(program string, argv []string) (SingleProcessAdvice, bool) {
 		return SingleProcessAdvice{}, false
 	}
 	args := argv[1:]
-	for _, a := range args {
-		if a == "-X" || a == "-DONE_PROCESS" {
-			return SingleProcessAdvice{}, false
-		}
-	}
 	adv := SingleProcessAdvice{Server: "apache"}
-	if name == "httpd" {
-		adv.Reason = "httpd starts several processes (fork, prefork); the option -DONE_PROCESS keeps one. The one run made with it (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer and its log ends with AH00014 (Configuration check failed, after AH00557 apr_sockaddr_info_get failed, probably the host name): that is no evidence against -DONE_PROCESS itself, and nothing else was measured"
-		return adv, true
-	}
 	adv.Reason = "apache2 starts several processes (fork, prefork); -DONE_PROCESS keeps one, and apache2-foreground sets an environment (from /etc/apache2/envvars) that the command has to write out"
 	if len(args) != 1 || args[0] != "-DFOREGROUND" {
 		count := "without arguments"
