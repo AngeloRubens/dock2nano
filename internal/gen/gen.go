@@ -1394,10 +1394,8 @@ func hostWords(line string) []string {
 // the literal IP. What was measured about names, in https://github.com/AngeloRubens/dock2nano/actions/runs/43266079611
 // (sparkjava-mysql, with and without dns_search): with dns_search the backend answered 200,
 // without it did not; dig db gave SERVFAIL and db.service gave NOERROR; the resolv.conf itself
-// was not printed. An ops that includes nanovms/ops#1815 (ops master since 2177c54, not in any
-// release up to 0.1.47) writes "search service" in the resolv.conf of each guest, so the bare
-// package name resolves without --short-names (measured, run 45393646760); a released ops (up to
-// 0.1.47) ignores dns_search, so there the name is written as <pkg>.service. The evidence text is given once per note, after the words.
+// was not printed. The search line works only with an ops that reads dns_search (nanovms/ops#1815,
+// open, not in master). The evidence text is given once per note, after the words.
 // Only the files in ConfigurationFiles are read: the files under /etc that the
 // trace keeps (not /etc/ssl/certs or /etc/ld.so*) and those outside /etc with one of the
 // extensions .conf .cnf .ini .yaml .yml .toml .properties, matched in lower case only
@@ -1410,7 +1408,7 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 	type cand struct {
 		service string
 		ok      bool // resolves under ops compose in the mode of this run
-		bare    bool // the bare package name, which resolves through the search line (ops with nanovms/ops#1815)
+		bare    bool // the bare package name, which resolves only through the search line
 	}
 	for _, svc := range g.plan.Services {
 		si := g.in.Services[svc.Name]
@@ -1434,9 +1432,9 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 			pkg := pkgOf[other.Name]
 			add(other.Name, other.Name, false, false)
 			add(other.Name+".service", other.Name, false, false)
-			// the bare package name counts as resolving, through the search line that an ops with
-			// nanovms/ops#1815 writes by default (a released ops ignores dns_search)
-			add(pkg, other.Name, true, true)
+			// with --short-names the bare package name counts as resolving, through the search
+			// line, which needs an ops that reads dns_search (nanovms/ops#1815)
+			add(pkg, other.Name, g.in.ShortNames, true)
 			add(pkg+".service", other.Name, true, false)
 		}
 		var parts []string
@@ -1482,16 +1480,16 @@ func (g *generator) nameAtStartNote(pkgOf map[string]string) {
 					anyOK = true
 					m := head + `, a program that looks it up when it starts can exit with "host not found"`
 					if c.bare {
-						m += " (the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as <pkg>.service)"
+						m += " (the bare name resolves through the search line, with an ops that reads dns_search, nanovms/ops#1815)"
 					}
 					parts = append(parts, m)
 				} else {
 					anyNotOK = true
-					tail := "with a released ops (up to 0.1.47) write it as " + pkgOf[c.service] + ".service"
+					mode := "With --short-names"
 					if g.in.ShortNames {
-						tail = "--short-names, used in this run, does not make the compose name resolve"
+						mode = "With --short-names (used in this run)"
 					}
-					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose: write it as %s.service, the name the dns answers. %s alone also resolves with an ops that includes nanovms/ops#1815 (%s); %s", head, pkgOf[c.service], pkgOf[c.service], opsMasterNote, tail))
+					parts = append(parts, fmt.Sprintf("%s, it does not resolve under ops compose: write it as %s.service, the name the dns answers. %s, %s alone also resolves through the search line, with an ops that reads dns_search (nanovms/ops#1815)", head, pkgOf[c.service], mode, pkgOf[c.service]))
 				}
 			}
 		}
@@ -1531,13 +1529,9 @@ func sortedEnvNames(env map[string]string) []string {
 	return names
 }
 
-// opsMasterNote says which ops has nanovms/ops#1815.
-const opsMasterNote = "ops master since 2177c54; not in any release up to 0.1.47"
-
-// dnsName is the name a service has in the dns of ops compose, as the report says it. The
-// <pkg>.service form always resolves; the bare name only with nanovms/ops#1815 (a released ops
-// ignores dns_search, so --short-names does not help there), and the compose name only when it
-// equals the package name.
+// networkNote explains how services find each other, once for the project. It
+// names the variables whose value names another service, never the values.
+// dnsName is the name a service has in the dns of ops compose, as the report says it.
 func (g *generator) dnsName(pkg string) string {
 	if g.in.ShortNames {
 		return pkg + " (or " + pkg + ".service)"
@@ -1545,8 +1539,6 @@ func (g *generator) dnsName(pkg string) string {
 	return pkg + ".service"
 }
 
-// networkNote explains how services find each other, once for the project. It
-// names the variables whose value names another service, never the values.
 func (g *generator) networkNote(pkgOf map[string]string) {
 	if len(g.plan.Services) < 2 {
 		return
@@ -1558,50 +1550,32 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	}
 	var msg string
 	if g.in.ShortNames {
-		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml; only an ops that includes nanovms/ops#1815 (" + opsMasterNote + ") reads it, and it already puts service in the search line of resolv.conf by default; with a released ops (up to 0.1.47) write <pkg>.service): " + strings.Join(pairs, ", ") + "."
+		msg = "a service reaches another by its package name, or as <pkg>.service (dns_search: [service] in compose.yaml puts service in the search line of resolv.conf, which needs an ops that reads it, nanovms/ops#1815): " + strings.Join(pairs, ", ") + "."
 	} else {
-		msg = "a service reaches another as <pkg>.service, which always resolves; the bare <pkg> also resolves with an ops that includes nanovms/ops#1815 (" + opsMasterNote + "), so the compose name works only when it equals the package name: " + strings.Join(pairs, ", ") + "."
+		msg = "a service reaches another as <pkg>.service, not by its compose name: " + strings.Join(pairs, ", ") + "."
 	}
-	// variables whose value names any other service; a compose name that differs from the
-	// package name never resolves, one that equals it resolves only with nanovms/ops#1815
-	var diffRefs, sameRefs []string
-	var differing, same []plan.Service
-	for _, o := range g.plan.Services {
-		if pkgOf[o.Name] != o.Name {
-			differing = append(differing, o)
-		} else {
-			same = append(same, o)
-		}
-	}
+	var refs []string
 	for _, svc := range g.plan.Services {
-		var dv, sv []string
+		var vars []string
 		for _, n := range sortedEnvNames(svc.Manifest.Env) {
 			tokens := strings.FieldsFunc(svc.Manifest.Env[n], func(r rune) bool {
 				return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-')
 			})
-			if refersToOther(tokens, svc.Name, differing) {
-				dv = append(dv, n)
-			}
-			if refersToOther(tokens, svc.Name, same) {
-				sv = append(sv, n)
+			if refersToOther(tokens, svc.Name, g.plan.Services) {
+				vars = append(vars, n)
 			}
 		}
-		if len(dv) > 0 {
-			diffRefs = append(diffRefs, svc.Name+": "+strings.Join(dv, ", "))
-		}
-		if len(sv) > 0 {
-			sameRefs = append(sameRefs, svc.Name+": "+strings.Join(sv, ", "))
+		if len(vars) > 0 {
+			refs = append(refs, svc.Name+": "+strings.Join(vars, ", "))
 		}
 	}
-	if len(diffRefs) > 0 {
-		msg += " Environment variables whose value names a service whose compose name differs from its package name were not rewritten and never resolve, with or without --short-names (write <pkg>.service): " + strings.Join(diffRefs, "; ") + "."
-	}
-	if len(sameRefs) > 0 {
-		msg += " Environment variables whose value names a service by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47) write <pkg>.service: " + strings.Join(sameRefs, "; ") + "."
+	// with the names of the compose file in the dns, those values need no rewriting
+	if len(refs) > 0 && !g.in.ShortNames {
+		msg += " Environment variables whose value names another service were not rewritten: " + strings.Join(refs, "; ") + "."
 	}
 	g.add("", plan.Note, "service names", msg)
 	if !g.in.ShortNames {
-		g.add("", plan.Note, "bare names", "bare package names ("+strings.Join(bare, ", ")+") resolve with an ops that includes nanovms/ops#1815 ("+opsMasterNote+"), which writes the search line by default; with a released ops (up to 0.1.47) write <pkg>.service. Code or configuration that names a peer by its bare name (also inside a compiled jar or binary, where no file can be searched) works only with such an ops. The names here are package names: the package name resolves, not the compose name when they differ.")
+		g.add("", plan.Note, "bare names", "bare package names ("+strings.Join(bare, ", ")+") do not resolve under ops compose. Code or configuration that names a peer by its bare name (also inside a compiled jar or binary, where no file can be searched) needs --short-names with an ops that reads dns_search (nanovms/ops#1815), or the name written as <pkg>.service. The names here are package names: with --short-names the package name resolves, not the compose name when they differ.")
 	}
 }
 

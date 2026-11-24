@@ -59,11 +59,9 @@ Flags of convert:
   --pull             pull the images that are missing on this machine
   --force            replace package folders and a compose.yaml that exist
   --strict           exit with status 2 if the report has an unsupported item
-  --short-names      writes dns_search: [service] in compose.yaml, so that a service is reached by
-                     the package name (db; the compose name only when it equals it) and not only
-                     as db.service. Read only by an ops that includes nanovms/ops#1815 (ops master
-                     since 2177c54), which already uses that search line by default; a released ops
-                     (up to 0.1.47) ignores it, so write <pkg>.service there
+  --short-names      let the services reach each other by the name of the compose file (db) and
+                     not only as db.service: writes dns_search: [service] in compose.yaml, which
+                     needs an ops that reads it
   --exercise [SVC=]REQ  ask the program for something once it is up, so that the files it opens
                      only to answer are carried: /health is asked of the first port the image
                      exposes, http://container:9000/ping names the port (can be repeated); with
