@@ -67,9 +67,9 @@ Matrix of 2026-11-20 (ops master 2177c54, with the address wait): 8 of 10 green,
 
 Cause: ops-dns (version 0.0.1, source not public) answers only names under .service. A bare record is accepted by /add (200) but queried with SERVFAIL. A service named db is db.service on ops. So dns_names plain or both cannot work.
 
-Kind: hard limit of ops-dns, worked around. Reported as nanovms/ops#1812 (short names, dns_search). The fix is nanovms/ops#1815 (dns_search, merged 2026-11-18), which writes "search service" in the resolv.conf of each guest.
+Kind: hard limit of ops-dns, worked around. Reported as nanovms/ops#1812 (short names, dns_search). The fix is nanovms/ops#1815 (dns_search, merged 2026-11-18; ops master since 2177c54, not in any release up to 0.1.47), which writes "search service" in the resolv.conf of each guest.
 
-Bare package names (db, backend) resolve inside the guests without any flag with an ops that includes nanovms/ops#1815 (ops master at 2177c54). Measured: sparkjava-mysql and nginx-golang-mysql were green with no flags, run 45393646760. With an older ops (before nanovms/ops#1815) a bare name does not resolve; pass --short-names, which writes dns_search: [service] in compose.yaml (verified on nanos: the sparkjava backend resolved db, the mariadb log shows its connection). The compose service name resolves only when it equals the package name; otherwise write <pkg>.service.
+Bare package names (db, backend) resolve inside the guests without any flag with an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47). Measured: sparkjava-mysql and nginx-golang-mysql were green with no flags, run 45393646760. With a released or older ops (every release up to 0.1.47) a bare name does not resolve; pass --short-names, which writes dns_search: [service] in compose.yaml (verified on nanos, run 43266079611: the sparkjava backend resolved db, the mariadb log shows its connection). The compose service name resolves only when it equals the package name; this follows from the search domain and was not measured with a differing name. Otherwise write <pkg>.service.
 
 ## Volumes
 
