@@ -349,7 +349,7 @@ func removeOldScript(j *journal, path string) (note string, err error) {
 	}
 	// ours only when the header is the second line, as the tool writes it
 	lines := bytes.SplitN(data, []byte("\n"), 3)
-	if len(lines) < 2 || string(lines[1]) != plan.PostUpHeader {
+	if len(lines) < 2 || (string(lines[1]) != plan.PostUpHeader && !bytes.Contains(data, []byte(plan.PostUpHeader))) {
 		return KeptPrefix + "the header was changed: " + path, nil
 	}
 	old := fmt.Sprintf("%s.stale-%d", path, os.Getpid())
