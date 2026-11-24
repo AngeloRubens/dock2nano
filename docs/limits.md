@@ -200,6 +200,8 @@ Kind: gap of the tool, fixed: HOME is the home of the user in /etc/passwd of the
 
 Cause: a Go program (RoadRunner, rr, of shlink) starts its children from any of its threads. The thread has no execve of its own, so the observation did not see the children as children of rr, took the youngest php worker for the program, and the package ran bin/roadrunner-worker.php.
 
+A thread that is not the leader and calls execve is written by strace as "T execve(... <pid changed to N ...>" then "N +++ superseded by execve in pid T +++" and "N <... execve resumed>) = 0" (read from a real trace of strace 5.16 made by a reviewer; not captured in a CI run of this project). The tool had read both lines the other way round and dropped the execve; it now reads them as strace writes them.
+
 Kind: gap of the tool, fixed: the starter of a process is the nearest process that executed a program (also for the commands reported as not run and for the launchers a program started). Measured: shlink has rr serve -c config/roadrunner/.rr.yml as its program (run 45492200295). The row still does not answer, see the next section and No fork.
 
 ## The working directory of the program

@@ -2607,9 +2607,9 @@ func TestObserveGivesTheProgramTheHomeOfItsUser(t *testing.T) {
 	}{
 		{"a name", "node", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
 		{"a uid", "1000:1000", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
-		{"the image sets HOME", "node", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
-		{"the options set HOME", "node", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
-		{"root", "", []string{"PATH=/usr/bin"}, nil, ""},
+		{"guard, passes without the change: the image sets HOME", "node", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
+		{"guard, passes without the change: the options set HOME", "node", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
+		{"guard, passes without the change: root", "", []string{"PATH=/usr/bin"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScene(t)
