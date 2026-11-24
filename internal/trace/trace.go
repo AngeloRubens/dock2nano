@@ -231,7 +231,8 @@ var resultMark = regexp.MustCompile(`\) +=[ \t]`)
 // against the current directory; one cut in two is applied when its resumed line says 0). A
 // successful fchdir sets it to unknown, since the path of a descriptor is not in the trace, until
 // the next chdir; a relative path is left out while the directory is unknown, as with an empty
-// workingDir. A "+++ superseded by execve in pid N +++" line hands the state of that thread to N.
+// workingDir. A thread that calls execve ("T execve(... <pid changed to N ...>", then "N +++ superseded
+// by execve in pid T +++") hands its state to N.
 //
 // An execve counts when it succeeded on one line, or when it is unfinished and its resumed line
 // has not said otherwise: a resumed line with a result other than 0 cancels it, from both results.
@@ -256,6 +257,55 @@ func CreatedPaths(trace []byte, workingDir string, from int) []string {
 	}
 	return out
 }
+
+// cwdSet is the working directory of each process. Processes that share their directory (a thread,
+// or a clone with CLONE_FS) share one cell, so that a chdir of one is the chdir of the others, as in
+// the kernel.
+type cwdSet map[string]*string
+
+func (c cwdSet) has(pid string) bool { _, ok := c[pid]; return ok }
+
+func (c cwdSet) get(pid string) string {
+	if p := c[pid]; p != nil {
+		return *p
+	}
+	return ""
+}
+
+// set changes the directory of pid and of everything that shares it.
+func (c cwdSet) set(pid, dir string) {
+	if p := c[pid]; p != nil {
+		*p = dir
+		return
+	}
+	c[pid] = &dir
+}
+
+// copyOf gives child its own copy of the directory of parent (or dir when parent is not known).
+func (c cwdSet) copyOf(child, parent string) {
+	v := c.get(parent)
+	c[child] = &v
+}
+
+// share makes child use the same directory as parent.
+func (c cwdSet) share(child, parent string) {
+	if c[parent] == nil {
+		v := ""
+		c[parent] = &v
+	}
+	c[child] = c[parent]
+}
+
+// sharesDirectory tells whether a clone call shares the working directory with its parent: a
+// thread does, and so does a clone with CLONE_FS.
+var sharesDirectory = regexp.MustCompile(`\bCLONE_(THREAD|FS)\b`)
+
+// cloneStart matches a clone call that strace cut in two, on its first line.
+var cloneStart = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)(?:clone3?|fork|vfork)\(.*<unfinished \.\.\.>`)
+
+// pidChanged is what strace writes at the end of the execve of a thread that is not the leader:
+// the process goes on under the pid of the leader.
+var pidChanged = regexp.MustCompile(`<pid changed to (\d+) \.\.\.>`)
 
 type scanned struct {
 	paths, executed, created []string
@@ -291,7 +341,8 @@ func scan(trace []byte, workingDir string, from int) scanned {
 	seen := map[string]bool{}
 	made := map[string]bool{}
 	ran := map[string]int{}
-	cwd := map[string]string{}
+	cwd := cwdSet{}
+	pendingShare := map[string]bool{}
 	waitingExec := map[string]string{}
 	waitingChdir := map[string]string{}
 	active := ""
@@ -304,34 +355,48 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			continue
 		}
 		pid := prefix[1] + prefix[2]
-		if _, known := cwd[pid]; !known {
+		if !cwd.has(pid) {
 			if active != "" {
-				cwd[pid] = cwd[active]
+				cwd.copyOf(pid, active)
 			} else {
-				cwd[pid] = workingDir
+				cwd.set(pid, workingDir)
 			}
 		}
 		active = pid
 		rest := line[len(prefix[0]):]
 
+		if cs := cloneStart.FindStringSubmatch(line); cs != nil {
+			pendingShare[pid] = sharesDirectory.MatchString(line)
+		}
 		if child := forkLine.FindStringSubmatch(line); child != nil {
-			if _, known := cwd[child[3]]; !known {
-				cwd[child[3]] = cwd[pid]
+			shared := sharesDirectory.MatchString(line)
+			if strings.Contains(line, "<... ") {
+				shared = pendingShare[pid]
+			}
+			delete(pendingShare, pid)
+			if shared {
+				cwd.share(child[3], pid)
+			} else if !cwd.has(child[3]) {
+				cwd.copyOf(child[3], pid)
 			}
 			continue
 		}
 
+		// "N +++ superseded by execve in pid T +++": the thread T called execve and the process goes on
+		// as N (the line before it ends in "<pid changed to N ...>"), with what T had.
 		if sup := supersededLine.FindStringSubmatch(line); sup != nil {
-			if to := sup[3]; to != pid {
-				cwd[to] = cwd[pid]
-				delete(cwd, pid)
-				if w, ok := waitingExec[pid]; ok {
-					waitingExec[to] = w
-					delete(waitingExec, pid)
+			if thread := sup[3]; thread != pid {
+				if cwd.has(thread) {
+					cwd.share(pid, thread)
 				}
-				if w, ok := waitingChdir[pid]; ok {
-					waitingChdir[to] = w
-					delete(waitingChdir, pid)
+				delete(cwd, thread)
+				if w, ok := waitingExec[thread]; ok {
+					waitingExec[pid] = w
+					delete(waitingExec, thread)
+				}
+				if w, ok := waitingChdir[thread]; ok {
+					waitingChdir[pid] = w
+					delete(waitingChdir, thread)
 				}
 			}
 			continue
@@ -351,7 +416,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 				if dir, ok := waitingChdir[pid]; ok {
 					delete(waitingChdir, pid)
 					if found && result == "0" {
-						cwd[pid] = dir
+						cwd.set(pid, dir)
 					}
 				}
 			}
@@ -368,7 +433,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			if strings.Contains(args, "<unfinished ...>") {
 				waitingChdir[pid] = ""
 			} else if result, found := ResultOf(args); found && result == "0" {
-				cwd[pid] = ""
+				cwd.set(pid, "")
 			}
 			continue
 		}
@@ -377,7 +442,11 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		if !ok {
 			continue
 		}
+		execPid := pid
 		unfinished := strings.Contains(after, "<unfinished ...>")
+		if changed := pidChanged.FindStringSubmatch(after); changed != nil {
+			unfinished, execPid = true, changed[1]
+		}
 		if !unfinished {
 			result, found := ResultOf(after)
 			if !found || strings.HasPrefix(result, "-") {
@@ -389,7 +458,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 		}
 
 		if !strings.HasPrefix(name, "/") {
-			dir := cwd[pid]
+			dir := cwd.get(pid)
 			if !relativeToCwd || dir == "" || name == "" {
 				continue
 			}
@@ -405,11 +474,11 @@ func scan(trace []byte, workingDir string, from int) scanned {
 
 		switch call[1] {
 		case "execve":
-			execCwd[i] = cwd[pid]
+			execCwd[i] = cwd.get(pid)
 			if collect {
 				ran[name]++
 				if unfinished {
-					waitingExec[pid] = name
+					waitingExec[execPid] = name
 				}
 			}
 		case "chdir":
@@ -417,7 +486,7 @@ func scan(trace []byte, workingDir string, from int) scanned {
 			if unfinished {
 				waitingChdir[pid] = name
 			} else {
-				cwd[pid] = name
+				cwd.set(pid, name)
 			}
 		case "creat":
 			note(seen)
@@ -740,7 +809,7 @@ func ListeningPorts(table string) []int {
 	return ports
 }
 
-var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*(\) += 0 *|<unfinished \.\.\.>)$`)
+var execveLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)execve\("((?:[^"\\]|\\.)*)", .*(\) += 0 *|<unfinished \.\.\.>|<pid changed to (\d+) \.\.\.>)$`)
 var exitedLine = regexp.MustCompile(`^(?:\[pid +(\d+)\] +|(\d+) +)\+\+\+ (?:exited|killed)`)
 
 // Exec is a program the trace saw started: the pid, the file that was executed, the argv as the
@@ -836,8 +905,10 @@ func IsInit(p string) bool {
 // resumed>" line), where it counts at the line of the first part, with the argv of the first part,
 // unless the resumed line says it failed, which cancels it and gives back the state of the process
 // before it. An unfinished one that is never resumed counts. TouchedPaths follows the same rule.
-// A "+++ superseded by execve in pid N +++" line hands the program (and an execve waiting for its
-// result) of that thread to N.
+// A thread that is not the leader and calls execve is written by strace as "T execve(... <pid
+// changed to N ...>", "N +++ superseded by execve in pid T +++" and "N <... execve resumed>) = 0":
+// the program is the one of N, the process, and what T had (its program, an execve waiting for its
+// result) is N's.
 //
 // Which running process: an entrypoint script starts tools and then the program, but a program also
 // starts helpers that outlive the line that started them (the controller of Elasticsearch, a sleep
@@ -870,7 +941,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 		if m := forkLine.FindStringSubmatch(text); m != nil {
 			parent[m[3]] = m[1] + m[2]
 		} else if m := supersededLine.FindStringSubmatch(text); m != nil {
-			from, to := m[1]+m[2], m[3]
+			// "N +++ superseded by execve in pid T +++": the thread T called execve and the process goes
+			// on as N, so what T had is N's now
+			from, to := m[3], m[1]+m[2]
 			if from == to {
 				continue
 			}
@@ -891,13 +964,17 @@ func FinalExec(trace []byte) (Exec, bool) {
 			delete(gone, from)
 		} else if m := execveLine.FindStringSubmatch(text); m != nil {
 			process := m[1] + m[2]
+			if m[5] != "" {
+				// a thread that is not the leader: the process goes on under the pid of the leader
+				process = m[5]
+			}
 			var argv []string
 			if prefix := pidPrefix.FindStringSubmatch(text); prefix != nil {
 				if _, after, _, ok := FirstQuoted(text[len(prefix[0])+len("execve("):]); ok {
 					argv = parseArgv(after)
 				}
 			}
-			if strings.HasPrefix(m[4], "<unfinished") {
+			if strings.HasPrefix(m[4], "<unfinished") || m[5] != "" {
 				previous, had := last[process]
 				waiting[process] = before{previous: previous, hadPrevious: had, wasGone: gone[process], historyLen: len(history[process])}
 			} else {

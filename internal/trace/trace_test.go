@@ -717,8 +717,8 @@ func TestFinalProgram(t *testing.T) {
 `, "1", "/bin/a", 0, true},
 		{"a thread that execs hands the program to its process", `7     execve("/bin/sh", ["sh"], 0x7ffd /* 5 vars */) = 0
 7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
-[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <pid changed to 7 ...>
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] <... execve resumed>) = 0
 `, "7", "/srv/go", 2, true},
 		{"a later tool that exited is not the program", `20  execve("/bin/sh", ["sh", "-c", "x"], 0x1 /* 1 var */) = 0
@@ -867,8 +867,8 @@ func TestTouchedPathsFromLineZero(t *testing.T) {
 func TestTouchedPathsSuperseded(t *testing.T) {
 	trace := `7     chdir("/srv") = 0
 7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
-[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <pid changed to 7 ...>
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] <... execve resumed>) = -1 ENOENT (No such file or directory)
 [pid     7] openat(AT_FDCWD, "a.conf", O_RDONLY) = 3
 `
@@ -883,7 +883,7 @@ func TestTouchedPathsSuperseded(t *testing.T) {
 	// the thread had chdir'd on its own before it handed over
 	trace = `7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_THREAD, tls=0x7f1) = 8
 [pid     8] chdir("/other") = 0
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] openat(AT_FDCWD, "b.conf", O_RDONLY) = 3
 `
 	paths, _ = TouchedPaths([]byte(trace), "/", 0)
