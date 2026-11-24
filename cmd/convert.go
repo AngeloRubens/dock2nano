@@ -1434,7 +1434,7 @@ func (a *App) build(ctx context.Context, dir string, s *compose.Service, tag str
 	}
 	fmt.Fprintf(a.Stderr, "%s: building %s\n", s.Name, tag)
 	if err := a.Docker.Build(ctx, bo); err != nil {
-		return "", withBuildHint(err)
+		return "", err
 	}
 	return df, nil
 }
