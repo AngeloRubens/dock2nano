@@ -1,6 +1,6 @@
 # Coverage of docker/awesome-compose
 
-Every sample of docker/awesome-compose that has a compose file with a published or exposed HTTP or TCP port is a row of the matrix of .github/workflows/compose-up.yml. Plain rows (no flags) measure what the tool does without help. Flags appear where the project notes record a command that was needed (django, fastapi), where a Host override is set (django-host), and in the later rows that carry --short-names or --with db. The probe is strict: green means the status is 2xx or 3xx, or the TCP port is open. A 4xx or 5xx answer prints "result: SVC reached, status N is not a success" and fails the job. The probe tries up to 24 times, 10 seconds apart, and prints the code of every try next to "answer:"; when a try got an HTTP status and the last try got no HTTP response (000), the report names the last status other than 000, so "reached, status N" can come from an earlier try. The body file is removed before each try, so the body printed is the one of the last try.
+Every sample of docker/awesome-compose that has a compose file with a published or exposed HTTP or TCP port is a row of the matrix of .github/workflows/compose-up.yml. Plain rows (no flags) measure what the tool does without help. Flags appear where the project notes record a command that was needed (django, fastapi), where a Host override is set (django-host), and in the later rows that carry --short-names or --with db. The probe is strict: green means the status is 2xx or 3xx, or the TCP port is open. A 4xx or 5xx answer prints "result: SVC reached, status N is not a success" and fails the job. The probe tries up to 24 times, 10 seconds apart, and prints, for http rows, the code of every try on the line after "answer:"; when a try got an HTTP status and the last try got no HTTP response (000), the report names the last status other than 000, so "reached, status N" can come from an earlier try. The body file is removed before each try; the body of the last try that got a status other than 000 is kept in a second file and is the one printed, so a 502 page is not lost to a later no-answer try. Run 45392317073 (branch check/fixes-loop, 1f9d9ea, rows flask, django-ip and nginx-aspnet-mysql) showed this loop: flask "answer: 200", "codes of the tries: 200" on the first try, success; django-ip (with the --command row) "answer: 400", all 24 tries 400, "reached, status 400 is not a success"; nginx-aspnet-mysql "answer: 000", all 24 tries 000, no answer. That run had the first version of the loop, without the second body file.
 
 ## Results
 
@@ -62,7 +62,7 @@ Every sample of docker/awesome-compose that has a compose file with a published 
 - elasticsearch-logstash-kibana, postgresql-pgadmin, aspnet-mssql: database ports are probed only where listed in the Probe column.
 - Services of a row that are not in its probe list start with the rest but are not asked.
 
-Reading of run 45372721961 (2026-11-24, ops master, nightly nanos): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
+Reading of run 45372721961 (2026-11-24, ops 1183538 plus f3ee91e of the fork, nightly nanos): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
 
 Run 45372721961 ran at 56f19bf, where the probe stopped at the first 4xx or 5xx, so django-host (500) and django-ip (400) were measured with a single try.
 
@@ -71,13 +71,20 @@ Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measu
 | sample | change | result | run id |
 |---|---|---|---|
 | nginx-golang-mysql | --short-names | green | 45383667105 |
-| nginx-aspnet-mysql | --short-names | proxy answered 502 at the first try (run 45383667105, the probe did not retry); with the retry loop fixed (run 45387284406, branch check/fix-aspnet-sn at 4b7c336) 24 tries over about 5 minutes ended with the last try getting no HTTP response (000); a 502 page of an earlier try stayed in the body file; not a success; the backend behind the proxy was not diagnosed | 45383667105, 45387284406 |
+| nginx-aspnet-mysql | --short-names | proxy answered 502 at the first try (run 45383667105, the probe did not retry); with the retry loop fixed (run 45387284406, branch check/fix-aspnet-sn at 4b7c336) 24 tries over about 5 minutes ended with the last try getting no HTTP response (000), and a 502 page of an earlier try stayed in the body file; a later run of the loop (45392317073, check/fixes-loop) got 000 on all 24 tries, with no 502 at all; not a success; the backend behind the proxy was not diagnosed | 45383667105, 45387284406, 45392317073 |
 | nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
 | spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
 | gitea-postgres | --short-names | red: the program chosen is the supervisor s6-svscan (fork), the guest reboots | 45383667105 |
 | nextcloud-postgres, nextcloud-redis-mariadb | --short-names | red: apache2 prefork needs fork, nothing listens | 45383667105 |
 | angular | /proc/self/stat for node (commit e2a2a4a) | green, answer 200 | 45384816850 |
 
-Causes found by reading the logs, not fixed: nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 has no known one-process setting (the option -X is a guess not yet run); gitea needs the choice of the listening child instead of the supervisor. The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
+Causes read from the logs, not fixed and not yet confirmed by a run (hypotheses): nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 may need a one-process setting (the option -X is a guess not yet run); gitea may need the choice of the listening child instead of the supervisor (not yet run). The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
+
+Revert checks of the machine note and the bare names note (2026-11-24, branches from 9321c5d with the change removed and the tests kept):
+
+| branch | change reverted | ci run | tests that failed |
+|---|---|---|---|
+| check/fixes-r4a | the node sentence of the machine note is printed whether or not /proc/self/stat is in the list | 45393185622 | TestMachineFilesOfThePackageAreNoted (the negative half: the node sentence was printed without /proc/self/stat). TestMachineNoteSaysTheNodeFileOnlyWhenTheListHasIt did not fail: its list has /proc/self/stat, so it passes with the sentence unconditional and is a guard of the positive half |
+| check/fixes-r4b | the bare names note is not added | 45393191478 | TestBareNamesNoteIsPrintedWithoutShortNames, TestBareNamesNoteIsAlsoPrintedWithAFindingInAFile |
 
 In the tests of this round the arm64 and existing-file cases of writeMachineFiles are guards: they pass with the change reverted and do not test a change.
