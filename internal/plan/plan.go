@@ -66,7 +66,7 @@ type Service struct {
 // PostUpMarker is a phrase that every script of the tool holds. The writer
 // removes an old script of the same name when forced only if it holds it, so a
 // file of the user with that name is never removed.
-const PostUpMarker = "post-up script written by the converter of your compose file"
+const PostUpMarker = "Written by dock2nano"
 
 // PostUpMarkerOld is the phrase that the scripts of earlier versions held; the
 // writer still recognises them as its own.
