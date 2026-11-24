@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"strconv"
@@ -15,8 +16,15 @@ import (
 
 // SingleProcessAdvice is what is known about running a multi-process program in one process.
 type SingleProcessAdvice struct {
-	// Server is "django", "uvicorn" or "gunicorn".
+	// Server is "django", "uvicorn", "gunicorn" or "apache".
 	Server string
+
+	// Requires is the name of a program the service must start the observed program through for
+	// Command to apply ("apache2-foreground"), or "".
+	Requires string
+
+	// Caveat says what was measured and what was not, for a suggestion that was run on few images.
+	Caveat string
 
 	// Command is the command that runs the program in one process, as words. It is empty when no
 	// command could be built from the command line.
@@ -107,6 +115,9 @@ func serverInvocation(program string, argv []string) (server string, prefix, arg
 // For gunicorn with the worker class of uvicorn the command runs uvicorn; with another worker class
 // there is no command: gunicorn forks its workers, and the server has to be chosen by the user.
 func SingleProcess(program string, argv []string) (SingleProcessAdvice, bool) {
+	if adv, ok := apacheAdvice(argv); ok {
+		return adv, true
+	}
 	server, prefix, args, ok := serverInvocation(program, argv)
 	if !ok {
 		return SingleProcessAdvice{}, false
@@ -118,6 +129,56 @@ func SingleProcess(program string, argv []string) (SingleProcessAdvice, bool) {
 		return uvicornAdvice(prefix, args)
 	}
 	return gunicornAdvice(args)
+}
+
+// apacheEnv is the environment that apache2-foreground of the Debian images sets, from
+// /etc/apache2/envvars, before it runs apache2 -DFOREGROUND. It is a fixed list: nothing of the
+// command line or of the environment of the user is copied into it.
+var apacheEnv = []string{
+	"APACHE_RUN_USER=www-data", "APACHE_RUN_GROUP=www-data",
+	"APACHE_PID_FILE=/var/run/apache2/apache2.pid", "APACHE_RUN_DIR=/var/run/apache2",
+	"APACHE_LOCK_DIR=/var/lock/apache2", "APACHE_LOG_DIR=/var/log/apache2",
+}
+
+// ApacheCaveat says how far the suggestion for apache2 was measured.
+const ApacheCaveat = "measured on one image only, php:7.2-apache, which answered 200 on nanos with this command; an image with an entrypoint of its own that checks the command (nextcloud) was tried once with the same command, apache started and exited again and again, and the cause is not known; the user, group and directories are the values of the Debian image, not read from yours: review them"
+
+// apacheAdvice reads the command line of apache2 or httpd as apache2-foreground / httpd-foreground
+// start it (-DFOREGROUND). apache starts several processes (fork, prefork); -DONE_PROCESS keeps
+// one. For apache2 of the Debian images the command is the one measured, with the environment that
+// apache2-foreground sets; for httpd no command is given, because the one run that was made
+// (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer. The arguments are never repeated: only
+// their number is told.
+func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
+	if len(argv) == 0 {
+		return SingleProcessAdvice{}, false
+	}
+	name := path.Base(argv[0])
+	if name != "apache2" && name != "httpd" {
+		return SingleProcessAdvice{}, false
+	}
+	args := argv[1:]
+	for _, a := range args {
+		if a == "-X" || a == "-DONE_PROCESS" {
+			return SingleProcessAdvice{}, false
+		}
+	}
+	adv := SingleProcessAdvice{Server: "apache"}
+	if name == "httpd" {
+		adv.Reason = "httpd starts several processes (fork, prefork); the option -DONE_PROCESS keeps one, but the one run made with it (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer, so no command is suggested"
+		return adv, true
+	}
+	adv.Reason = "apache2 starts several processes (fork, prefork); -DONE_PROCESS keeps one, and apache2-foreground sets an environment (from /etc/apache2/envvars) that the command has to write out"
+	if len(args) != 1 || args[0] != "-DFOREGROUND" {
+		adv.Reason += fmt.Sprintf("; apache2 was started with %d arguments that are not the ones of apache2-foreground", len(args))
+		adv.Withheld = true
+		return adv, true
+	}
+	adv.Requires = "apache2-foreground"
+	adv.Caveat = ApacheCaveat
+	adv.Assumed = "environment values (user, group and directories)"
+	adv.Command = append(append([]string{"env"}, apacheEnv...), "apache2", "-DONE_PROCESS", "-DFOREGROUND")
+	return adv, true
 }
 
 func withPrefix(prefix []string, rest ...string) []string {

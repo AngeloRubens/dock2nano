@@ -907,9 +907,15 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 		}
 		observed = append([]string{all[0]}, observed[2:]...)
 	}
+	entrypointStays := false
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
+	case adv.Requires != "" && !slices.ContainsFunc(all, func(w string) bool { return path.Base(w) == adv.Requires }):
+		return adv.Reason + "; no command is suggested, because the service does not start the program through " + adv.Requires + ", which the command was written for"
+	case ep != nil && len(*ep) == 1 && adv.Server == "apache" && path.Base((*ep)[0]) == "docker-php-entrypoint":
+		// the entrypoint stays and runs the command: measured with this one
+		entrypointStays = true
 	case ep != nil && len(*ep) > 0:
 		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
 			return adv.Reason + "; no command string is given, because the service has an entrypoint that the observed command does not start with: --command replaces the command and keeps the entrypoint, so a command written after the entrypoint may still work if the entrypoint execs its arguments, but that was not checked"
@@ -927,6 +933,12 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	msg := fmt.Sprintf("%s; to run it in one process, try: %s convert ... --command '%s=%s'", adv.Reason, tool, s.Name, quoted)
 	if adv.Assumed != "" {
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
+	}
+	if entrypointStays {
+		msg += " (the entrypoint docker-php-entrypoint of the service stays and runs this command: --command replaces only the command)"
+	}
+	if adv.Caveat != "" {
+		msg += " (" + adv.Caveat + ")"
 	}
 	if adv.Server == "gunicorn" {
 		msg += " (settings of the configuration file (environment, working directory, application, worker class) are not carried; gunicorn also reads gunicorn.conf.py in the working directory and GUNICORN_CMD_ARGS)"
