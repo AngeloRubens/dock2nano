@@ -144,7 +144,7 @@ const selfStatName = "proc/self/stat"
 // isNode says whether the program is node.
 func isNode(program string) bool {
 	switch filepath.Base(program) {
-	case "node", "nodejs":
+	case "node":
 		return true
 	}
 	return false

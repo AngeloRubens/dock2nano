@@ -826,7 +826,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
 	if len(obs.MachineFiles) > 0 {
-		msg := "the program uses " + strings.Join(obs.MachineFiles, ", ") + " of /proc, /sys or /dev, which nanos does not provide; the package carries one of ours for each: one processor in cpuinfo, 0-63 as the processors a machine could have, an empty directory for /dev/shm. /dev/shm is written on any architecture; cpuinfo, cpu/possible and the stat files on x86_64 only (on arm64 the kernel answers for cpuinfo itself)"
+		msg := "the program uses " + strings.Join(obs.MachineFiles, ", ") + " of /proc, /sys or /dev, which nanos does not provide; the package carries one of ours for each: one processor in cpuinfo, 0-63 as the processors a machine could have, an empty directory for /dev/shm. these files are written on x86_64 only: cpuinfo, cpu/possible and the stat files on x86_64 only (on arm64 the kernel answers for cpuinfo itself)"
 		if slices.Contains(obs.MachineFiles, "/proc/self/stat") {
 			msg += ". For node the package carries /proc/self/stat, whether or not the program was seen opening it: a fixed line with a resident memory of 16 MiB and times of zero, so process.memoryUsage().rss is not real"
 		}
