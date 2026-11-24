@@ -847,7 +847,7 @@ func TestBareNamesNoteIsAlsoPrintedWithAFindingInAFile(t *testing.T) {
 func TestBarePackageNameInAFileIsNotUnresolvableWithoutShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, false, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "which may name service backend")
-	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as <pkg>.service)")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as backend.service)")
 	m := itemsOf(p, "proxy", plan.Note, "name at start")[0].Message
 	if strings.Contains(m, "does not resolve") || strings.Contains(m, "Even in the .service form") {
 		t.Errorf("the bare package name is reported as unresolvable: %q", m)
@@ -2516,7 +2516,7 @@ func TestNameAtStartBareNameWithShortNames(t *testing.T) {
 	p := mustGen(t, nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, true, "proxy", "backend"))
 	want1(t, p, "proxy", plan.Note, "name at start", "(the order of compose.yaml) did not help")
 	want1(t, p, "proxy", plan.Note, "name at start", "literal IP")
-	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as <pkg>.service)")
+	want1(t, p, "proxy", plan.Note, "name at start", "(the bare name resolves with an ops that includes nanovms/ops#1815, ops master since 2177c54, not in any release up to 0.1.47; with a released ops (up to 0.1.47) write it as backend.service)")
 }
 
 func TestNameAtStartTwoNamesInOneFileGiveOneEvidence(t *testing.T) {
