@@ -207,3 +207,23 @@ Every item: file and line, what was unclear, missing, wrong, or contradicted by 
 ## What is not measured
 
 Conversion of the rows with a docker build failure: measured in the follow-up (11 rows; the output of convert for the Dockerfile as it is). Linkwarden in the follow-up (its job failed in the ops build). Post-up scripts. Any program that answered 200 beyond the first try. The cause of the no-answer rows (verdaccio, wallos, directus, dashy, httpbin except the fork error). The ip timeout causes (only the first line of up.log is quoted).
+
+## Rerun on feat/modules d784c7f: runs 45462110286 and 45467614282
+
+Two runs of the workflow top30 on the branch check/top30-d784 (feat/modules d784c7f, which contains the build-failure hint and the bare-name notes), ops 2177c549, the 23 rows of the follow-up. Run 45462110286: 17 rows ran to their ROW result; 6 (dashy, datasette, echo-server, glance, reactive-resume, syncthing) failed before it, in the step that builds ops from source (go build, module download from proxy.golang.org); echo-server also printed a source=fail line from the checkout of its sha in the same step. Run 45467614282: those 6 rows only, with the go build of ops and of the tool tried up to 3 times (dock2nano 782a5e0, the same tool code plus the workflow change); all 6 ran to their ROW result. Both runs concluded with failure, as before (a red row is a row that did not answer).
+
+Nothing answered in the rerun. Per row:
+
+| row | result in the rerun | same as the follow-up |
+| --- | --- | --- |
+| coredns, etcd, filebrowser, homarr, ntfy, prometheus, redlib, tile38, ttyd | docker build failed, convert run on the Dockerfile as it is, exit 1, no compose.yaml | yes (same docker errors) |
+| echo-server | docker build failed ("/artifacts/build/release/linux/amd64/echo-server": not found), convert exit 1 | yes |
+| datasette | docker build failed (pip install of the zip of ${VERSION} did not complete successfully), convert exit 1 | yes |
+| gitea, gogs, kanboard, linkwarden | converted, ops compose up "ip timeout" in 3 of 3 tries; console of the instance: 0 lines (gitea, gogs, kanboard), 1 line (linkwarden) | yes; linkwarden now measured (not run in the follow-up) |
+| syncthing, glance, reactive-resume | converted, "ip timeout"; console 2, 1 and 20 lines | yes |
+| dashy | converted, started, address 192.168.33.16:8080, 24 tries all 000 | yes |
+| directus, shlink, verdaccio, wallos | converted, started, 24 tries all 000 | yes |
+
+The hint of the tool on a failed docker build was printed after the docker text in every row whose build failed: 10 of 10 rows (the 9 of the first run plus echo-server and datasette in the second): "the Dockerfile copies \"<path>\" and it is not in the build context ..." for the missing files (the path as docker named it, for example /.build/linux-amd64/promtool, /etcd--linux-amd64/etcdutl), and "a RUN step of the Dockerfile fails, so the build itself fails: run docker build without --quiet ..." for redlib and datasette. The hint is a guess about the cause, not a measurement of it.
+
+Not measured: the cause of the rows with 000 (dashy, directus, shlink, verdaccio, wallos) and of the ip timeout of gitea, gogs, kanboard and linkwarden (their consoles have 0 or 1 lines).
