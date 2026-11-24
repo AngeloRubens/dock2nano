@@ -3658,3 +3658,20 @@ func TestObserveSaysWhenALinkedDirectoryCannotBeMerged(t *testing.T) {
 		t.Errorf("the directory was not kept: %v", err)
 	}
 }
+
+// the program had stopped before /proc could be read: the trace still knows where it started
+func TestObserveWorkingDirectoryFromTheTraceWhenTheProgramHadStopped(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	s.d.cfg.WorkingDir = "/etc/shlink"
+	s.d.traceTxt = `10 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+10 chdir("/etc/shlink/bin") = 0
+10 execve("./rr", ["./rr", "serve"], 0x7ffd /* 4 vars */) = 0
+`
+	s.d.files["/etc/shlink/bin/rr"] = entry{data: "rr", mode: 0755}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "working dir", res.WorkingDir, "/etc/shlink/bin")
+}
