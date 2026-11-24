@@ -171,7 +171,7 @@ func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
 		return adv, true
 	}
 	adv.Requires = "apache2-foreground"
-			adv.Command = append(append([]string{"env"}, apacheEnv...), "apache2", "-DONE_PROCESS", "-DFOREGROUND")
+	adv.Command = append(append([]string{"env"}, apacheEnv...), "apache2", "-DONE_PROCESS", "-DFOREGROUND")
 	return adv, true
 }
 
