@@ -84,7 +84,7 @@ func writeMachineFiles(sysroot, arch, program string, opened []string) ([]string
 			continue
 		}
 		path := filepath.Join(sysroot, filepath.FromSlash(name))
-		if _, err := os.Lstat(path); err == nil {
+		if _, err := os.Lstat(path); err == nil && name != selfStatName {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
