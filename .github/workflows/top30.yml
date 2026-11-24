@@ -114,8 +114,9 @@ jobs:
             echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
             # the tool is run on the Dockerfile as it is, with the same flags as below; the tool builds the image itself
             cd "$GITHUB_WORKSPACE"
-            "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1
-            xexit=$?
+            # the job shell is bash -e: a failing convert must not end the step before its ROW lines
+            xexit=0
+            "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1 || xexit=$?
             echo "ROW convert after the failed docker build: convert_exit=$xexit; output of the tool, first 12 lines:"
             head -12 "$R/report-after-build-fail.txt" | cut -c1-300
             echo "ROW convert after the failed docker build: convert_exit=$xexit, output lines=$(wc -l < "$R/report-after-build-fail.txt")"
