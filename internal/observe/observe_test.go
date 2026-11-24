@@ -1832,14 +1832,14 @@ func TestObserveUserIsResolvedThroughPasswd(t *testing.T) {
 		{"uid and gid", "472:0", "", false, "grafana", "", true},
 		{"uid without a name", "65532:65532", "", false, "", "the image runs as uid 65532, which has no name in /etc/passwd; it was observed as root", true},
 		{"uid and no passwd", "472", "", true, "", "the image runs as uid 472, which has no name in /etc/passwd; it was observed as root (/etc/passwd could not be read: ", true},
-		{"name", "app", "", false, "app", "", false},
-		{"name and group", "app:staff", "", false, "app", "", false},
+		{"name", "app", "", false, "app", "", true},
+		{"name and group", "app:staff", "", false, "app", "", true},
 		{"root", "root", "", false, "", "", false},
 		{"zero", "0", "", false, "", "", false},
 		{"zero and group", "0:0", "", false, "", "", false},
 		{"empty", "", "", false, "", "", false},
 		{"option replaces a name", "app", "472", false, "grafana", "", true},
-		{"option replaces a uid", "472", "web", false, "web", "", false},
+		{"option replaces a uid", "472", "web", false, "web", "", true},
 		{"option root over a uid", "472", "root", false, "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2514,9 +2514,9 @@ func TestPasswdNameSkipsCommentLines(t *testing.T) {
 func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	r := &run{once: map[string]bool{}}
 	for _, who := range []string{"99999999999", "4294967296:5"} {
-		got, err := r.resolveUser(context.Background(), "img:1", who)
-		if err != nil || got != "" {
-			t.Errorf("user %q: got %q, %v, want root", who, got, err)
+		got, home, err := r.resolveUser(context.Background(), "img:1", who)
+		if err != nil || got != "" || home != "" {
+			t.Errorf("user %q: got %q, %q, %v, want root", who, got, home, err)
 		}
 	}
 	equal(t, "warnings", r.warn, []string{
@@ -2525,10 +2525,74 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	})
 
 	// a name that holds digits is a name
-	r = &run{once: map[string]bool{}}
-	got, err := r.resolveUser(context.Background(), "img:1", "12ab")
-	if err != nil || got != "12ab" || len(r.warn) != 0 {
-		t.Errorf("got %q, %v, warnings %q", got, err, r.warn)
+	s := newScene(t)
+	s.d.cfg.User = "12ab"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	traced := s.d.creates[len(s.d.creates)-1]
+	if i := slices.Index(*traced.Entrypoint, "-u"); i < 0 || (*traced.Entrypoint)[i+1] != "12ab" {
+		t.Errorf("entrypoint = %q, want -u 12ab", *traced.Entrypoint)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the image runs as") {
+			t.Errorf("warning %q", w)
+		}
+	}
+}
+
+func TestPasswdHome(t *testing.T) {
+	data := []byte("root:x:0:0:root:/root:/bin/sh\n#node:x:1:1::/commented:/bin/sh\nnode:x:1000:1000::/home/node:/bin/sh\nnobody:x:65534:65534::/nonexistent:/sbin/nologin\nrel:x:5:5::home:/bin/sh\nshort:x:6:6\n")
+	equal(t, "node", passwdHome(data, "node"), "/home/node")
+	equal(t, "root", passwdHome(data, "root"), "/root")
+	equal(t, "relative home", passwdHome(data, "rel"), "")
+	equal(t, "short line", passwdHome(data, "short"), "")
+	equal(t, "absent", passwdHome(data, "ghost"), "")
+	equal(t, "empty name", passwdHome(data, ""), "")
+}
+
+// A program that runs as the user of the image is given the home of that user: the container
+// starts as root and docker sets HOME=/root, where the user cannot write (pm2 of directus).
+func TestObserveGivesTheProgramTheHomeOfItsUser(t *testing.T) {
+	passwd := "root:x:0:0:root:/root:/bin/sh\nnode:x:1000:1000::/home/node:/bin/sh\n"
+	for _, tc := range []struct {
+		name  string
+		user  string
+		env   []string
+		extra []string
+		want  string
+	}{
+		{"a name", "node", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
+		{"a uid", "1000:1000", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
+		{"the image sets HOME", "node", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
+		{"the options set HOME", "node", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
+		{"root", "", []string{"PATH=/usr/bin"}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.cfg.User = tc.user
+			s.d.cfg.Env = tc.env
+			s.o.Env = tc.extra
+			s.d.files["/etc/passwd"] = entry{data: passwd}
+			if _, err := s.observe(t, context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			traced := s.d.creates[len(s.d.creates)-1]
+			var homes []string
+			for _, e := range traced.Env {
+				if strings.HasPrefix(e, "HOME=") {
+					homes = append(homes, e)
+				}
+			}
+			if tc.want == "" {
+				if len(homes) != len(tc.extra) {
+					t.Errorf("HOME in the env of the traced container = %q, want none added", homes)
+				}
+				return
+			}
+			equal(t, "HOME of the traced container", homes, []string{tc.want})
+		})
 	}
 }
 
@@ -3472,4 +3536,30 @@ func TestHTTPProberReturnsTheStatusAndTheStartOfTheBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "status of a redirect", status, 302)
+}
+
+// A file opened through a link to a directory (pnpm: node_modules/x is a link to the store) is
+// carried beside the files of the directory the link leads to, and the link is kept: the program
+// finds its other files (dist/b.js) through the link, as it does in the image.
+func TestObserveFileOpenedThroughALinkedDirectoryKeepsTheLink(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/pkg/lib/a.js", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/pkg/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/store/lib/b.js", O_RDONLY) = 9` + "\n"
+	s.d.files["/pkg/lib/a.js"] = entry{data: "a"}
+	s.d.files["/pkg/lib"] = entry{link: "../store/lib"}
+	s.d.files["/store/lib/b.js"] = entry{data: "b"}
+	s.d.files["/store/lib"] = entry{dir: true}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(filepath.Join(res.Sysroot, "pkg/lib")); err != nil || got != "../store/lib" {
+		t.Fatalf("/pkg/lib: readlink = %q, %v; want a link to ../store/lib", got, err)
+	}
+	for _, f := range []string{"pkg/lib/a.js", "pkg/lib/b.js", "store/lib/a.js", "store/lib/b.js"} {
+		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
 }

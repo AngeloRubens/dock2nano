@@ -23,6 +23,7 @@ import (
 	"debug/elf"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -802,6 +803,14 @@ func parseArgv(after string) []string {
 	return argv
 }
 
+// inits are the tiny init programs that images put in front of the program (ENTRYPOINT ["tini",
+// "--"], ["dumb-init", ...]): they start the program as their only child, reap zombies and pass
+// signals on. On nanos there is no fork, so the init cannot run, and the program it starts can.
+var inits = map[string]bool{"tini": true, "tini-static": true, "dumb-init": true, "catatonit": true, "docker-init": true}
+
+// IsInit tells whether the program at p is one of the init wrappers (tini, dumb-init, ...).
+func IsInit(p string) bool { return inits[path.Base(p)] }
+
 // FinalExec is the program the image ends up running, chosen among the processes still running when
 // the trace ends (all of them, if none is). Only an execve that succeeded counts: on a single line,
 // or cut in two by strace ("execve(... <unfinished ...>" with its result on a "<... execve
@@ -944,7 +953,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
-			if !launcher && !shells[path.Base(last[process].Path)] {
+			isInit := IsInit(last[process].Path)
+			if !launcher && !isInit && !shells[path.Base(last[process].Path)] {
 				break
 			}
 			var children []string
@@ -961,7 +971,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 			// passed over after it, the shell that runs its script included: what they ran besides
 			// the program is not run. Shells passed over with no launcher after them are not.
 			switch {
-			case launcher:
+			case launcher || isInit:
+				// an init (tini, dumb-init) only starts the program as its child and waits for it:
+				// it is passed over as a launcher is, and named in the report
 				recorded = append(append(recorded, pending...), process)
 				pending = nil
 			case len(recorded) > 0:
@@ -1086,10 +1098,31 @@ func ConfigurationFiles(sysroot string) []string {
 // LinkHostFile makes a symbolic link with the text it had at name in sysroot, unless something is
 // there already. The text is relative, so it leads to the same file from the new place as it did in
 // the image, provided that file was carried.
+//
+// A directory that is there already, with the directory the link leads to carried, is what files
+// opened through the link left: docker cp of /pkg/node_modules/x/dist/a.js, where x is a link to
+// ../.pnpm/x/node_modules/x, makes a directory x with a.js in it, and the program then finds its
+// other files (dist/b.js) beside a.js only through the link. What the directory holds is moved
+// into the directory the link leads to (where it is not there already) and the link takes its place.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
-	if _, err := os.Lstat(destination); err == nil {
-		return nil
+	if info, err := os.Lstat(destination); err == nil {
+		if !info.IsDir() {
+			return nil
+		}
+		target := filepath.Join(filepath.Dir(destination), text)
+		if rel, err := filepath.Rel(sysroot, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil
+		}
+		if ti, err := os.Stat(target); err != nil || !ti.IsDir() {
+			return nil
+		}
+		if err := mergeInto(destination, target); err != nil {
+			return fmt.Errorf("link %s: %w", destination, err)
+		}
+		if err := os.RemoveAll(destination); err != nil {
+			return fmt.Errorf("link %s: %w", destination, err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return fmt.Errorf("link %s: %w", destination, err)
@@ -1098,4 +1131,26 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		return fmt.Errorf("link %s: %w", destination, err)
 	}
 	return nil
+}
+
+// mergeInto moves what is under the directory from into the directory into, keeping what is in
+// into already.
+func mergeInto(from, into string) error {
+	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(from, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		dst := filepath.Join(into, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0755)
+		}
+		if _, err := os.Lstat(dst); err == nil {
+			return nil
+		}
+		return os.Rename(p, dst)
+	})
 }

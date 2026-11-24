@@ -966,6 +966,27 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/opt/java/bin/java", ["java", "-jar", "/app.jar"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "7", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "/app.jar"}, Line: 2}, true},
+		{"tini that runs the program as its child is passed over", `1     execve("/sbin/tini", ["/sbin/tini", "--", "node", "./services/server"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "./services/server"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "./services/server"}, Line: 2,
+			PassedOver: []Exec{{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "node", "./services/server"}, Line: 0}}}, true},
+		{"dumb-init, then a shell script with one child, then the program", `1     execve("/usr/bin/dumb-init", ["/usr/bin/dumb-init", "--", "/entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["/bin/sh", "/entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/verdaccio", ["verdaccio"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/bin/verdaccio", Argv: []string{"verdaccio"}, Line: 4,
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/usr/bin/dumb-init", Argv: []string{"/usr/bin/dumb-init", "--", "/entry.sh"}, Line: 0},
+				{Pid: "7", Path: "/bin/sh", Argv: []string{"/bin/sh", "/entry.sh"}, Line: 2},
+			}}, true},
+		{"tini with two running children stays", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "a"}, Line: 0}, true},
 		{"a shell with two running children stays", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
