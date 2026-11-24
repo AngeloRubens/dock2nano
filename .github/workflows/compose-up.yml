@@ -19,6 +19,33 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
+          - {name: django-host, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload'", host: "localhost:8000", probe: "web:8000:http"}
+          - {name: django-ip, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload'", probe: "web:8000:http"}
+          - {name: flask, dir: flask, flags: "", probe: "web:8000:http"}
+          - {name: fastapi, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1'", probe: "api:8000:http"}
+          - {name: angular, dir: angular, flags: "", probe: "web:4200:http"}
+          - {name: apache-php, dir: apache-php, flags: "", probe: "web:80:http"}
+          - {name: aspnet-mssql, dir: aspnet-mssql, flags: "", probe: "web:80:http"}
+          - {name: elasticsearch-logstash-kibana, dir: elasticsearch-logstash-kibana, flags: "", probe: "elasticsearch:9200:http logstash:9600:http kibana:5601:http"}
+          - {name: gitea-postgres, dir: gitea-postgres, flags: "", probe: "gitea:3000:http db:5432:tcp"}
+          - {name: minecraft, dir: minecraft, flags: "", probe: "minecraft:25565:tcp"}
+          - {name: nextcloud-postgres, dir: nextcloud-postgres, flags: "", probe: "nc:80:http"}
+          - {name: nextcloud-redis-mariadb, dir: nextcloud-redis-mariadb, flags: "", probe: "nc:80:http"}
+          - {name: nginx-aspnet-mysql, dir: nginx-aspnet-mysql, flags: "", probe: "proxy:80:http"}
+          - {name: nginx-flask-mysql, dir: nginx-flask-mysql, flags: "", probe: "proxy:80:http backend:8000:http"}
+          - {name: nginx-golang-mysql, dir: nginx-golang-mysql, flags: "", probe: "proxy:80:http"}
+          - {name: nginx-golang-postgres, dir: nginx-golang-postgres, flags: "", probe: "proxy:80:http"}
+          - {name: nginx-wsgi-flask, dir: nginx-wsgi-flask, flags: "", probe: "nginx-proxy:80:http flask-app:8000:http"}
+          - {name: pihole-cloudflared-DoH, dir: pihole-cloudflared-DoH, flags: "", probe: "pihole:80:http"}
+          - {name: postgresql-pgadmin, dir: postgresql-pgadmin, flags: "", probe: "postgres:5432:tcp pgadmin:80:http"}
+          - {name: prometheus-grafana, dir: prometheus-grafana, flags: "", probe: "prometheus:9090:http grafana:3000:http"}
+          - {name: react-express-mysql, dir: react-express-mysql, flags: "", probe: "frontend:3000:http backend:80:http"}
+          - {name: react-java-mysql, dir: react-java-mysql, flags: "", probe: "frontend:3000:http"}
+          - {name: react-nginx, dir: react-nginx, flags: "", probe: "frontend:80:http"}
+          - {name: react-rust-postgres, dir: react-rust-postgres, flags: "", probe: "frontend:3000:http db:5432:tcp"}
+          - {name: sparkjava, dir: sparkjava, flags: "", probe: "sparkjava:8080:http"}
+          - {name: spring-postgres, dir: spring-postgres, flags: "", probe: "backend:8080:http db:5432:tcp"}
+          - {name: vuejs, dir: vuejs, flags: "", probe: "web:8080:http"}
           - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
           - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
           - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
@@ -160,8 +187,9 @@ jobs:
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
-                code=$(curl -s -m 5 -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
-                case "$code" in 2*|3*|4*) break;; esac
+                if [ -n "${{ matrix.host }}" ]; then hdr="Host: ${{ matrix.host }}"; else hdr="Host: $ip:$port"; fi
+                code=$(curl -s -m 5 -H "$hdr" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                case "$code" in 2*|3*|4*|5*) break;; esac
               else
                 if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
               fi
@@ -169,8 +197,13 @@ jobs:
             done
             echo "answer: $code"
             if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
-            # a service of the probe list that gives no answer fails the job
-            case "$code" in 2*|3*|4*|open) ;; *) echo "no answer from $svc"; probe_fail=1;; esac
+            # a service of the probe list that gives no answer fails the job, and so does one that
+            # answers with an error status: green means 2xx or 3xx (or an open port), nothing weaker
+            case "$code" in
+              2*|3*|open) echo "result: $svc success ($code)" ;;
+              4*|5*) echo "result: $svc reached, status $code is not a success"; probe_fail=1 ;;
+              *) echo "no answer from $svc"; probe_fail=1 ;;
+            esac
           done
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
