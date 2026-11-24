@@ -911,7 +911,10 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
-	case adv.Requires != "" && !slices.ContainsFunc(all, func(w string) bool { return path.Base(w) == adv.Requires }):
+	case adv.Requires != "" && !slices.ContainsFunc(all, func(w string) bool {
+		// a word of its own: not a piece of a shell script
+		return path.Base(w) == adv.Requires && !strings.ContainsAny(w, " \t\n;&|$")
+	}):
 		return adv.Reason + "; no command is suggested, because the service does not start the program through " + adv.Requires + ", which the command was written for"
 	case ep != nil && len(*ep) == 1 && adv.Server == "apache" && path.Base((*ep)[0]) == "docker-php-entrypoint":
 		// the entrypoint stays and runs the command: measured with this one
@@ -946,9 +949,14 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 			msg += " (--chdir was written as --app-dir, which does not change the working directory: the service must run in that directory, for example with working_dir, for relative paths)"
 		}
 	}
-	if len(all) > 0 && !slices.Equal(all, observed) {
+	rest := all
+	if entrypointStays {
+		// the entrypoint was named above: what remains is the command
+		rest = all[len(*ep):]
+	}
+	if len(all) > 0 && !slices.Equal(rest, observed) {
 		through := "another command"
-		if w, ok := firstDifference(all, observed); ok {
+		if w, ok := firstDifference(rest, observed); ok {
 			through = fmt.Sprintf("%q", w)
 		}
 		msg += fmt.Sprintf(". The service starts this program through %s; what that does before it (and any wrapper) is left out of the suggestion", through)

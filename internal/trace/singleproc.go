@@ -115,7 +115,7 @@ func serverInvocation(program string, argv []string) (server string, prefix, arg
 // For gunicorn with the worker class of uvicorn the command runs uvicorn; with another worker class
 // there is no command: gunicorn forks its workers, and the server has to be chosen by the user.
 func SingleProcess(program string, argv []string) (SingleProcessAdvice, bool) {
-	if adv, ok := apacheAdvice(argv); ok {
+	if adv, ok := apacheAdvice(program, argv); ok {
 		return adv, true
 	}
 	server, prefix, args, ok := serverInvocation(program, argv)
@@ -141,7 +141,7 @@ var apacheEnv = []string{
 }
 
 // ApacheCaveat says how far the suggestion for apache2 was measured.
-const ApacheCaveat = "measured on one image only, php:7.2-apache, which answered 200 on nanos with this command; an image with an entrypoint of its own that checks the command (nextcloud) was tried once with the same command, apache started and exited again and again, and the cause is not known; the user, group and directories are the values of the Debian image, not read from yours: review them"
+const ApacheCaveat = "measured on one image only, php:7.2-apache, which answered 200 on nanos with this command; an image with an entrypoint of its own that checks the command (nextcloud) was tried once with the same command, apache started and exited again and again, and the cause is not known"
 
 // apacheAdvice reads the command line of apache2 or httpd as apache2-foreground / httpd-foreground
 // start it (-DFOREGROUND). apache starts several processes (fork, prefork); -DONE_PROCESS keeps
@@ -149,12 +149,13 @@ const ApacheCaveat = "measured on one image only, php:7.2-apache, which answered
 // apache2-foreground sets; for httpd no command is given, because the one run that was made
 // (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer. The arguments are never repeated: only
 // their number is told.
-func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
+func apacheAdvice(program string, argv []string) (SingleProcessAdvice, bool) {
 	if len(argv) == 0 {
 		return SingleProcessAdvice{}, false
 	}
+	// the program itself, not only argv[0]: busybox runs "httpd" as an applet, with no -DONE_PROCESS
 	name := path.Base(argv[0])
-	if name != "apache2" && name != "httpd" {
+	if (name != "apache2" && name != "httpd") || path.Base(program) != name {
 		return SingleProcessAdvice{}, false
 	}
 	args := argv[1:]
@@ -165,12 +166,18 @@ func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
 	}
 	adv := SingleProcessAdvice{Server: "apache"}
 	if name == "httpd" {
-		adv.Reason = "httpd starts several processes (fork, prefork); the option -DONE_PROCESS keeps one, but the one run made with it (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer, so no command is suggested"
+		adv.Reason = "httpd starts several processes (fork, prefork); the option -DONE_PROCESS keeps one. The one run made with it (httpd -DONE_PROCESS on httpd:2.4-alpine) got no answer and its log ends with AH00014 (Configuration check failed, after AH00557 apr_sockaddr_info_get failed, probably the host name): that is no evidence against -DONE_PROCESS itself, and nothing else was measured"
 		return adv, true
 	}
 	adv.Reason = "apache2 starts several processes (fork, prefork); -DONE_PROCESS keeps one, and apache2-foreground sets an environment (from /etc/apache2/envvars) that the command has to write out"
 	if len(args) != 1 || args[0] != "-DFOREGROUND" {
-		adv.Reason += fmt.Sprintf("; apache2 was started with %d arguments that are not the ones of apache2-foreground", len(args))
+		count := "without arguments"
+		if len(args) == 1 {
+			count = "with 1 argument"
+		} else if len(args) > 1 {
+			count = fmt.Sprintf("with %d arguments", len(args))
+		}
+		adv.Reason += "; apache2 was started " + count + " that are not the ones of apache2-foreground"
 		adv.Withheld = true
 		return adv, true
 	}

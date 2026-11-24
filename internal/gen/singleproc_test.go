@@ -272,13 +272,16 @@ func TestProcessesItemSuggestsApacheWithTheEnvironment(t *testing.T) {
 		"measured on one image only, php:7.2-apache",
 		"nextcloud",
 		"the cause is not known",
-		"review them",
 		"the entrypoint docker-php-entrypoint of the service stays",
 		"review it; nothing was changed",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q: %q", want, msg)
 		}
+	}
+	// the program named as started before it is apache2-foreground, not the entrypoint that was said to stay
+	if !strings.Contains(msg, `through "apache2-foreground"; what that does`) || strings.Contains(msg, `through "docker-php-entrypoint"`) {
+		t.Errorf("message = %q", msg)
 	}
 }
 
@@ -317,7 +320,22 @@ func TestProcessesItemApacheDoesNotEchoArguments(t *testing.T) {
 func TestProcessesItemHttpdHasNoCommand(t *testing.T) {
 	in := apacheInput(t, []string{"httpd", "-DFOREGROUND"}, &docker.ImageConfig{Cmd: []string{"httpd-foreground"}})
 	msg := processesMessage(t, in)
-	if strings.Contains(msg, "--command '") || !strings.Contains(msg, "httpd starts several processes") || !strings.Contains(msg, "got no answer") {
+	if strings.Contains(msg, "--command '") || !strings.Contains(msg, "httpd starts several processes") || !strings.Contains(msg, "AH00014") || strings.Count(msg, "no command is suggested") != 1 {
 		t.Errorf("message = %q", msg)
+	}
+}
+
+// apache2-foreground inside a shell script is not the service starting it as a program
+func TestProcessesItemApacheNeedsTheScriptAsAWordOfItsOwn(t *testing.T) {
+	for _, cmd := range []compose.Command{
+		{Shell: "sh -c 'chown -R www-data /var/www && exec /usr/local/bin/apache2-foreground'", Set: true},
+		{Exec: []string{"sh", "-c", "chown -R www-data /var/www && exec /usr/local/bin/apache2-foreground"}, Set: true},
+	} {
+		in := apacheInput(t, []string{"apache2", "-DFOREGROUND"}, nil)
+		in.Project.Services[0].Command = cmd
+		msg := processesMessage(t, in)
+		if strings.Contains(msg, "--command '") || !strings.Contains(msg, "does not start the program through apache2-foreground") {
+			t.Errorf("message = %q", msg)
+		}
 	}
 }

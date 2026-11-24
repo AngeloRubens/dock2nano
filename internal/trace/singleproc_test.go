@@ -307,7 +307,7 @@ func TestSingleProcessHttpdGivesNoCommand(t *testing.T) {
 	if !ok || adv.Server != "apache" || len(adv.Command) != 0 || adv.Withheld {
 		t.Fatalf("adv = %+v, %v", adv, ok)
 	}
-	if !strings.Contains(adv.Reason, "no command is suggested") || !strings.Contains(adv.Reason, "httpd:2.4-alpine") || !strings.Contains(adv.Reason, "got no answer") {
+	if !strings.Contains(adv.Reason, "AH00014") || !strings.Contains(adv.Reason, "httpd:2.4-alpine") || !strings.Contains(adv.Reason, "no evidence against -DONE_PROCESS itself") || strings.Contains(adv.Reason, "no command is suggested") {
 		t.Errorf("reason = %q", adv.Reason)
 	}
 }
@@ -320,6 +320,27 @@ func TestSingleProcessApacheAlreadyInOneProcess(t *testing.T) {
 	} {
 		if _, ok := SingleProcess("/usr/sbin/"+argv[0], argv); ok {
 			t.Errorf("%v: advice given", argv)
+		}
+	}
+}
+
+// busybox runs httpd as an applet: it has no -DONE_PROCESS, and was given no advice before
+func TestSingleProcessApacheIsNotBusyboxHttpd(t *testing.T) {
+	for _, program := range []string{"/bin/busybox-extras", "/bin/busybox", "/usr/sbin/busybox"} {
+		if adv, ok := SingleProcess(program, []string{"httpd", "-f", "-p", "8081"}); ok {
+			t.Errorf("%s: advice %+v", program, adv)
+		}
+	}
+	if _, ok := SingleProcess("/usr/sbin/httpd", []string{"httpd", "-f", "-p", "8081"}); !ok {
+		t.Errorf("the httpd program itself is not read as apache")
+	}
+}
+
+func TestSingleProcessApache2CountsArgumentsInTheSingular(t *testing.T) {
+	for argv, want := range map[string]string{"apache2": "without arguments", "apache2 -k": "with 1 argument that", "apache2 -k start": "with 2 arguments"} {
+		adv, ok := SingleProcess("/usr/sbin/apache2", strings.Fields(argv))
+		if !ok || !adv.Withheld || !strings.Contains(adv.Reason, want) {
+			t.Errorf("%q: %+v %v", argv, adv, ok)
 		}
 	}
 }
