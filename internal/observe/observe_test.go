@@ -1743,21 +1743,22 @@ func TestObserveWorkingDirectoryExistsInTheSysroot(t *testing.T) {
 		cwd  string
 		want string
 	}{
-		{"from /proc", "/srv/app\n", "srv/app"},
+		{"from a chdir before the execve", "/srv/app", "srv/app"},
 		{"from the image", "", "app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScene(t)
-			s.d.traceTxt = `11 execve("/usr/bin/x", ["x"], 0x7ffd /* 4 vars */) = 0
+			chdir := ""
+			if tc.cwd != "" {
+				chdir = "11 chdir(\"" + tc.cwd + "\") = 0\n"
+			}
+			s.d.traceTxt = chdir + `11 execve("/usr/bin/x", ["x"], 0x7ffd /* 4 vars */) = 0
 11 openat(AT_FDCWD, "/usr/bin/x", O_RDONLY) = 3
 `
 			s.d.files["/usr/bin/x"] = entry{data: "x", mode: 0755}
 			s.d.exec["readlink /proc/11/exe"] = "/usr/bin/x\n"
-			if tc.cwd != "" {
-				s.d.exec["readlink /proc/11/cwd"] = tc.cwd
-			} else {
-				delete(s.d.exec, "readlink /proc/11/cwd")
-			}
+			// /proc is not what the directory comes from now: it says where the program ended
+			delete(s.d.exec, "readlink /proc/11/cwd")
 			res, err := s.observe(t, context.Background())
 			if err != nil {
 				t.Fatal(err)
