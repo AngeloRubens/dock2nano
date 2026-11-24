@@ -85,6 +85,8 @@ func TestLinkHostFileDoesNotFollowAnExistingLinkOutOfTheSysroot(t *testing.T) {
 	host := filepath.Join(parent, "host")
 	write(t, filepath.Join(host, "x/precious"), "precious")
 	write(t, filepath.Join(root, "a/y/file"), "y")
+	// where "../y" leads from the folder of this machine, so that the merge would find a target
+	write(t, filepath.Join(parent, "y/other"), "other")
 	// /a/b leads to the host folder, as ../../../ goes out of the sysroot
 	if err := os.Symlink("../../host", filepath.Join(root, "a/b")); err != nil {
 		t.Fatal(err)
