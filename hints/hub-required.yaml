@@ -183,7 +183,7 @@ rows:
       # errors of psql are not shown, as they can quote the statement
       if [ -n "$pw" ]; then
         esc=$(printf '%s' "$pw" | sed "s/'/''/g")
-        {{ printf '%s' 'ALTER ROLE {POSTGRES_USER,HUB_SUPERUSER:ident} PASSWORD '; printf "'%s';\n" "$esc"; }} | psql_su >/dev/null 2>&1 || {{ echo "failed: could not set the password of the role" >&2; exit 1; }}
+        psql_su -c "ALTER ROLE {POSTGRES_USER,HUB_SUPERUSER:ident} PASSWORD '$esc'" >/dev/null 2>&1 || {{ echo "failed: could not set the password of the role" >&2; exit 1; }}
         echo "set the password of the role"
       else
         echo "no password is set: the password was not found (the variable of the compose file is empty in this shell, or the file is empty)"
