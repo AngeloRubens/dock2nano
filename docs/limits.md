@@ -119,7 +119,7 @@ What the tool does: when the observed program is apache2 with the single argumen
 
 ## Code never run during the observation
 
-Cause: the observation (from-docker --observe, a port of nanovms/ops#1802) runs the image under strace and carries the files it saw. What does not run during the observation is not seen. Known limits of the observation: it needs Docker, it takes strace from an Alpine image with the musl loader, and the choice of the program is an estimate.
+Cause: the observation (internal/observe; it does the work of from-docker --observe of nanovms/ops#1802 but is code of this tool, which runs docker and does not run ops) runs the image under strace and carries the files it saw. What does not run during the observation is not seen. Known limits of the observation: it needs Docker, it takes strace from an Alpine image with the musl loader, and the choice of the program is an estimate.
 
 Kind: hard limit of the method.
 
@@ -139,7 +139,7 @@ Cause: ops often reports "ip timeout" although the guest has an address. Two cau
 
 Kind: gap in ops.
 
-Also: ops compose up panics inside ops when the dns instance is late; the tool needs retries.
+Also: ops compose up panics inside ops when the dns instance is late. The tool does not retry: it prints one ops compose up command (see the next steps it prints), so run it again if it fails. The CI workflows of the project run it up to three times (docs/top30.md on the branch check/top30 records 3 tries per row).
 
 ## Hub packages
 
