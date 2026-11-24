@@ -67,9 +67,6 @@ func writeMachineFiles(sysroot, arch, program string, opened []string) ([]string
 		return wrote, nil
 	}
 	names := []string{"proc/cpuinfo", "sys/devices/system/cpu/possible", "proc/1/stat", "proc/2/stat", "proc/3/stat"}
-	if isNode(program) {
-		names = append(names, selfStatName)
-	}
 	for _, name := range names {
 		// node asks for its own resident memory at start, and the observation may not have opened
 		// the file, so the self file is not conditioned on what was opened
