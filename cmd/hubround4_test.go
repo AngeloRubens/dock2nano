@@ -14,6 +14,12 @@ import (
 // returns the report. The observation has no POSTGRES_DB in its environment.
 func pgWhole(t *testing.T, composeText string, setup func(h *hubHarness)) *hubHarness {
 	t.Helper()
+	return pgWholeStatus(t, composeText, setup, 0)
+}
+
+// pgWholeStatus is pgWhole for a run that is expected to end with the status want.
+func pgWholeStatus(t *testing.T, composeText string, setup func(h *hubHarness), want int) *hubHarness {
+	t.Helper()
 	pgObserved := func(sysroot string) *observe.Result {
 		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres"}, UID: -1, GID: -1}
 	}
@@ -30,7 +36,7 @@ func pgWhole(t *testing.T, composeText string, setup func(h *hubHarness)) *hubHa
 	if setup != nil {
 		setup(h)
 	}
-	h.mustRun(0, "convert")
+	h.mustRun(want, "convert")
 	return h
 }
 

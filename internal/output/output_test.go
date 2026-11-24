@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -923,5 +924,268 @@ func TestComposeFileWritesDNSSearchOnlyWhenSet(t *testing.T) {
 	}
 	if strings.Contains(string(b), "dns_search") {
 		t.Errorf("without: %q", b)
+	}
+}
+
+const postUpText = "#!/bin/sh\necho hi\n"
+
+func postUpPlan(sys string) *plan.Plan {
+	p := onePlan(sys)
+	p.Services[0].PostUp = postUpText
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	return p
+}
+
+func TestWriteWritesThePostUpScriptNextToComposeWithMode0755(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "out", "compose.yaml")
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	written, err := Write(postUpPlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "out", "post-up-web.sh")
+	want := []string{filepath.Join(home, ".ops", "local_packages", "amd64", "web"), composePath, script}
+	if !reflect.DeepEqual(written, want) {
+		t.Fatalf("written = %v, want %v", written, want)
+	}
+	if got := read(t, script); got != postUpText {
+		t.Errorf("script = %q", got)
+	}
+	fi, err := os.Stat(script)
+	if err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %v (%v), want 0755", fi.Mode().Perm(), err)
+	}
+	if got := names(t, filepath.Join(dir, "out")); !reflect.DeepEqual(got, []string{"compose.yaml", "post-up-web.sh"}) {
+		t.Errorf("the folder holds %v", got)
+	}
+}
+
+func TestWriteWritesNoScriptForAServiceWithout(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(onePlan(src), Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(dir, "post-up-web.sh")) {
+		t.Error("a script was written")
+	}
+}
+
+func TestWriteRefusesToReplaceAScriptWithoutForceAndTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	script := filepath.Join(dir, "post-up-web.sh")
+	put(t, script, "mine\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	renames := countRename(t)
+
+	_, err := Write(postUpPlan(src), Options{OpsHome: home, ComposePath: composePath})
+	if err == nil || !strings.Contains(err.Error(), script) || !strings.Contains(err.Error(), "force") {
+		t.Fatalf("error = %v", err)
+	}
+	if *renames != 0 {
+		t.Errorf("the sysroot was moved %d times before the refusal, want 0: the refusal came late", *renames)
+	}
+	if exists(home) || exists(composePath) || read(t, script) != "mine\n" || !exists(filepath.Join(src, "web")) {
+		t.Errorf("something was touched: home %v compose %v script %q", exists(home), exists(composePath), read(t, script))
+	}
+}
+
+func TestWriteForceReplacesTheScript(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "post-up-web.sh")
+	put(t, script, "mine\n", 0o644)
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	if _, err := Write(postUpPlan(src), Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(script)
+	if err != nil || read(t, script) != postUpText || fi.Mode().Perm() != 0o755 {
+		t.Errorf("script %q, %v, %v", read(t, script), fi.Mode(), err)
+	}
+	for _, n := range names(t, dir) {
+		if strings.Contains(n, ".tmp-") {
+			t.Errorf("a temporary file is left: %s", n)
+		}
+	}
+}
+
+func TestWriteRollbackRemovesTheScriptWhenALaterStepFails(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	composePath := filepath.Join(dir, "compose.yaml")
+	src1, src2 := filepath.Join(dir, "src1"), filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	p.Services[0].PostUp = postUpText
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	// the name of the second script is too long for the file system: it fails after the first one was written
+	p.Services[1].PostUpFile = "post-up-" + strings.Repeat("a", 250) + ".sh"
+	p.Services[1].PostUp = postUpText
+
+	written, err := Write(p, Options{OpsHome: home, ComposePath: composePath})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if written != nil {
+		t.Fatalf("written = %v", written)
+	}
+	if got := names(t, dir); !reflect.DeepEqual(got, []string{"src1", "src2"}) {
+		t.Errorf("left behind: %v", got)
+	}
+	if got := read(t, filepath.Join(src1, "web")); got != "b" {
+		t.Errorf("sysroot not given back: %q", got)
+	}
+}
+
+func TestWriteRefusesAScriptNameWithASeparator(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	p := postUpPlan(src)
+	p.Services[0].PostUpFile = "../x"
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err == nil || !strings.Contains(err.Error(), "script name") {
+		t.Fatalf("error = %v", err)
+	}
+	if exists(filepath.Join(dir, "home")) || exists(filepath.Join(dir, "compose.yaml")) {
+		t.Error("something was written")
+	}
+}
+
+func TestWriteForceRemovesTheScriptOfAnEarlierRunWhenThereIsNone(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarker+"\n", 0o755)
+	mine := filepath.Join(dir, "post-up-other.sh")
+	put(t, mine, "#!/bin/sh\necho mine\n", 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	p2 := onePlan(filepath.Join(dir, "src2"))
+	put(t, filepath.Join(dir, "src2", "web"), "b", 0o755)
+	p2.Services[0].PostUpFile = "post-up-other.sh"
+
+	written, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists(stale) {
+		t.Error("the script of the earlier run is still there")
+	}
+	for _, w := range written {
+		if strings.Contains(w, "post-up") && !strings.HasPrefix(w, RemovedPrefix) {
+			t.Errorf("a script is listed as written: %v", written)
+		}
+	}
+	for _, n := range names(t, dir) {
+		if strings.Contains(n, "stale") {
+			t.Errorf("a moved-aside file is left: %s", n)
+		}
+	}
+	// a file that is not ours is never removed
+	if _, err := Write(p2, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, mine) != "#!/bin/sh\necho mine\n" {
+		t.Error("a script of the user was removed")
+	}
+}
+
+func TestWriteWithoutForceLeavesTheOldScript(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarker+"\n", 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(stale) {
+		t.Error("the old script was removed without force")
+	}
+}
+
+func TestWriteRollbackPutsTheOldScriptBack(t *testing.T) {
+	dir := t.TempDir()
+	src1, src2 := filepath.Join(dir, "src1"), filepath.Join(dir, "src2")
+	put(t, filepath.Join(src1, "web"), "b", 0o755)
+	put(t, filepath.Join(src2, "app"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	old := "#!/bin/sh\n# " + plan.PostUpMarker + "\n"
+	put(t, stale, old, 0o755)
+	p := &plan.Plan{Arch: "amd64", Compose: composeOf("web", "app")}
+	p.Services = []plan.Service{svc("web", src1), svc("app", src2)}
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	p.Services[1].PostUpFile = "post-up-" + strings.Repeat("a", 250) + ".sh"
+	p.Services[1].PostUp = postUpText
+
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err == nil {
+		t.Fatal("no error")
+	}
+	if read(t, stale) != old {
+		t.Errorf("the old script was not put back: %v", names(t, dir))
+	}
+}
+
+func writeForced(t *testing.T, dir, name, content string) ([]string, string) {
+	t.Helper()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, name)
+	put(t, stale, content, 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = name
+	written, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return written, stale
+}
+
+func TestWriteForceSaysWhenItRemovesTheScriptOfAnEarlierRun(t *testing.T) {
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\n"+plan.PostUpHeader+"\nrest\n")
+	if exists(stale) {
+		t.Error("the script is still there")
+	}
+	if !slices.Contains(written, RemovedPrefix+stale) {
+		t.Errorf("the removal is not listed: %v", written)
+	}
+}
+
+func TestWriteForceKeepsAndReportsAScriptWhoseHeaderWasChanged(t *testing.T) {
+	// the marker is in the file, but not as the second line
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\n# mine now\n# "+plan.PostUpMarker+"\n")
+	if !exists(stale) {
+		t.Error("an edited script was removed")
+	}
+	if !slices.Contains(written, KeptPrefix+"the header was changed: "+stale) {
+		t.Errorf("the kept script is not reported: %v", written)
+	}
+}
+
+func TestWriteForceLeavesAFileWithoutTheMarkerAloneAndSilent(t *testing.T) {
+	written, stale := writeForced(t, t.TempDir(), "post-up-web.sh", "#!/bin/sh\necho mine\n")
+	if !exists(stale) {
+		t.Error("a file of the user was removed")
+	}
+	for _, w := range written {
+		if strings.HasPrefix(w, RemovedPrefix) || strings.HasPrefix(w, KeptPrefix) {
+			t.Errorf("a file that is not ours is reported: %v", written)
+		}
 	}
 }

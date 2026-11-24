@@ -259,3 +259,120 @@ func TestParseRequiredChecksTheTemplateOfTheNote(t *testing.T) {
 		}
 	}
 }
+
+const postUpRow = `
+rows:
+  - images: [postgres]
+    programs: [postgres]
+    packages: [a/b, c/d]
+    superusers:
+      a/b: postgres
+      c/d: eyberg
+    reason: r
+    entrypoint_note: e
+    post_up_script: |
+      #!/bin/sh
+      psql -U {HUB_SUPERUSER:sh}
+      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}
+      [[end]]
+`
+
+func TestParseRequiredReadsAndChecksThePostUpScript(t *testing.T) {
+	rows, err := ParseRequired([]byte(postUpRow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rows[0].PostUpScript, "#!/bin/sh\n") || !strings.Contains(rows[0].PostUpScript, "{POSTGRES_DB:lit}") {
+		t.Errorf("%q", rows[0].PostUpScript)
+	}
+	bad := [][2]string{
+		{"a section that is not closed", "#!/bin/sh\n[[if A]]x\n"},
+		{"a placeholder that is not one", "#!/bin/sh\necho {A:nope}\n"},
+		{"no #!/bin/sh line", "echo hi\n"},
+		{"a test that is not a test", "#!/bin/sh\n[[if A ~ B]]x[[end]]\n"},
+		{"a note of the package the row does not give", "#!/bin/sh\n[[if A]]{HUB_FACTS}[[end]]\n"},
+		{"sections inside a section", "#!/bin/sh\n[[if A]][[if B]]x[[end]][[end]]\n"},
+	}
+	for _, b := range bad {
+		why, script := b[0], b[1]
+		text := strings.Replace(postUpRow, "      #!/bin/sh\n      psql -U {HUB_SUPERUSER:sh}\n      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}\n      [[end]]\n", "      "+strings.ReplaceAll(strings.TrimRight(script, "\n"), "\n", "\n      ")+"\n", 1)
+		if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script") {
+			t.Errorf("%s: accepted or wrong error: %v", why, err)
+		}
+	}
+}
+
+func TestParseRequiredPostUpScriptNeedsTheSuperuserOfEveryPackageWhenItNamesIt(t *testing.T) {
+	text := strings.Replace(postUpRow, "      c/d: eyberg\n", "", 1)
+	if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script uses {HUB_SUPERUSER}") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestTheTableThatShipsHasAPostUpScriptForPostgres(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := rows[0].PostUpScript
+	for _, want := range []string{"#!/bin/sh\n", "set -eu", "{HUB_SUPERUSER:sh}", "{HUB_INSTANCE:sh}", "ensure 'database'", "ensure 'role'", "command -v psql", "-d template1 -w", "{{PGHOST:-}}"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the shipped script lacks %q", want)
+		}
+	}
+}
+
+func postUpRowWith(script string) string {
+	return strings.Replace(postUpRow, "      #!/bin/sh\n      psql -U {HUB_SUPERUSER:sh}\n      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}\n      [[end]]\n", "      "+strings.ReplaceAll(strings.TrimRight(script, "\n"), "\n", "\n      ")+"\n", 1)
+}
+
+func TestParseRequiredChecksThePlaceholdersInsideAShellBlock(t *testing.T) {
+	_, err := ParseRequired([]byte(postUpRowWith("#!/bin/sh\nf() {\n  psql -U {HUB_SUPERUSER:shh}\n}\n")))
+	if err == nil || !strings.Contains(err.Error(), "post_up_script") || !strings.Contains(err.Error(), "HUB_SUPERUSER:shh") {
+		t.Errorf("%v", err)
+	}
+	// the same block with a good placeholder, and literal braces, is read
+	if _, err := ParseRequired([]byte(postUpRowWith("#!/bin/sh\nf() {\n  psql -U {HUB_SUPERUSER:sh} ${{PGHOST:-}}\n}\n"))); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredRefusesSecretsAndFallbacksInAScript(t *testing.T) {
+	for _, script := range []string{
+		"#!/bin/sh\necho {POSTGRES_PASSWORD}\n",
+		"#!/bin/sh\necho {DB_TOKEN:sh}\n",
+		"#!/bin/sh\necho {POSTGRES_DB,POSTGRES_PASSWORD:lit}\n",
+		"#!/bin/sh\nf() {\n  echo {POSTGRES_DB|shop}\n}\n",
+	} {
+		if _, err := ParseRequired([]byte(postUpRowWith(script))); err == nil || !strings.Contains(err.Error(), "post_up_script") {
+			t.Errorf("%q: %v", script, err)
+		}
+	}
+}
+
+func TestParseRequiredPostUpScriptNeedsAnEntrypointNote(t *testing.T) {
+	text := strings.Replace(postUpRow, "    entrypoint_note: e\n", "", 1)
+	if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "needs an entrypoint_note") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredErrorsOfNotesComeInAFixedOrder(t *testing.T) {
+	// both notes are wrong: the first one in the table is always the one named
+	text := strings.Replace(postUpRow, "    entrypoint_note: e\n", "    entrypoint_note: \"[[if A]]x\"\n", 1)
+	text = strings.Replace(text, "psql -U {HUB_SUPERUSER:sh}", "psql -U {HUB_SUPERUSER:zz}", 1)
+	for i := 0; i < 20; i++ {
+		if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "entrypoint_note") {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+}
+
+func TestValidateNoteAcceptsLiteralBraces(t *testing.T) {
+	if err := ValidateNote("a ${{X:-}} {{b}} {A}"); err != nil {
+		t.Error(err)
+	}
+	if err := ValidateNote("a {A:nope}"); err == nil {
+		t.Error("a bad placeholder was accepted")
+	}
+}

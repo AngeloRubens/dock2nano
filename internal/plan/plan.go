@@ -48,6 +48,35 @@ type Service struct {
 	Sysroot string
 	// Manifest is written as package.manifest.
 	Manifest Manifest
+	// PostUp is the text of a shell script that the user runs after "ops compose
+	// up", or empty. The writer puts it next to compose.yaml, named PostUpFile,
+	// with mode 0755. Nothing runs it but the user.
+	PostUp string
+	// PostUpFile is the file name of the script of this service, as PostUpName
+	// gives it for the pkg name of compose.yaml. It is set for every service,
+	// also when there is no script, so that the writer can remove the script of
+	// an earlier run (see PostUpMarker).
+	PostUpFile string
+
+	// PostUpPreserve are the variables that the line of the report keeps
+	// through sudo for the script (sudo --preserve-env=...); only the names.
+	PostUpPreserve []string
+}
+
+// PostUpMarker is the phrase of the header line of every script of the tool:
+// the second line of the file is exactly PostUpHeader. When the new plan has no
+// script for a service and the run is forced, the writer removes the old
+// script of the same name only if its second line is that header; with a
+// script in the new plan, a forced run replaces the file whatever it holds.
+const PostUpMarker = "post-up script written by the converter of your compose file"
+
+// PostUpHeader is the second line of a script of the tool.
+const PostUpHeader = "# " + PostUpMarker
+
+// PostUpName is the file name of the script that the user runs after "ops
+// compose up" for the package of compose.yaml named pkg.
+func PostUpName(pkg string) string {
+	return "post-up-" + pkg + ".sh"
 }
 
 // Manifest is the part of the ops configuration (types.Config) that a package

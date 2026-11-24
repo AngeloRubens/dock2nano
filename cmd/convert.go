@@ -371,10 +371,21 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	fmt.Fprint(a.Stdout, gen.Render(p.Report))
 	fmt.Fprintln(a.Stdout)
 	fmt.Fprintln(a.Stdout, "Written:")
+	var olds []string
 	for _, w := range written {
+		if strings.HasPrefix(w, output.RemovedPrefix) || strings.HasPrefix(w, output.KeptPrefix) {
+			olds = append(olds, w)
+			continue
+		}
 		fmt.Fprintf(a.Stdout, "  %s\n", w)
 	}
-	a.nextSteps(home, composePath)
+	if len(olds) > 0 {
+		fmt.Fprintln(a.Stdout, "Scripts of an earlier run:")
+		for _, w := range olds {
+			fmt.Fprintf(a.Stdout, "  %s\n", w)
+		}
+	}
+	a.nextSteps(home, composePath, p.Services)
 
 	if o.strict {
 		n := 0
@@ -458,7 +469,7 @@ func projectNameOf(dir string) string {
 // form that the e2e job runs: ops compose creates network interfaces and
 // starts qemu, so it needs root, and root needs the OPS_HOME and the PATH of
 // the user. home and composePath are absolute.
-func (a *App) nextSteps(home, composePath string) {
+func (a *App) nextSteps(home, composePath string, services []plan.Service) {
 	prefix := ""
 	if home != "" {
 		prefix = "OPS_HOME=" + shellQuote(home) + " "
@@ -467,6 +478,20 @@ func (a *App) nextSteps(home, composePath string) {
 	fmt.Fprintln(a.Stdout, "Next steps:")
 	fmt.Fprintf(a.Stdout, "  %sops pkg get %s    (once, if you do not have it yet)\n", prefix, opsDNSPackage)
 	fmt.Fprintf(a.Stdout, "  sudo env %sPATH=\"$PATH\" ops compose up -f %s\n", prefix, shellQuote(composePath))
+	// ops compose does not run these: the user does, once the instances are up
+	for _, s := range services {
+		if s.PostUp == "" {
+			continue
+		}
+		script := filepath.Join(filepath.Dir(composePath), s.PostUpFile)
+		keep := "PGHOST,POSTUP_TRIES"
+		if len(s.PostUpPreserve) > 0 {
+			keep = strings.Join(s.PostUpPreserve, ",")
+		}
+		// the instance is named after the package, not after the compose service
+		instance := strings.TrimSuffix(strings.TrimPrefix(s.PostUpFile, "post-up-"), ".sh")
+		fmt.Fprintf(a.Stdout, "  then, once %s is up: sudo --preserve-env=%s env %sPATH=\"$PATH\" sh %s    (ops compose does not run it; see the report for what it creates; sudo and OPS_HOME are for ops instance list and logs, and --preserve-env keeps the variables that the script reads, names only; export them first. Without root, give the address of the instance as its argument)\n", instance, keep, prefix, shellQuote(script))
+	}
 }
 
 // shellQuote quotes s for a POSIX shell when it needs it.
