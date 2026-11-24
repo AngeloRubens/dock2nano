@@ -37,7 +37,7 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 		t.Errorf("file name %q", svc.PostUpFile)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "from the variable POSTGRES_PASSWORD of the shell that runs it", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
+	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "from the variable POSTGRES_PASSWORD of the shell that runs it", "sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
@@ -164,12 +164,46 @@ func TestPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
 	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
 	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
 	h.run("convert", "--no-hub")
-	if h.plan == nil {
-		return
+	if h.plan == nil || len(h.plan.Services) != 1 {
+		t.Fatalf("no plan was made:\n%s\n%s", h.stdout.String(), h.stderr.String())
 	}
-	for _, s := range h.plan.Services {
-		if s.PostUp != "" {
-			t.Errorf("a script was made with --no-hub:\n%s", s.PostUp)
-		}
+	if s := h.plan.Services[0]; s.PostUp != "" {
+		t.Errorf("a script was made with --no-hub:\n%s", s.PostUp)
+	}
+	out := h.stdout.String()
+	if !strings.Contains(out, "--no-hub") || strings.Contains(out, "then, once") || strings.Contains(out, "post-up-db.sh") {
+		t.Errorf("the output does not show the hub off, or announces a script:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "post-up-db.sh")); err == nil {
+		t.Error("a script file was written")
+	}
+}
+
+func TestNextStepLineKeepsThePasswordVariableThroughSudoWithoutItsValue(t *testing.T) {
+	h := pgWhole(t, myDB+"      POSTGRES_DB: example\n      POSTGRES_PASSWORD: hunter2\n", nil)
+	out := h.stdout.String()
+	if !strings.Contains(out, "then, once my_db is up: sudo --preserve-env=POSTGRES_PASSWORD,PGHOST,POSTUP_TRIES env ") {
+		t.Errorf("the line does not keep the variables through sudo:\n%s", out)
+	}
+	if strings.Contains(out, "hunter2") || strings.Contains(out, "POSTGRES_PASSWORD=") {
+		t.Errorf("a value of the password is printed:\n%s", out)
+	}
+	// a password that comes from a file does not need the variable
+	h = pgWhole(t, springPG, func(h *hubHarness) { h.write("db/password.txt", "x\n") })
+	out = h.stdout.String()
+	if !strings.Contains(out, "sudo --preserve-env=PGHOST,POSTUP_TRIES env ") || strings.Contains(out, "--preserve-env=POSTGRES_PASSWORD") {
+		t.Errorf("%s", out)
+	}
+}
+
+func TestReportAndFileAgreeForAServiceNameOfMoreThan63Characters(t *testing.T) {
+	name := strings.Repeat("d", 70)
+	h := pgWhole(t, "services:\n  "+name+":\n    image: postgres:16\n    environment:\n      POSTGRES_DB: example\n", nil)
+	out := h.stdout.String()
+	if len(h.plan.Services) != 1 || h.plan.Services[0].PostUp == "" {
+		t.Fatalf("no script for a long name of the service:\n%s", out)
+	}
+	if strings.Contains(out, "No script is written for it") || !strings.Contains(out, "then, once "+name+" is up") {
+		t.Errorf("the report and the file disagree:\n%s", out)
 	}
 }

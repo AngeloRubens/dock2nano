@@ -478,6 +478,11 @@ func PostUpScript(u HubUse, obs *observe.Result) string {
 // that a file was written: the items are made before the files are, and the
 // list of the written files is what says it.
 func postUpSaid(u HubUse, obs *observe.Result) string {
+	// the report is made before the package names are known; the instance is
+	// a word of the shell only and takes no part in the checks of the names
+	if u.Instance == "" {
+		u.Instance = "instance"
+	}
 	script, why := postUp(u, obs)
 	if script == "" {
 		return "No script is written for it: " + why + "."
@@ -493,13 +498,13 @@ func postUpSaid(u HubUse, obs *observe.Result) string {
 	pw := "It sets no password."
 	switch {
 	case fixed["HUB_PWFILE"] != "":
-		pw = "It sets the password of the role (ALTER ROLE) from the file " + fixed["HUB_PWFILE"] + ", the file of the secret of the compose file on this machine, read when the script runs (the variable POSTGRES_PASSWORD of the shell comes first, if it is set); the value is not in the script or in this report, and goes to psql only through PGPASSWORD and standard input, never as an argument."
+		pw = "It sets the password of the role (ALTER ROLE) from the file " + plainText(fixed["HUB_PWFILE"]) + ", the file of the secret of the compose file on this machine, read when the script runs; the value is not in the script or in this report, and goes to psql only through PGPASSWORD and standard input, never as an argument."
 	case fixed["HUB_PWENV"] != "":
 		pw = "It sets the password of the role (ALTER ROLE) from the variable POSTGRES_PASSWORD of the shell that runs it (export it first; the value is not in the script or in this report, and goes to psql only through PGPASSWORD and standard input, never as an argument); if the variable is empty no password is set."
 	case fixed["HUB_PWLOST"] != "":
-		pw = "It sets no password: POSTGRES_PASSWORD_FILE is " + fixed["HUB_PWLOST"] + ", which is not the target of a file secret of the compose file, so the file on this machine is not known."
+		pw = "It sets no password: POSTGRES_PASSWORD_FILE is " + plainText(fixed["HUB_PWLOST"]) + ", which is not the target of a file secret of the compose file, so the file on this machine is not known."
 	}
-	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up (it waits up to 120 seconds for the port 5432). A service that connects to the database before the script has made it may exit; the timing was not measured (in one CI run a Spring backend first connected about 50 seconds after the start, after the database had been made), so start the database first, run the script, then the rest, if that happens. It needs psql on your machine (the script says how to install it). " + pw + " It was not run against the package by this tool."
+	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up (it waits until a psql SELECT 1 as the superuser succeeds: up to 24 tries, 5 seconds apart, each with a connect timeout of 5 seconds, so 2 to 4 minutes at most). A service that connects to the database before the script has made it may exit; the timing was not measured (in run 45395987354 a Spring backend first connected about 50 seconds after the start, after the database had been made; in run 44908630495 it connected about 43 seconds after CREATE DATABASE), so start the database first, run the script, then the rest, if that happens. Under sudo the variables that the script reads are kept with sudo --preserve-env (the line of the next steps does it, with names only). It needs psql on your machine (the script says how to install it). " + pw + " It was not run against the package by this tool."
 }
 
 // argsAfterName is the arguments of a command line without its first word.
@@ -541,6 +546,18 @@ func dropFileWarnings(ws []string) []string {
 
 // secretName tells whether the name of a variable says that it holds a secret.
 // The value of such a variable is never written into a note.
+// PostUpPreserve is the names of the variables that the script reads from the
+// shell of the user, for sudo --preserve-env: the password only when the
+// compose file gives it as a variable. Names only, never a value.
+func PostUpPreserve(u HubUse, obs *observe.Result) []string {
+	_, fixed := noteInputs(u, obs)
+	var names []string
+	if fixed["HUB_PWENV"] != "" {
+		names = append(names, "POSTGRES_PASSWORD")
+	}
+	return append(names, "PGHOST", "POSTUP_TRIES")
+}
+
 func secretName(name string) bool { return hub.SecretName(name) }
 
 // notShown stands in a note for the value of a variable that holds a secret.
@@ -702,7 +719,7 @@ func noteHave(note string, env []string, fixed map[string]string) map[string]str
 	for _, m := range bracesRe.FindAllStringSubmatch(note, -1) {
 		if sub := placeholderRe.FindStringSubmatch(m[1]); sub != nil && sub[2] != "" {
 			v, ok := firstSet(have, sub[1])
-			if !ok {
+			if !ok || onlyFixed(sub[1]) {
 				continue
 			}
 			if !utf8.ValidString(v) {
@@ -711,12 +728,24 @@ func noteHave(note string, env []string, fixed map[string]string) map[string]str
 			} else if plainText(v) != v {
 				have["HUB_CONTROL"] = "yes"
 			}
-			if len(v) > maxIdent && !strings.HasPrefix(sub[1], "HUB_PWFILE") {
+			if len(v) > maxIdent {
 				have["HUB_TOOLONG"] = "yes"
 			}
 		}
 	}
 	return have
+}
+
+// onlyFixed tells whether all the names of a placeholder are variables of the
+// tool (HUB_...): a path, the instance, a superuser of the table. They are not
+// names of the user's database, so the limits of a name do not apply.
+func onlyFixed(names string) bool {
+	for _, n := range strings.Split(names, ",") {
+		if !strings.HasPrefix(strings.TrimSpace(n), "HUB_") {
+			return false
+		}
+	}
+	return true
 }
 
 // fillWith is the second half of fillText.

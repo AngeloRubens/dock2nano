@@ -340,7 +340,7 @@ func removeOldScript(j *journal, path string) error {
 		return nil
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte(plan.PostUpMarker)) {
+	if err != nil || !bytes.Contains(data, []byte(plan.PostUpMarker)) && !bytes.Contains(data, []byte(plan.PostUpMarkerOld)) {
 		return nil
 	}
 	old := fmt.Sprintf("%s.stale-%d", path, os.Getpid())

@@ -1140,3 +1140,19 @@ func TestWriteRollbackPutsTheOldScriptBack(t *testing.T) {
 		t.Errorf("the old script was not put back: %v", names(t, dir))
 	}
 }
+
+func TestWriteForceRemovesTheScriptOfAnEarlierVersionWithTheOldMarker(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	put(t, filepath.Join(src, "web"), "b", 0o755)
+	stale := filepath.Join(dir, "post-up-web.sh")
+	put(t, stale, "#!/bin/sh\n# "+plan.PostUpMarkerOld+", to be run by you\n", 0o755)
+	p := onePlan(src)
+	p.Services[0].PostUpFile = "post-up-web.sh"
+	if _, err := Write(p, Options{OpsHome: filepath.Join(dir, "home"), ComposePath: filepath.Join(dir, "compose.yaml"), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if exists(stale) {
+		t.Error("the script of an earlier version is still there")
+	}
+}

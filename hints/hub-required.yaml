@@ -53,8 +53,9 @@ rows:
         databases, run 44910340290).
     post_up_script: |
       #!/bin/sh
-      # Written by dock2nano, to be run by you after "ops compose up": ops compose
-      # does not run it. Read it before you run it.
+      # This is the post-up script written by the converter of your compose file, to
+      # be run by you after "ops compose up": ops compose does not run it. Read it
+      # before you run it.
       # It does NOT do all that the entrypoint of the postgres image does (the
       # files of /docker-entrypoint-initdb.d are not handled). It creates, each
       # one only if it is absent:
@@ -69,22 +70,31 @@ rows:
       # trusts every address; psql is run with -w: it fails instead of asking).
       # This script ignores ~/.pgpass and a PGPASSWORD of your shell.
       [[if HUB_PWENV]]# The password is the variable POSTGRES_PASSWORD of the shell that runs this
-      # script (export it first), or else the file of the secret.
+      # script. Export it first; sudo drops it unless you run the script with
+      # sudo --preserve-env=POSTGRES_PASSWORD (and PGHOST, POSTUP_TRIES if you set them).
+      [[end]][[if HUB_PWFILE]]# The password is read from the file {HUB_PWFILE:sh} when the script runs.
       [[end]]# The statement CREATE ROLE with OWNER was never run against the package in a
-      # CI run; CREATE DATABASE and a password change were (one run, no owner).
-      # Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
+      # CI run; CREATE DATABASE and a password change were run (one run, no owner:
+      # run 45405259016).
+      [[if HUB_PW]]# Notes on the password: a trailing line break of the file is dropped, as the
+      # entrypoint of the postgres image does for a file; a single quote is doubled
+      # and a backslash is kept, which is right while standard_conforming_strings
+      # is on (the default); printf is a builtin of the shell, so the password is
+      # never an argument of a program.
+      [[end]]# Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
       # Without an address it uses PGHOST, then the PRIVATE IPS column of
       # ops instance list for the instance {HUB_INSTANCE}, and then the last
       # "assigned" address in the output of: ops instance logs {HUB_INSTANCE}
-      # POSTUP_TRIES is the number of tries to connect, 5 seconds apart (24: 120
-      # seconds in all).
+      # POSTUP_TRIES is the number of tries of a psql SELECT 1 as the superuser, 5
+      # seconds apart, each with a connect timeout of 5 seconds (24 tries: 2 to 4
+      # minutes in all). Under sudo, keep these variables with --preserve-env.
       set -eu
 
       PGPASSFILE=/dev/null
       export PGPASSFILE
       PGCONNECT_TIMEOUT=5
       export PGCONNECT_TIMEOUT
-      unset PGPASSWORD
+      unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER
 
       instance={HUB_INSTANCE:sh}
       if [ "$#" -ge 1 ] && [ -n "$1" ]; then
@@ -243,6 +253,7 @@ rows:
       postgres does not exist there (run 44909583390).
       The database has to exist before the application connects: in run
       44908630495 the backend connected about 43 s after CREATE DATABASE
+      (run 45395987354: about 50 s after the start of the instances)
       (13:29:34.95; HikariPool-1 starting at 13:30:17.893) and ops compose up
       starts all instances together, so a sooner connection fails unless the
       application retries.

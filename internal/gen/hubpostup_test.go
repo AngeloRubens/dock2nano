@@ -57,7 +57,7 @@ func syntaxOK(t *testing.T, script string) {
 func TestPostUpScriptCreatesTheDatabaseAsTheSuperuserOfFrancescolavra(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
 	for _, want := range []string{
-		"#!/bin/sh\n", "set -eu\n", "Written by dock2nano", "-U 'postgres' -d template1 -w", "[ \"$i\" -lt \"$tries\" ]", "sleep 5",
+		"#!/bin/sh\n", "set -eu\n", "-U 'postgres' -d template1 -w", "[ \"$i\" -lt \"$tries\" ]", "sleep 5",
 		"\n  host=$1\n", "command -v psql", "ops instance logs \"$instance\"", "instance='db'", "PGPASSFILE=/dev/null", "unset PGPASSWORD", "host=${PGHOST:-}", "tries=${POSTUP_TRIES:-24}", "PGCONNECT_TIMEOUT=5", "ops instance list", plan.PostUpMarker,
 		`ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = '\''shop'\''' 'CREATE DATABASE "shop"'` + "\n",
 	} {
@@ -184,7 +184,7 @@ func TestEntrypointItemSaysTheScriptIsRunByTheUserAndNotByOps(t *testing.T) {
 	if len(e) != 1 {
 		t.Fatalf("%+v", e)
 	}
-	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "up to 120 seconds", "may exit", "timing was not measured", "start the database first", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
+	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "2 to 4 minutes at most", "run 44908630495", "run 45395987354", "sudo --preserve-env", "may exit", "timing was not measured", "start the database first", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
 		if !strings.Contains(e[0].Message, want) {
 			t.Errorf("the item lacks %q: %s", want, e[0].Message)
 		}
@@ -611,5 +611,64 @@ func TestPostUpScriptAcceptsTheNamesOfTheLettersDigitsUnderscoreAndHyphen(t *tes
 		if err != nil || !strings.Contains(log, `-c CREATE DATABASE "`+name+`" OWNER "`+name+`u"`) {
 			t.Errorf("%s: %v\n%s\n%s", name, err, out, log)
 		}
+	}
+}
+
+func TestPostUpScriptDoesNotNameTheToolAndCarriesTheMarker(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	if !strings.Contains(s, plan.PostUpMarker) || strings.Contains(s, "dock2nano") || strings.Contains(s, plan.PostUpMarkerOld) {
+		t.Errorf("%s", s)
+	}
+}
+
+func TestPostUpScriptUnsetsTheVariablesOfPsqlThatWouldChangeTheConnectionAndExplainsThePassword(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_PASSWORD=x")
+	for _, want := range []string{"unset PGPASSWORD PGPORT PGSSLMODE PGOPTIONS PGSERVICE PGSERVICEFILE PGDATABASE PGUSER", "standard_conforming_strings", "printf is a builtin", "run 45405259016", "sudo --preserve-env=POSTGRES_PASSWORD"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the script lacks %q:\n%s", want, s)
+		}
+	}
+	out, log, err := runScript(t, s, "", []string{"PGPORT=1", "PGUSER=evil", "PGDATABASE=x", "PGOPTIONS=-c x"}, "10.0.0.7")
+	if err != nil || !strings.Contains(log, "-U postgres -d template1") {
+		t.Errorf("%v\n%s\n%s", err, out, log)
+	}
+}
+
+func TestReportAndFileAgreeWhenTheServiceNameHasAControlCharacter(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.Service = "a\nb"
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop"}
+	items := ApplyHubWhole(u, obs)
+	e := hubFind(items, "hub entrypoint")
+	if len(e) != 1 || strings.Contains(e[0].Message, "No script is written") {
+		t.Errorf("the report refuses a script that the name of the package allows: %+v", e)
+	}
+	u.Instance = "a-b"
+	if PostUpScript(u, obs) == "" {
+		t.Error("no script for the instance a-b")
+	}
+}
+
+func TestEntrypointItemWritesAPasswordNameWithALineBreakAsAnEscape(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/a\nb"}
+	e := hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 || !strings.Contains(e[0].Message, `POSTGRES_PASSWORD_FILE is /run/secrets/a\nb,`) || strings.Contains(e[0].Message, "secrets/a\nb") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestPostUpScriptTheCommentOfThePasswordSaysTheFileOnlyWhenThereIsAFile(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_PASSWORD=x")
+	if strings.Contains(s, "read from the file") {
+		t.Errorf("the comment names a file where there is none:\n%s", s)
+	}
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.PasswordFile = "/srv/p.txt"
+	s = postUpFor(t, u, "POSTGRES_DB=shop")
+	if !strings.Contains(s, "# The password is read from the file '/srv/p.txt' when the script runs.") {
+		t.Errorf("%s", s)
 	}
 }

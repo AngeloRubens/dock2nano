@@ -57,12 +57,20 @@ type Service struct {
 	// also when there is no script, so that the writer can remove the script of
 	// an earlier run (see PostUpMarker).
 	PostUpFile string
+
+	// PostUpPreserve are the variables that the line of the report keeps
+	// through sudo for the script (sudo --preserve-env=...); only the names.
+	PostUpPreserve []string
 }
 
 // PostUpMarker is a phrase that every script of the tool holds. The writer
 // removes an old script of the same name when forced only if it holds it, so a
 // file of the user with that name is never removed.
-const PostUpMarker = "Written by dock2nano"
+const PostUpMarker = "post-up script written by the converter of your compose file"
+
+// PostUpMarkerOld is the phrase that the scripts of earlier versions held; the
+// writer still recognises them as its own.
+const PostUpMarkerOld = "Written by dock2nano"
 
 // PostUpName is the file name of the script that the user runs after "ops
 // compose up" for the package of compose.yaml named pkg.

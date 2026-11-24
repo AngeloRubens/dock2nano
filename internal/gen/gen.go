@@ -412,9 +412,13 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	if si.PostUpUse != nil {
 		u := *si.PostUpUse
 		u.Instance = pkg
-		svc.PostUp, _ = postUp(u, obs)
+		var postUpWhy string
+		svc.PostUp, postUpWhy = postUp(u, obs)
+		svc.PostUpPreserve = PostUpPreserve(u, obs)
 		if svc.PostUp != "" {
-			g.add(s.Name, plan.Note, "post-up script", "the script "+svc.PostUpFile+" is written next to compose.yaml. Run it yourself after ops compose up, with the user and the OPS_HOME of ops compose up: it reads the address of the instance "+pkg+" from ops instance logs, which needs the same rights as ops compose up (sudo env OPS_HOME=... PATH=\"$PATH\"), or give the address as its first argument or in PGHOST")
+			g.add(s.Name, plan.Note, "post-up script", "the script "+svc.PostUpFile+" is written next to compose.yaml. Run it yourself after ops compose up. It looks for the address of the instance "+pkg+" with ops instance list and then ops instance logs, which need the same rights and the same OPS_HOME as ops compose up (sudo env OPS_HOME=... PATH=\"$PATH\"), and sudo drops the variables that the script reads (POSTGRES_PASSWORD, PGHOST, POSTUP_TRIES) unless they are named in sudo --preserve-env=...: the line of the next steps does that, without a value. As a user that is not root, give the address of the instance as its first argument or in PGHOST")
+		} else if postUpWhy != "" {
+			g.add(s.Name, plan.Note, "post-up script", "no script "+svc.PostUpFile+" is written: "+postUpWhy)
 		}
 	}
 	return svc, nil
