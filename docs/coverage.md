@@ -80,7 +80,7 @@ Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measu
 
 Causes read from the logs, not fixed and not yet confirmed by a run (hypotheses): nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 may need a one-process setting (the option -X is a guess not yet run); gitea may need the choice of the listening child instead of the supervisor (not yet run). The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
 
-Run 45393646760 (2026-11-24, branch check/ops-master, commit af6f942, ops 2177c549, flags empty, so no --short-names): sparkjava-mysql green (backend 200, db open); nginx-golang-mysql green (proxy 200); nginx-golang green; nginx-golang-postgres, nginx-aspnet-mysql and spring-postgres red.
+Run 45393646760 (2026-11-24, branch check/ops-master, commit af6f942, ops 2177c549, each job with the flags of its row): green with no flags: nginx-golang, sparkjava-mysql (backend 200, db open), nginx-golang-mysql (proxy 200), flask-redis; green with --short-names: nginx-golang-plain; red: nginx-golang-postgres, nginx-aspnet-mysql and spring-postgres.
 
 Revert checks of the machine note and the bare names note (2026-11-24, branches from 9321c5d with the change removed and the tests kept):
 

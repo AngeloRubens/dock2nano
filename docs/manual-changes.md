@@ -8,7 +8,7 @@ The goal is zero changes by the user. These are the hand changes that were still
 | --- | --- | --- |
 | fastapi | command uvicorn added to the compose file before the conversion | tool option: convert --command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000' (the file stays unchanged); the user has to give it, the tool does not guess it |
 | petclinic | mysqld args --user=root --skip-name-resolve | manual |
-| petclinic | domain.xml serverName db changed to db.service | manual; the flag --short-names (dns_search) exists since later |
+| petclinic | domain.xml serverName db changed to db.service | manual; the flag --short-names (dns_search) exists since later (needs an ops with nanovms/ops#1815, where the bare name resolves by default) |
 | petclinic | JVM -Xint | manual |
 | petclinic | schema shipped as initdb/schema.sql | example file, manual |
 | flask-redis | dev/shm directory, debug=False, redis.service | patch in the compose-up workflow, manual |
@@ -34,7 +34,7 @@ Status: manual. The real feature is a tool option that overrides the service com
 The converted packages run on nanos once three changes are made in the review step (workflow petclinic-up, about 7 minutes of startup; home, owner, petType and veterinarian pages answered 200 with no SQL errors; 2026-11-08, no run id recorded).
 
 1. mysqld arguments --user=root --skip-name-resolve. Reason: nanos runs as root and mysqld refuses root.
-2. domain.xml serverName db changed to db.service. Reason: a service named db is db.service on ops. Since then the tool has --short-names (dns_search), which makes the short name resolve; it was verified on another example (sparkjava), not re-run on petclinic.
+2. domain.xml serverName db changed to db.service. Reason: a service named db is db.service on ops. Since then the tool has --short-names (dns_search), which makes the short name resolve (needs an ops with nanovms/ops#1815, where the bare name resolves by default); it was verified on another example (sparkjava), not re-run on petclinic.
 3. JVM option -Xint. Reason: compiled code crashed the JVM at random places on nanos (5 of 5 runs without -Xint failed).
 
 Also: the app creates its tables on asadmin deploy, after the db package is copied, so the schema is shipped as examples/petclinic-glassfish/initdb/schema.sql.
