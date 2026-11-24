@@ -268,7 +268,13 @@ func launcherLabel(name string, rest []string) string {
 var supervisors = map[string]bool{
 	"nodemon": true, "ts-node-dev": true, "node-dev": true, "pm2-runtime": true, "pm2": true,
 	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
+	// process supervisors of images (found in the bin directories): they start each service of the
+	// image as a child process
+	"s6-svscan": true, "runsvdir": true, "supervisord": true,
 }
+
+// ProcessSupervisors are the supervisors that start every service of the image, not one program.
+var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsvdir": true, "supervisord": true}
 
 // Supervisor tells whether a program started as program with argv is one of the supervisors (by its
 // place: node_modules/.bin/<name>, node_modules/<name>/... or the bin directories of the launchers,

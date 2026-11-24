@@ -204,6 +204,9 @@ func TestSupervisor(t *testing.T) {
 	}{
 		{"pm2-runtime in a bin directory", "/usr/local/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
 		{"pm2-runtime in an nvm bin directory", "/root/.nvm/versions/node/v20.1.0/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
+		{"s6-svscan of an image", "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "s6-svscan"},
+		{"supervisord of an image", "/usr/bin/supervisord", []string{"supervisord", "-n"}, "supervisord"},
+		{"an s6-svscan of the user outside the bin directories", "/app/s6-svscan", []string{"s6-svscan"}, ""},
 		{"a program of the user called nodemon in a bin directory of the user", "/app/bin/nodemon", []string{"nodemon"}, ""},
 		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},
 		{"nodemon package", "/usr/local/bin/node", []string{"node", "/app/node_modules/nodemon/bin/nodemon.js", "server.js"}, "nodemon"},

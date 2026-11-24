@@ -940,9 +940,23 @@ func FinalExec(trace []byte) (Exec, bool) {
 	for _, process := range running {
 		isRunning[process] = true
 	}
+	// The process that started another is the nearest one that executed a program: a thread that
+	// started it (a Go program starts its children from any thread, which has no execve of its own)
+	// or a process that only forked is passed over, so that the children of the threads of rr are
+	// the children of rr.
+	starter := func(process string) string {
+		seen := map[string]bool{process: true}
+		for up, ok := parent[process]; ok && !seen[up]; up, ok = parent[up] {
+			if _, executed := last[up]; executed {
+				return up
+			}
+			seen[up] = true
+		}
+		return ""
+	}
 	var roots []string
 	for _, process := range running {
-		if up, ok := parent[process]; !ok || up == process || !isRunning[up] {
+		if up := starter(process); up == "" || !isRunning[up] {
 			roots = append(roots, process)
 		}
 	}
@@ -959,7 +973,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 			}
 			var children []string
 			for _, other := range running {
-				if other != process && parent[other] == process {
+				if other != process && starter(other) == process {
 					children = append(children, other)
 				}
 			}

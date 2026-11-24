@@ -1103,6 +1103,12 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	if len(obs.PassedOver) > 0 {
 		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(obs.PassedOver), ", then "), where))
 	}
+	for _, l := range obs.PassedOver {
+		if trace.IsInit(l) {
+			g.add(s.Name, plan.Note, "init passed over", fmt.Sprintf("the image starts the program through an init (%s), which starts it as a child process and waits for it. nanos has no fork, so the init cannot run there: the package runs the program the init started, directly (in package.manifest). A single process has no zombies to collect, and the signals the init forwards are not forwarded", l))
+			break
+		}
+	}
 	if len(obs.NotRun) > 0 {
 		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
 	}
@@ -1180,6 +1186,9 @@ func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool
 		return false
 	}
 	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
+	if trace.ProcessSupervisors[name] {
+		msg = name + " is a process supervisor: it starts every service of the image (a web server, an ssh server, a cron) as child processes, and nanos has no fork, so it cannot run on nanos. Run the one server you need as the only process: give it as command: (and entrypoint: when the entrypoint of the image does not run its arguments) in the compose file, or with --command SERVICE=CMD. A program that itself starts workers (php-fpm, nginx) needs its own single-process option; see docs/limits.md, Process supervisors"
+	}
 	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {
 		msg += "; it starts several commands, which need a service each"
 	}

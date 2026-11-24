@@ -981,6 +981,15 @@ func TestFinalExec(t *testing.T) {
 				{Pid: "1", Path: "/usr/bin/dumb-init", Argv: []string{"/usr/bin/dumb-init", "--", "/entry.sh"}, Line: 0},
 				{Pid: "7", Path: "/bin/sh", Argv: []string{"/bin/sh", "/entry.sh"}, Line: 2},
 			}}, true},
+		{"children started from the threads of the program do not replace it", `1     execve("/bin/sh", ["/bin/sh", "./entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     execve("./bin/rr", ["./bin/rr", "serve"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+1     clone(child_stack=0x2000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 6
+5     clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 7
+7     execve("/usr/local/bin/php", ["php", "worker.php"], 0x7ffd1 /* 5 vars */) = 0
+6     clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 8
+8     execve("/usr/local/bin/php", ["php", "worker.php"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "./bin/rr", Argv: []string{"./bin/rr", "serve"}, Line: 1}, true},
 		{"tini with two running children stays", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0

@@ -1528,6 +1528,14 @@ func TestSupervisorIsNamedAndNotPassedOver(t *testing.T) {
 	want1(t, mustGen(t, in3), "web", plan.Unsupported, "supervisor", "need a service each")
 }
 
+func TestProcessSupervisorHasItsOwnAdvice(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "supervisor", "s6-svscan is a process supervisor")
+	want1(t, p, "web", plan.Unsupported, "supervisor", "docs/limits.md, Process supervisors")
+	wantNoText(t, p, "web", plan.Unsupported, "supervisor", "(for nodemon")
+}
+
 func wantNoText(t *testing.T, p *plan.Plan, service string, kind plan.Kind, key, text string) {
 	t.Helper()
 	for _, it := range itemsOf(p, service, kind, key) {
@@ -1642,6 +1650,17 @@ func TestPassedOverRunsAreCountedInOrderAndCapped(t *testing.T) {
 		o.PassedOver = append(o.PassedOver, fmt.Sprintf("cmd%d", i))
 	}
 	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "and 5 more")
+}
+
+func TestPassedOverInitIsNamedAndExplained(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	o := in.Services["web"].Observed
+	o.PassedOver = []string{"tini"}
+	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (tini)")
+	o.PassedOver = []string{"dumb-init", "sh -c"}
+	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (dumb-init)")
+	o.PassedOver = []string{`npm (script "start")`}
+	wantNoText(t, mustGen(t, in), "web", plan.Note, "init passed over", "init")
 }
 
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {
