@@ -712,7 +712,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	// The container starts as root, so docker sets HOME=/root; the program runs as asUser, and is
 	// given the home of that user unless the image or the options say another HOME.
 	createEnv := r.o.Env
-	if asUser != "" && home != "" && !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") }) {
+	if false && asUser != "" && home != "" && !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") }) {
 		createEnv = append(slices.Clone(r.o.Env), "HOME="+home)
 		r.vlogf("HOME is %s, the home of %s\n", home, asUser)
 	}
