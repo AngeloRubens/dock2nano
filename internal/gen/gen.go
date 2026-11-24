@@ -874,6 +874,10 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	launcher := g.launcherNote(s, obs)
 	g.passedOverNote(s, obs)
 	supervisor := g.supervisorNote(s, obs)
+	if trace.IsInit(obs.Program) {
+		g.add(s.Name, plan.Unsupported, "init kept", fmt.Sprintf("the program is an init (%s): the observation kept it as the program: it found no single program that the init had started and that was still running (the container may have stopped, or the init started none or several). An init starts its program as a child process, which nanos cannot do, so the package may not start. Run the program the init starts directly: command: in the compose file, or --command SERVICE=CMD with the entrypoint of the image removed (entrypoint: [] in the compose file)", path.Base(obs.Program)))
+		supervisor = true
+	}
 	g.childLauncherNote(s, obs, supervisor)
 	if obs.Children > 0 {
 		msg := fmt.Sprintf("the program started %d child processes while it was observed (fork/clone); nanos runs a single process and has no fork, so the program may not start or may not work; threads are fine. Many servers have an option to run in one process (for example no master process); see the documentation of the program", obs.Children)
@@ -1093,6 +1097,18 @@ func firstArg(argv []string) string {
 	return argv[0]
 }
 
+// passedLauncher says whether one of the labels of the commands passed over is a package manager
+// launcher (npm, npx, yarn, pnpm, corepack): a plain shell or an init is not one.
+func passedLauncher(labels []string) bool {
+	for _, l := range labels {
+		name, _, _ := strings.Cut(l, " ")
+		if trace.IsLauncherName(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // passedOverNote says what the observation passed over: the commands the image starts (a launcher,
 // the shells around it) and the package runs the program the launcher started, which is a different
 // thing. The commands are named, never printed: the arguments of a command line are user text, and
@@ -1100,8 +1116,29 @@ func firstArg(argv []string) string {
 // the program or beside it and are not run by the package.
 func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 	const where = "Read the original commands in the CMD or ENTRYPOINT of the Dockerfile and in the scripts of package.json"
-	if len(obs.PassedOver) > 0 {
-		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(obs.PassedOver), ", then "), where))
+	var passed []string
+	for _, l := range obs.PassedOver {
+		if !trace.IsInit(l) {
+			passed = append(passed, l)
+		}
+	}
+	if len(passed) > 0 {
+		launcher := passedLauncher(passed)
+		started := "they started"
+		if launcher {
+			started = "the launcher started"
+		}
+		msg := fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command %s (in package.manifest).", cappedJoin(runsCounted(passed), ", then "), started)
+		if launcher {
+			msg += " The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command."
+		}
+		g.add(s.Name, plan.Note, "launcher passed over", msg+" "+where)
+	}
+	for _, l := range obs.PassedOver {
+		if trace.IsInit(l) {
+			g.add(s.Name, plan.Note, "init passed over", fmt.Sprintf("the image starts the program through an init (%s), which starts it as a child process and waits for it. nanos has no fork, so the init cannot run there: the package runs the program the init started, directly (in package.manifest). A single process has no zombies to collect, and the signals the init forwards are not forwarded", l))
+			break
+		}
 	}
 	if len(obs.NotRun) > 0 {
 		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
@@ -1161,10 +1198,6 @@ func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result, s
 		return
 	}
 	who := "the program, a script of the image or an init,"
-	switch path.Base(obs.Program) {
-	case "tini", "tini-static", "dumb-init":
-		supervisor = true
-	}
 	if supervisor {
 		who = "the program (an init or a supervisor)"
 	}
@@ -1180,6 +1213,9 @@ func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool
 		return false
 	}
 	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
+	if trace.ProcessSupervisors[name] {
+		msg = name + " is a process supervisor: it starts every service of the image (a web server, an ssh server, a cron) as child processes, and nanos has no fork, so it cannot run on nanos. Run the one server you need as the only process: give it as command: (and entrypoint: when the entrypoint of the image does not run its arguments) in the compose file, or with --command SERVICE=CMD. A program that itself starts workers (php-fpm, nginx) needs its own single-process option; see docs/limits.md, Process supervisors"
+	}
 	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {
 		msg += "; it starts several commands, which need a service each"
 	}

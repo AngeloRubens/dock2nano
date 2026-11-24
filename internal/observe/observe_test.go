@@ -564,7 +564,8 @@ func TestObserveSuccess(t *testing.T) {
 		}
 		equal(t, "mode of "+name, st.Mode().Perm(), want)
 	}
-	equal(t, "working dir", res.WorkingDir, "/srv")
+	// /proc says /srv, where the program is when it is read; it started in /app, the directory of the image
+	equal(t, "working dir", res.WorkingDir, "/app")
 	equal(t, "configuration files", res.ConfigurationFiles, []string{"/etc/app.conf"})
 	equal(t, "image", res.Image, s.d.cfg)
 	equal(t, "exposed ports", res.ExposedPorts, []int(nil))
@@ -704,7 +705,7 @@ func TestObserveUserOfTheImageRunsTheProgram(t *testing.T) {
 		if tc.want[0] == "--" {
 			wrapped = trace.WrapCommandAs(trace.TraceMount, loader, "", []string{"/entry.sh", "--serve"})
 		}
-		got := s.d.creates[1]
+		got := s.d.creates[len(s.d.creates)-1]
 		equal(t, "entrypoint for user "+tc.user, *got.Entrypoint, wrapped)
 		equal(t, "container user for "+tc.user, got.User, "0")
 		if tc.want[0] == "-u" && !strings.Contains(strings.Join(*got.Entrypoint, " "), " -u app -- ") {
@@ -1742,21 +1743,22 @@ func TestObserveWorkingDirectoryExistsInTheSysroot(t *testing.T) {
 		cwd  string
 		want string
 	}{
-		{"from /proc", "/srv/app\n", "srv/app"},
+		{"from a chdir before the execve", "/srv/app", "srv/app"},
 		{"from the image", "", "app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScene(t)
-			s.d.traceTxt = `11 execve("/usr/bin/x", ["x"], 0x7ffd /* 4 vars */) = 0
+			chdir := ""
+			if tc.cwd != "" {
+				chdir = "11 chdir(\"" + tc.cwd + "\") = 0\n"
+			}
+			s.d.traceTxt = chdir + `11 execve("/usr/bin/x", ["x"], 0x7ffd /* 4 vars */) = 0
 11 openat(AT_FDCWD, "/usr/bin/x", O_RDONLY) = 3
 `
 			s.d.files["/usr/bin/x"] = entry{data: "x", mode: 0755}
 			s.d.exec["readlink /proc/11/exe"] = "/usr/bin/x\n"
-			if tc.cwd != "" {
-				s.d.exec["readlink /proc/11/cwd"] = tc.cwd
-			} else {
-				delete(s.d.exec, "readlink /proc/11/cwd")
-			}
+			// /proc is not what the directory comes from now: it says where the program ended
+			delete(s.d.exec, "readlink /proc/11/cwd")
 			res, err := s.observe(t, context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -1818,7 +1820,7 @@ func TestObserveRelativePathWithoutAWorkingDirIsReadAgainstRoot(t *testing.T) {
 }
 
 func TestObserveUserIsResolvedThroughPasswd(t *testing.T) {
-	passwd := "root:x:0:0:root:/root:/bin/sh\n# comment:x:9:9\ngrafana:x:472:0:g:/h:/sbin/nologin\n"
+	passwd := "root:x:0:0:root:/root:/bin/sh\n# comment:x:9:9\ngrafana:x:472:0:g:/h:/sbin/nologin\napp:x:1000:1000::/home/app:/bin/sh\nweb:x:1001:1001::/home/web:/bin/sh\n"
 	for _, tc := range []struct {
 		name      string
 		imageUser string
@@ -1832,14 +1834,14 @@ func TestObserveUserIsResolvedThroughPasswd(t *testing.T) {
 		{"uid and gid", "472:0", "", false, "grafana", "", true},
 		{"uid without a name", "65532:65532", "", false, "", "the image runs as uid 65532, which has no name in /etc/passwd; it was observed as root", true},
 		{"uid and no passwd", "472", "", true, "", "the image runs as uid 472, which has no name in /etc/passwd; it was observed as root (/etc/passwd could not be read: ", true},
-		{"name", "app", "", false, "app", "", false},
-		{"name and group", "app:staff", "", false, "app", "", false},
+		{"name", "app", "", false, "app", "", true},
+		{"name and group", "app:staff", "", false, "app", "", true},
 		{"root", "root", "", false, "", "", false},
 		{"zero", "0", "", false, "", "", false},
 		{"zero and group", "0:0", "", false, "", "", false},
 		{"empty", "", "", false, "", "", false},
 		{"option replaces a name", "app", "472", false, "grafana", "", true},
-		{"option replaces a uid", "472", "web", false, "web", "", false},
+		{"option replaces a uid", "472", "web", false, "web", "", true},
 		{"option root over a uid", "472", "root", false, "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2514,9 +2516,9 @@ func TestPasswdNameSkipsCommentLines(t *testing.T) {
 func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	r := &run{once: map[string]bool{}}
 	for _, who := range []string{"99999999999", "4294967296:5"} {
-		got, err := r.resolveUser(context.Background(), "img:1", who)
-		if err != nil || got != "" {
-			t.Errorf("user %q: got %q, %v, want root", who, got, err)
+		got, home, err := r.resolveUser(context.Background(), "img:1", who, nil)
+		if err != nil || got != "" || home != "" {
+			t.Errorf("user %q: got %q, %q, %v, want root", who, got, home, err)
 		}
 	}
 	equal(t, "warnings", r.warn, []string{
@@ -2524,11 +2526,124 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 		`the image runs as "4294967296", which is not a uid; it was observed as root`,
 	})
 
-	// a name that holds digits is a name
-	r = &run{once: map[string]bool{}}
-	got, err := r.resolveUser(context.Background(), "img:1", "12ab")
-	if err != nil || got != "12ab" || len(r.warn) != 0 {
-		t.Errorf("got %q, %v, warnings %q", got, err, r.warn)
+	// a name that holds digits is a name; it has no entry in /etc/passwd of the scene, which is said
+	s := newScene(t)
+	s.d.cfg.User = "12ab"
+	s.d.cfg.Env = []string{"PATH=/usr/bin"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	traced := s.d.creates[len(s.d.creates)-1]
+	if i := slices.Index(*traced.Entrypoint, "-u"); i < 0 || (*traced.Entrypoint)[i+1] != "12ab" {
+		t.Errorf("entrypoint = %q, want -u 12ab", *traced.Entrypoint)
+	}
+	var said []string
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the image runs as") {
+			said = append(said, w)
+		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "12ab, whose home directory is not known") {
+		t.Errorf("warnings = %q, want one about the home of 12ab", said)
+	}
+}
+
+// a user that /etc/passwd of the image does not give a home, or cannot be read: said, never silent
+func TestObserveSaysWhenTheHomeOfTheUserIsNotKnown(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		noPasswd bool
+		passwd   string
+		env      []string
+		options  []string
+		why      string // empty: no warning
+	}{
+		{"no entry", false, "root:x:0:0:root:/root:/bin/sh\n", []string{"PATH=/usr/bin"}, nil, "has no entry with an absolute home"},
+		{"a relative home", false, "node:x:1000:1000::home:/bin/sh\n", []string{"PATH=/usr/bin"}, nil, "has no entry with an absolute home"},
+		{"no /etc/passwd", true, "", []string{"PATH=/usr/bin"}, nil, "could not be read"},
+		{"the image sets HOME: no warning", true, "", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
+		{"the options set HOME: no warning", false, "root:x:0:0:root:/root:/bin/sh\n", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.cfg.User = "node"
+			s.d.cfg.Env = tc.env
+			s.o.Env = tc.options
+			if !tc.noPasswd {
+				s.d.files["/etc/passwd"] = entry{data: tc.passwd}
+			}
+			res, err := s.observe(t, context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, w := range res.Warnings {
+				if strings.Contains(w, "node, whose home directory is not known") {
+					found = true
+					if tc.why == "" || !strings.Contains(w, tc.why) {
+						t.Errorf("warning %q, want %q", w, tc.why)
+					}
+				}
+			}
+			if tc.why != "" && !found {
+				t.Errorf("warnings = %q, want one that says the home of node is not known (%s)", res.Warnings, tc.why)
+			}
+		})
+	}
+}
+
+func TestPasswdHome(t *testing.T) {
+	data := []byte("root:x:0:0:root:/root:/bin/sh\n#node:x:1:1::/commented:/bin/sh\nnode:x:1000:1000::/home/node:/bin/sh\nnobody:x:65534:65534::/nonexistent:/sbin/nologin\nrel:x:5:5::home:/bin/sh\nshort:x:6:6\n")
+	equal(t, "node", passwdHome(data, "node"), "/home/node")
+	equal(t, "root", passwdHome(data, "root"), "/root")
+	equal(t, "relative home", passwdHome(data, "rel"), "")
+	equal(t, "short line", passwdHome(data, "short"), "")
+	equal(t, "absent", passwdHome(data, "ghost"), "")
+	equal(t, "empty name", passwdHome(data, ""), "")
+}
+
+// A program that runs as the user of the image is given the home of that user: the container
+// starts as root and docker sets HOME=/root, where the user cannot write (pm2 of directus).
+func TestObserveGivesTheProgramTheHomeOfItsUser(t *testing.T) {
+	passwd := "root:x:0:0:root:/root:/bin/sh\nnode:x:1000:1000::/home/node:/bin/sh\n"
+	for _, tc := range []struct {
+		name  string
+		user  string
+		env   []string
+		extra []string
+		want  string
+	}{
+		{"a name", "node", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
+		{"a uid", "1000:1000", []string{"PATH=/usr/bin"}, nil, "HOME=/home/node"},
+		{"guard, passes without the change: the image sets HOME", "node", []string{"PATH=/usr/bin", "HOME=/app"}, nil, ""},
+		{"guard, passes without the change: the options set HOME", "node", []string{"PATH=/usr/bin"}, []string{"HOME=/srv"}, ""},
+		{"guard, passes without the change: root", "", []string{"PATH=/usr/bin"}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.cfg.User = tc.user
+			s.d.cfg.Env = tc.env
+			s.o.Env = tc.extra
+			s.d.files["/etc/passwd"] = entry{data: passwd}
+			if _, err := s.observe(t, context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			traced := s.d.creates[len(s.d.creates)-1]
+			var homes []string
+			for _, e := range traced.Env {
+				if strings.HasPrefix(e, "HOME=") {
+					homes = append(homes, e)
+				}
+			}
+			if tc.want == "" {
+				if len(homes) != len(tc.extra) {
+					t.Errorf("HOME in the env of the traced container = %q, want none added", homes)
+				}
+				return
+			}
+			equal(t, "HOME of the traced container", homes, []string{tc.want})
+		})
 	}
 }
 
@@ -3472,4 +3587,167 @@ func TestHTTPProberReturnsTheStatusAndTheStartOfTheBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	equal(t, "status of a redirect", status, 302)
+}
+
+// A file opened through a link to a directory (pnpm: node_modules/x is a link to the store) is
+// carried beside the files of the directory the link leads to, and the link is kept: the program
+// finds its other files (dist/b.js) through the link, as it does in the image.
+func TestObserveFileOpenedThroughALinkedDirectoryKeepsTheLink(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/pkg/lib/a.js", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/pkg/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/store/lib/b.js", O_RDONLY) = 9` + "\n"
+	s.d.files["/pkg/lib/a.js"] = entry{data: "a"}
+	s.d.files["/pkg/lib"] = entry{link: "../store/lib"}
+	s.d.files["/store/lib/b.js"] = entry{data: "b"}
+	s.d.files["/store/lib"] = entry{dir: true}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(filepath.Join(res.Sysroot, "pkg/lib")); err != nil || got != "../store/lib" {
+		t.Fatalf("/pkg/lib: readlink = %q, %v; want a link to ../store/lib", got, err)
+	}
+	for _, f := range []string{"pkg/lib/a.js", "pkg/lib/b.js", "store/lib/a.js", "store/lib/b.js"} {
+		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// rr (shlink) starts in /etc/shlink and goes to the folder of its config: the package has to start
+// it where it started, or it resolves its relative config path from the wrong place.
+func TestObserveWorkingDirectoryIsWhereTheProgramStartedNotWhereItEnded(t *testing.T) {
+	s := newScene(t)
+	s.d.cfg.WorkingDir = "/etc/shlink"
+	s.d.traceTxt = `10 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+10 execve("./bin/rr", ["./bin/rr", "serve", "-c", "config/roadrunner/.rr.yml"], 0x7ffd /* 4 vars */) = 0
+10 chdir("/etc/shlink/config/roadrunner") = 0
+10 openat(AT_FDCWD, ".rr.yml", O_RDONLY) = 3
+`
+	s.d.exec["cat /proc/10/cmdline"] = "./bin/rr\x00serve\x00-c\x00config/roadrunner/.rr.yml\x00"
+	s.d.exec["cat /proc/10/environ"] = "A=1\x00"
+	s.d.exec["readlink /proc/10/cwd"] = "/etc/shlink/config/roadrunner\n"
+	s.d.exec["readlink /proc/10/exe"] = "/etc/shlink/bin/rr\n"
+	s.d.exec["cat /proc/10/status"] = statusText(999, 999)
+	s.d.files["/etc/shlink/bin/rr"] = entry{data: "rr", mode: 0755}
+	s.d.files["/etc/shlink/config/roadrunner/.rr.yml"] = entry{data: "x"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "working dir", res.WorkingDir, "/etc/shlink")
+}
+
+// a directory that files opened through a link left cannot be merged into the one the link leads
+// to when the second has a file where the first has a directory: kept, and said
+func TestObserveSaysWhenALinkedDirectoryCannotBeMerged(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/pkg/lib/sub/a.js", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/pkg/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/store/lib/sub", O_RDONLY) = 9` + "\n"
+	s.d.files["/pkg/lib/sub/a.js"] = entry{data: "a"}
+	s.d.files["/pkg/lib"] = entry{link: "../store/lib"}
+	s.d.files["/store/lib"] = entry{dir: true}
+	s.d.files["/store/lib/sub"] = entry{data: "a file where the other has a directory"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "pkg/lib") && strings.Contains(w, "disagree on what sub is") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q, want one about /pkg/lib and sub", res.Warnings)
+	}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "pkg/lib/sub/a.js")); err != nil {
+		t.Errorf("the directory was not kept: %v", err)
+	}
+}
+
+// the program had stopped before /proc could be read: the trace still knows where it started
+func TestObserveWorkingDirectoryFromTheTraceWhenTheProgramHadStopped(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	s.d.cfg.WorkingDir = "/etc/shlink"
+	s.d.traceTxt = `10 execve("/entry.sh", ["/entry.sh"], 0x7ffd /* 5 vars */) = 0
+10 chdir("/etc/shlink/bin") = 0
+10 execve("/etc/shlink/bin/rr", ["rr", "serve"], 0x7ffd /* 4 vars */) = 0
+`
+	s.d.files["/etc/shlink/bin/rr"] = entry{data: "rr", mode: 0755}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "working dir", res.WorkingDir, "/etc/shlink/bin")
+}
+
+// an image link with more ".." than depth leads to this machine in the sysroot: it is not made, and a
+// later path under its name is written inside the package, never on this machine
+func TestObserveDoesNotWriteThroughALinkThatLeadsOutOfTheSysroot(t *testing.T) {
+	s := newScene(t)
+	host := filepath.Join(t.TempDir(), "host")
+	if err := os.MkdirAll(host, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(host, "passwd"), []byte("host"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	imageHost := filepath.ToSlash(host)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/a", O_RDONLY) = 8` + "\n" +
+		`11 openat(AT_FDCWD, "/b", O_RDONLY) = 9` + "\n"
+	s.d.files["/a"] = entry{link: strings.Repeat("../", 40) + strings.TrimPrefix(imageHost, "/")}
+	s.d.files[imageHost] = entry{dir: true}
+	s.d.files["/b"] = entry{link: "/a/passwd"}
+	s.d.files["/a/passwd"] = entry{data: "image"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(host, "passwd")); err != nil || string(data) != "host" {
+		t.Fatalf("the file of this machine is %q, %v", data, err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "lead out of the package") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q, want one that says the link leads out of the package", res.Warnings)
+	}
+}
+
+// fetch never writes through a link of the sysroot that leads out of it
+func TestFetchDoesNotWriteThroughALinkOutOfTheSysroot(t *testing.T) {
+	parent := t.TempDir()
+	sysroot := filepath.Join(parent, "sysroot")
+	host := filepath.Join(parent, "host")
+	for _, d := range []string{sysroot, host} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(host, "passwd"), []byte("host"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../host", filepath.Join(sysroot, "a")); err != nil {
+		t.Fatal(err)
+	}
+	d := &fakeDocker{t: t, files: map[string]entry{"/a/passwd": {data: "image"}, "/a/dir": {dir: true}}}
+	r := &run{d: d}
+	for _, p := range []string{"/a/passwd", "/a/dir"} {
+		if _, err := r.fetch(context.Background(), appID, sysroot, p); err == nil || !strings.Contains(err.Error(), "outside the package") {
+			t.Errorf("fetch %s: err = %v, want one that says outside the package", p, err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(host, "passwd")); err != nil || string(data) != "host" {
+		t.Errorf("the file of this machine is %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(host, "dir")); err == nil {
+		t.Errorf("a directory was made on this machine")
+	}
 }

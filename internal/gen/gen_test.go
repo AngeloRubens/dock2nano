@@ -1528,6 +1528,14 @@ func TestSupervisorIsNamedAndNotPassedOver(t *testing.T) {
 	want1(t, mustGen(t, in3), "web", plan.Unsupported, "supervisor", "need a service each")
 }
 
+func TestProcessSupervisorHasItsOwnAdvice(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "supervisor", "s6-svscan is a process supervisor")
+	want1(t, p, "web", plan.Unsupported, "supervisor", "docs/limits.md, Process supervisors")
+	wantNoText(t, p, "web", plan.Unsupported, "supervisor", "(for nodemon")
+}
+
 func wantNoText(t *testing.T, p *plan.Plan, service string, kind plan.Kind, key, text string) {
 	t.Helper()
 	for _, it := range itemsOf(p, service, kind, key) {
@@ -1642,6 +1650,55 @@ func TestPassedOverRunsAreCountedInOrderAndCapped(t *testing.T) {
 		o.PassedOver = append(o.PassedOver, fmt.Sprintf("cmd%d", i))
 	}
 	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "and 5 more")
+}
+
+func passedOverInput(t *testing.T, labels ...string) Input {
+	t.Helper()
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	in.Services["web"].Observed.PassedOver = labels
+	return in
+}
+
+func TestPassedOverInitIsNamedAndExplained(t *testing.T) {
+	want1(t, mustGen(t, passedOverInput(t, "tini")), "web", plan.Note, "init passed over", "through an init (tini)")
+}
+
+func TestPassedOverInitAfterAnInitIsNamedWithItsName(t *testing.T) {
+	want1(t, mustGen(t, passedOverInput(t, "dumb-init", "sh -c")), "web", plan.Note, "init passed over", "through an init (dumb-init)")
+}
+
+// an init alone is not a launcher: the launcher note is not added for it
+func TestPassedOverInitAloneHasNoLauncherNote(t *testing.T) {
+	wantNone(t, mustGen(t, passedOverInput(t, "tini")), "web", plan.Note, "launcher passed over")
+}
+
+// an init and a shell: the note names the shell and not the init, and has no npm sentence
+func TestPassedOverInitAndShellNoteLeavesTheInitAndNpmOut(t *testing.T) {
+	p := mustGen(t, passedOverInput(t, "dumb-init", "sh -c"))
+	want1(t, p, "web", plan.Note, "launcher passed over", "sh -c (outermost first)")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "dumb-init")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "npm_*")
+}
+
+func TestPassedOverRealLauncherKeepsTheNpmSentence(t *testing.T) {
+	p := mustGen(t, passedOverInput(t, "tini", `npm (script "start")`, "sh -c"))
+	want1(t, p, "web", plan.Note, "launcher passed over", "The npm_* variables are kept as observed")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "tini")
+}
+
+func TestAnInitThatStaysTheProgramIsReported(t *testing.T) {
+	in, _ := launcherInput(t, "/sbin/tini", []string{"/sbin/tini", "--", "a"}, "")
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "init kept", "the program is an init (tini)")
+	in2, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "init kept")
+}
+
+func TestPassedLauncherNames(t *testing.T) {
+	for label, want := range map[string]bool{"npm": true, `npm (script "x")`: true, "yarn": true, "pnpm": true, "corepack": true, "sh -c": false, "tini": false, "node": false} {
+		if got := passedLauncher([]string{label}); got != want {
+			t.Errorf("passedLauncher(%q) = %v, want %v", label, got, want)
+		}
+	}
 }
 
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {

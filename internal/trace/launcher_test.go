@@ -204,6 +204,20 @@ func TestSupervisor(t *testing.T) {
 	}{
 		{"pm2-runtime in a bin directory", "/usr/local/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
 		{"pm2-runtime in an nvm bin directory", "/root/.nvm/versions/node/v20.1.0/bin/pm2-runtime", []string{"pm2-runtime", "app.js"}, "pm2-runtime"},
+		{"s6-svscan of an image", "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "s6-svscan"},
+		{"supervisord of an image", "/usr/bin/supervisord", []string{"supervisord", "-n"}, "supervisord"},
+		{"s6-overlay v3", "/command/s6-svscan", []string{"s6-svscan", "-d4", "/run/service"}, "s6-svscan"},
+		{"s6 in a versioned folder", "/package/admin/s6-2.12.0.3/command/s6-svscan", []string{"s6-svscan"}, "s6-svscan"},
+		{"runsvdir in /sbin", "/sbin/runsvdir", []string{"runsvdir", "-P", "/etc/service"}, "runsvdir"},
+		{"runsvdir in /usr/sbin", "/usr/sbin/runsvdir", []string{"runsvdir", "/etc/service"}, "runsvdir"},
+		{"supervisord started through a python shebang", "/usr/bin/python3", []string{"/usr/bin/python3", "/usr/bin/supervisord", "-n"}, "supervisord"},
+		{"supervisord with an option of python first", "/usr/bin/python3", []string{"python3", "-u", "/usr/bin/supervisord", "-n"}, "supervisord"},
+		{"supervisord after an option with a value", "/usr/bin/python3", []string{"python3", "-W", "ignore", "/usr/bin/supervisord", "-n"}, "supervisord"},
+		{"a python script that is not a supervisor, after an option with a value", "/usr/bin/python3", []string{"python3", "-X", "dev", "/app/main.py", "/usr/bin/supervisord"}, ""},
+		{"python -c with an argument that looks like a script", "/usr/bin/python3", []string{"python3", "-c", "import x", "/usr/bin/supervisord"}, ""},
+		{"python -m of another module", "/usr/bin/python3", []string{"python3", "-m", "mod", "/x/supervisord"}, ""},
+		{"python -m of the module of supervisord", "/usr/bin/python3", []string{"python3", "-m", "supervisor.supervisord", "-n"}, "supervisord"},
+		{"a python program that is not a supervisor", "/usr/bin/python3", []string{"python3", "/app/main.py"}, ""},
 		{"a program of the user called nodemon in a bin directory of the user", "/app/bin/nodemon", []string{"nodemon"}, ""},
 		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},
 		{"nodemon package", "/usr/local/bin/node", []string{"node", "/app/node_modules/nodemon/bin/nodemon.js", "server.js"}, "nodemon"},
@@ -411,6 +425,22 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
 			ChildLaunchers: []string{`npm (script "start")`}}},
+		{"a launcher started from a thread of the program is named", `1     execve("/entrypoint.sh", ["/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+5     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
+			ChildLaunchers: []string{`npm (script "start")`}}},
+		{"a helper that a thread of the launcher started is not run", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+5     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 6
+6     execve("/usr/bin/git", ["git", "status"], 0x7ffd1 /* 5 vars */) = 0
+6     +++ exited with 0 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "9", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
+			NotRun:     []string{"git"},
+			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
 		{"a shell that executes the program in its own process", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/bin/sh", ["sh", "-c", "node migrate.js && node server.js"], 0x7ffd1 /* 5 vars */) = 0

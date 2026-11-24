@@ -705,15 +705,22 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	if r.o.User != "" {
 		imageUser = r.o.User
 	}
-	asUser, err := r.resolveUser(ctx, image, imageUser)
+	asUser, home, err := r.resolveUser(ctx, image, imageUser, env)
 	if err != nil {
 		return nil, err
+	}
+	// The container starts as root, so docker sets HOME=/root; the program runs as asUser, and is
+	// given the home of that user unless the image or the options say another HOME.
+	createEnv := r.o.Env
+	if asUser != "" && home != "" && !hasHome(env) {
+		createEnv = append(slices.Clone(r.o.Env), "HOME="+home)
+		r.vlogf("HOME is %s, the home of %s\n", home, asUser)
 	}
 	wrapped := trace.WrapCommandAs(trace.TraceMount, loader, asUser, argv)
 	id, err := r.create(ctx, docker.CreateOptions{
 		Image:       image,
 		Entrypoint:  &wrapped,
-		Env:         r.o.Env,
+		Env:         createEnv,
 		WorkingDir:  r.o.WorkingDir,
 		User:        "0",
 		Binds:       binds,
@@ -815,6 +822,13 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 	} else {
 		r.warnOnce(NoteStoppedBeforeProc + ": the command line, environment and directory are those of the image")
+	}
+	// The program may change its directory while it runs (rr goes to the folder of its config):
+	// /proc says where it is now, and the package starts it where it started, which the trace
+	// knows even when the program had stopped before /proc was read.
+	if dir := trace.CwdAtExec(raw, startDir, final.Line); dir != "" && dir != cwd {
+		r.vlogf("the program started in %s; %q is where it was at the end; %s is used\n", dir, cwd, dir)
+		cwd = dir
 	}
 	if len(cmdline) == 0 {
 		cmdline = argv
@@ -1014,37 +1028,45 @@ func (r *run) writeLocalNames(sysroot string) {
 	r.localNames = true
 }
 
-// resolveUser gives the user name strace -u runs the program as, or "" for root. strace looks the
+// resolveUser gives the user name strace -u runs the program as, or "" for root, and the home
+// directory the image's /etc/passwd gives that user ("" when it is not known). strace looks the
 // name up in /etc/passwd of the image, so a uid (or uid:gid) is turned into a name by reading
 // that file out of a container that is created from the image and never started. A name is used as
 // it is. A uid with no name, or a file that cannot be read, means the program is observed as root,
-// and that is a warning. An error is only the end of ctx.
-func (r *run) resolveUser(ctx context.Context, image, user string) (string, error) {
+// and that is a warning, but only for a uid. An error is only the end of ctx.
+//
+// The home matters because the traced container starts as root: docker sets HOME to /root, and
+// strace -u does not change it, while a container started as that user has the home of the user
+// (pm2 and many programs write under HOME and fail with EACCES under /root).
+func (r *run) resolveUser(ctx context.Context, image, user string, env []string) (name, home string, err error) {
 	who, _, _ := strings.Cut(user, ":")
 	if who == "" || who == "root" {
-		return "", nil
+		return "", "", nil
 	}
-	uid, err := strconv.ParseUint(who, 10, 32)
-	if err != nil {
+	uid, perr := strconv.ParseUint(who, 10, 32)
+	isUID := perr == nil
+	if perr != nil {
 		if strings.Trim(who, "0123456789") == "" {
 			// only digits, but too many for a uid
 			r.warnOnce(fmt.Sprintf(NoteImageRuns+"%q, which is not a uid; it was observed as root", who))
-			return "", nil
+			return "", "", nil
 		}
-		return who, nil
-	}
-	if uid == 0 {
-		return "", nil
+		name = who
+	} else if uid == 0 {
+		return "", "", nil
 	}
 
-	name, why := "", ""
+	why := ""
 	ep := []string{passwdProbeEntrypoint}
 	probe, err := r.create(ctx, docker.CreateOptions{Image: image, Entrypoint: &ep})
 	if err == nil {
 		data, rerr := r.readFirstFile(ctx, probe, "/etc/passwd", passwdLimit)
 		r.discard(probe, false)
 		if rerr == nil {
-			name = passwdName(data, uid)
+			if isUID {
+				name = passwdName(data, uid)
+			}
+			home = passwdHome(data, name)
 		} else {
 			why = rerr.Error()
 		}
@@ -1052,18 +1074,58 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (string, erro
 		why = err.Error()
 	}
 	if cerr := ctx.Err(); cerr != nil {
-		return "", fmt.Errorf("observe: looking up the user %s of the image: %w", who, cerr)
+		return "", "", fmt.Errorf("observe: looking up the user %s of the image: %w", who, cerr)
 	}
 	if name != "" {
-		r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
-		return name, nil
+		if isUID {
+			r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
+		}
+		if home == "" && !hasHome(env) {
+			// docker would have given the program the home of its user; here HOME stays /root
+			text := fmt.Sprintf(NoteImageRuns+"%s, whose home directory is not known (%s); HOME was left as the container has it (/root), where that user may not be able to write", name, homeWhy(why))
+			r.warnOnce(r.redact(text))
+		}
+		return name, home, nil
 	}
 	text := fmt.Sprintf(NoteImageRuns+"uid %d, which has no name in /etc/passwd; it was observed as root", uid)
 	if why != "" {
 		text += " (/etc/passwd could not be read: " + why + ")"
 	}
 	r.warnOnce(r.redact(text))
-	return "", nil
+	return "", "", nil
+}
+
+// hasHome says whether the environment (the image's and the options') sets HOME.
+func hasHome(env []string) bool {
+	return slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "HOME=") })
+}
+
+// homeWhy says why the home of a user is not known: /etc/passwd could not be read, or has no usable
+// entry.
+func homeWhy(readError string) string {
+	if readError != "" {
+		return "/etc/passwd could not be read: " + readError
+	}
+	return "/etc/passwd has no entry with an absolute home for it"
+}
+
+// passwdHome is the home directory (the sixth field) of the first entry of /etc/passwd named name,
+// or "" when there is none or the field is not an absolute path.
+func passwdHome(data []byte, name string) string {
+	if name == "" {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 6 || strings.HasPrefix(f[0], "#") || f[0] != name {
+			continue
+		}
+		if h := strings.TrimSpace(f[5]); strings.HasPrefix(h, "/") {
+			return h
+		}
+		return ""
+	}
+	return ""
 }
 
 // passwdName is the first name in the text of /etc/passwd whose uid is uid.
@@ -1526,11 +1588,17 @@ func (r *run) fetch(ctx context.Context, id string, sysroot string, p string) (f
 		return fetched{kind: kindLink, link: hdr.Linkname}, nil
 	case mode.IsDir():
 		stop()
+		if !trace.InsideSysroot(sysroot, target) {
+			return fetched{}, fmt.Errorf("it is, through a link of the image, outside the package")
+		}
 		if err := os.MkdirAll(target, 0755); err != nil {
 			return fetched{}, &hostError{fmt.Errorf("making %s: %w", p, err)}
 		}
 		return fetched{kind: kindDir}, nil
 	case mode.IsRegular():
+		if !trace.InsideSysroot(sysroot, filepath.Dir(target)) {
+			return fetched{}, fmt.Errorf("its directory is, through a link of the image, outside the package")
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fetched{}, &hostError{fmt.Errorf("making the directory of %s: %w", p, err)}
 		}
@@ -1582,11 +1650,20 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	relative := map[string]string{}
 	queue := slices.Clone(paths)
 	// place puts what link leads to under name: a link with the text it had, or a copy
+	// a link or a copy that was left out on purpose is a warning, never an error
+	skipped := func(err error) error {
+		var left *trace.LinkSkipped
+		if errors.As(err, &left) {
+			r.warnOnce(r.redact(NoteNotCarried + left.Error()))
+			return nil
+		}
+		return err
+	}
 	place := func(link, name string) error {
 		if text, ok := relative[name]; ok {
-			return trace.LinkHostFile(sysroot, text, name)
+			return skipped(trace.LinkHostFile(sysroot, text, name))
 		}
-		return trace.CopyHostFile(sysroot, link, name)
+		return skipped(trace.CopyHostFile(sysroot, link, name))
 	}
 
 	notCarried := func(p string, why string) {
@@ -1638,7 +1715,7 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 				// a log that is a link to the console of the container: an empty file takes its
 				// place, so that opening it works
 				for _, name := range names {
-					if err := trace.CarryConsoleLink(sysroot, name); err != nil {
+					if err := skipped(trace.CarryConsoleLink(sysroot, name)); err != nil {
 						return fmt.Errorf("observe: carrying the console link %s: %w", name, err)
 					}
 				}

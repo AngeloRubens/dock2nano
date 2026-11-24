@@ -270,11 +270,54 @@ var supervisors = map[string]bool{
 	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
 }
 
+// ProcessSupervisors are the supervisors that start every service of the image, not one program.
+var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsvdir": true, "supervisord": true}
+
+// IsLauncherName says whether name is one of the package manager launchers (npm, npx, yarn, yarnpkg,
+// pnpm, pnpx) or corepack, which starts one.
+func IsLauncherName(name string) bool { return launcherSet[name] || name == "corepack" }
+
 // Supervisor tells whether a program started as program with argv is one of the supervisors (by its
 // place: node_modules/.bin/<name>, node_modules/<name>/... or the bin directories of the launchers,
 // run by node or itself), and gives its
 // name, or "" when it is not. Nothing is passed over for it: it is only named.
 func Supervisor(program string, argv []string) string {
+	// A process supervisor is told by its file name, wherever it is: s6-overlay puts it in
+	// /command, runit in /sbin or /usr/sbin, and supervisord is a script that python runs (the
+	// program is then the interpreter and the script is the first argument).
+	names := []string{program}
+	if len(argv) > 0 {
+		names = append(names, argv[0])
+	}
+	// the script an interpreter runs: the first argument that is not an option or the value of one
+	// (python3 -u -W ignore /usr/bin/supervisord)
+	// (python -c code: the code is not an absolute path, so it ends the search without a name)
+scriptArg:
+	for i := 1; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "-m":
+			// python -m supervisor.supervisord: the module is the program
+			if i+1 < len(argv) {
+				mod := argv[i+1]
+				names = append(names, mod[strings.LastIndex(mod, ".")+1:])
+			}
+			break scriptArg
+		case a == "-W" || a == "-X" || a == "-Q":
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			if strings.HasPrefix(a, "/") {
+				names = append(names, a)
+			}
+			break scriptArg
+		}
+	}
+	for _, n := range names {
+		if b := path.Base(n); ProcessSupervisors[b] {
+			return b
+		}
+	}
 	files := []string{program}
 	if interp, args := interpreterOf(program, argv); interp == "node" || interp == "nodejs" {
 		files = nil

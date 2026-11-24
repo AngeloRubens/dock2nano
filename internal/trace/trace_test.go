@@ -717,8 +717,8 @@ func TestFinalProgram(t *testing.T) {
 `, "1", "/bin/a", 0, true},
 		{"a thread that execs hands the program to its process", `7     execve("/bin/sh", ["sh"], 0x7ffd /* 5 vars */) = 0
 7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
-[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <pid changed to 7 ...>
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] <... execve resumed>) = 0
 `, "7", "/srv/go", 2, true},
 		{"a later tool that exited is not the program", `20  execve("/bin/sh", ["sh", "-c", "x"], 0x1 /* 1 var */) = 0
@@ -867,8 +867,8 @@ func TestTouchedPathsFromLineZero(t *testing.T) {
 func TestTouchedPathsSuperseded(t *testing.T) {
 	trace := `7     chdir("/srv") = 0
 7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_THREAD, tls=0x7f1) = 8
-[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <unfinished ...>
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     8] execve("/srv/go", ["go"], 0x7ffd /* 5 vars */ <pid changed to 7 ...>
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] <... execve resumed>) = -1 ENOENT (No such file or directory)
 [pid     7] openat(AT_FDCWD, "a.conf", O_RDONLY) = 3
 `
@@ -883,7 +883,7 @@ func TestTouchedPathsSuperseded(t *testing.T) {
 	// the thread had chdir'd on its own before it handed over
 	trace = `7     clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_THREAD, tls=0x7f1) = 8
 [pid     8] chdir("/other") = 0
-[pid     8] +++ superseded by execve in pid 7 +++
+[pid     7] +++ superseded by execve in pid 8 +++
 [pid     7] openat(AT_FDCWD, "b.conf", O_RDONLY) = 3
 `
 	paths, _ = TouchedPaths([]byte(trace), "/", 0)
@@ -941,6 +941,18 @@ func TestUnescapeStrace(t *testing.T) {
 	}
 }
 
+func TestIsInit(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/sbin/tini": true, "/usr/bin/dumb-init": true, "/usr/local/bin/tini-static": true, "/tini-amd64": true,
+		"/tini-static-arm64": true, "/tini-mips64el": true, "/tini-mips": true, "/tini-mipsel": true, "/tini-riscv64": true, "/tini-ppc64el": true, "/usr/local/bin/dumb-init_1.2.5_x86_64": true, "/usr/bin/catatonit": true, "/sbin/docker-init": true,
+		"/usr/bin/tinyproxy": false, "/app/tini-app": false, "/bin/sh": false,
+	} {
+		if got := IsInit(p); got != want {
+			t.Errorf("IsInit(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 func TestFinalExec(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -966,6 +978,36 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/opt/java/bin/java", ["java", "-jar", "/app.jar"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "7", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "/app.jar"}, Line: 2}, true},
+		{"tini that runs the program as its child is passed over", `1     execve("/sbin/tini", ["/sbin/tini", "--", "node", "./services/server"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "./services/server"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/local/bin/node", Argv: []string{"node", "./services/server"}, Line: 2,
+			PassedOver: []Exec{{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "node", "./services/server"}, Line: 0}}}, true},
+		{"dumb-init, then a shell script with one child, then the program", `1     execve("/usr/bin/dumb-init", ["/usr/bin/dumb-init", "--", "/entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["/bin/sh", "/entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/verdaccio", ["verdaccio"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/bin/verdaccio", Argv: []string{"verdaccio"}, Line: 4,
+			PassedOver: []Exec{
+				{Pid: "1", Path: "/usr/bin/dumb-init", Argv: []string{"/usr/bin/dumb-init", "--", "/entry.sh"}, Line: 0},
+				{Pid: "7", Path: "/bin/sh", Argv: []string{"/bin/sh", "/entry.sh"}, Line: 2},
+			}}, true},
+		{"children started from the threads of the program do not replace it", `1     execve("/bin/sh", ["/bin/sh", "./entry.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     execve("./bin/rr", ["./bin/rr", "serve"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+1     clone(child_stack=0x2000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 6
+5     clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 7
+7     execve("/usr/local/bin/php", ["php", "worker.php"], 0x7ffd1 /* 5 vars */) = 0
+6     clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 8
+8     execve("/usr/local/bin/php", ["php", "worker.php"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "./bin/rr", Argv: []string{"./bin/rr", "serve"}, Line: 1}, true},
+		{"guard, passes without the init change too: tini with two running children stays", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "a"}, Line: 0}, true},
 		{"a shell with two running children stays", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
