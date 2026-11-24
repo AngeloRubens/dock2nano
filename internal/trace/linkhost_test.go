@@ -344,6 +344,11 @@ func TestLinkHostFileMergeIsUndoneWhenAMoveFails(t *testing.T) {
 	if err := os.Chmod(filepath.Join(root, "pkg/x"), 0750); err != nil {
 		t.Fatal(err)
 	}
+	// a directory of the source that is read only: it is made writable while the files go, and put back
+	if err := os.Chmod(filepath.Join(root, "pkg/x/sub"), 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(root, "pkg/x/sub"), 0755) })
 	write(t, filepath.Join(root, "store/x/sub/g"), "g")
 	if err := os.Chmod(filepath.Join(root, "store/x/sub"), 0555); err != nil {
 		t.Fatal(err)
@@ -361,5 +366,8 @@ func TestLinkHostFileMergeIsUndoneWhenAMoveFails(t *testing.T) {
 	}
 	if info, err := os.Lstat(filepath.Join(root, "pkg/x")); err != nil || !info.IsDir() || info.Mode().Perm() != 0750 {
 		t.Errorf("pkg/x = %v, %v; want a directory of mode 0750 (not a link)", info, err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "pkg/x/sub")); err != nil || info.Mode().Perm() != 0555 {
+		t.Errorf("pkg/x/sub = %v, %v; want its mode 0555 back", info, err)
 	}
 }
