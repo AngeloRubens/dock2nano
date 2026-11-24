@@ -447,7 +447,7 @@ func postUp(u HubUse, obs *observe.Result) (script, why string) {
 	have := noteHave(u.PostUpScript, env, fixed)
 	switch {
 	case fixed["HUB_PWFILE"] != "" && plainText(fixed["HUB_PWFILE"]) != fixed["HUB_PWFILE"]:
-		return "", "the path of the password file holds a control character"
+		return "", "the script needs a value that is not set here (or is a secret, which is never written)"
 	case have["HUB_BADUTF8"] != "":
 		return "", "a name is not valid UTF-8, and quoting it would make another name"
 	case have["HUB_CONTROL"] != "":
