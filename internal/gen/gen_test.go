@@ -2347,7 +2347,7 @@ func TestMachineNoteSaysTheNodeFileOnlyWhenTheListHasIt(t *testing.T) {
 	want1(t, p, "db", plan.Note, "machine", "process.memoryUsage().rss is not real")
 }
 
-func TestMachineNoteForSharedMemoryOnArm64(t *testing.T) {
+func TestMachineNoteSaysSharedMemoryIsWrittenOnAnyArchitecture(t *testing.T) {
 	in := newInput(&fake{}, svc("db"))
 	in.Services["db"].Observed.MachineFiles = []string{"/dev/shm"}
 	p := mustGen(t, in)

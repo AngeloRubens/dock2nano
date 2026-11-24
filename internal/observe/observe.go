@@ -173,8 +173,8 @@ type Result struct {
 	// container is not carried.
 	LocalNames bool
 	// MachineFiles lists the files of /proc and /sys that the program opened to learn what machine
-	// it runs on (and /proc/self/stat for node, opened or not) and that the package carries as files of ours (the processors), since nanos does
-	// not answer them.
+	// it runs on (and /proc/self/stat for node, opened or not) and that the package carries as
+	// files of ours (the processors), since nanos does not answer them.
 	MachineFiles []string
 
 	// Sysroot is a directory on this machine with the files the program reached.

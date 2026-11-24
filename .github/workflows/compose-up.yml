@@ -186,6 +186,7 @@ jobs:
             echo "=== $svc $ip:$port $kind"
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             codes=""
+            rm -f /tmp/out/body-$svc.last.txt
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
                 # matrix.host overrides the Host header for every service of the row
@@ -193,6 +194,8 @@ jobs:
                 rm -f /tmp/out/body-$svc.txt
                 code=$(curl -s -m 5 -H "$hdr" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
                 codes="$codes $code"
+                # keep the body of the last try that got an answer, so a 502 page is not lost to a later 000
+                if [ "$code" != 000 ]; then cp /tmp/out/body-$svc.txt /tmp/out/body-$svc.last.txt 2>/dev/null || true; fi
                 # keep the last code and retry on 4xx/5xx (a proxy answers 502 until its backend is up)
                 case "$code" in 2*|3*) break;; esac
               else
@@ -205,7 +208,7 @@ jobs:
             # the last try may get no answer (000) after an earlier try got a status: report that status
             lastcode=""
             for c in $codes; do case "$c" in 000|"") ;; *) lastcode=$c;; esac; done
-            if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
+            if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.last.txt 2>/dev/null || true; fi; echo
             # a service of the probe list that gives no answer fails the job, and so does one that
             # answers with an error status: green means 2xx or 3xx (or an open port), nothing weaker
             case "$code" in
