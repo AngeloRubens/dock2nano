@@ -1285,16 +1285,6 @@ func InsideSysroot(sysroot, p string) bool {
 
 func parentInside(sysroot, dir string) bool { return InsideSysroot(sysroot, dir) }
 
-// inImage makes a path of this machine, inside the sysroot, read as a path of the image.
-func inImage(sysroot, p string) string {
-	for _, root := range []string{sysroot, mustResolve(sysroot)} {
-		if rel, err := filepath.Rel(root, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "/" + filepath.ToSlash(rel)
-		}
-	}
-	return p
-}
-
 func mustResolve(p string) string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		return r
@@ -1339,7 +1329,7 @@ func LinkHostFile(sysroot string, text string, name string) error {
 			return &LinkSkipped{name, "the directory cannot be resolved: " + scrub(sysroot, err.Error())}
 		}
 		if !within(root, realDir) {
-			return &LinkSkipped{name, "the directory is, through a link of the image, outside the package (" + inImage(root, realDir) + ")"}
+			return &LinkSkipped{name, "the directory is, through a link of the image, outside the package"}
 		}
 		target, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(realDir), text))
 		if err != nil {
