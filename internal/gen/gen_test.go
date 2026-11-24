@@ -793,13 +793,16 @@ func TestServiceNamesNote(t *testing.T) {
 	wantNone(t, p, "", plan.Note, "service names")
 }
 
-func TestBareNamesNoteIsPrintedWithoutAFindingInAFile(t *testing.T) {
+func TestBareNamesNoteIsPrintedWithoutShortNames(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	p := mustGen(t, newInput(&fake{}, db, web))
 	want1(t, p, "", plan.Note, "bare names", "bare package names (db, web) do not resolve under ops compose")
 	want1(t, p, "", plan.Note, "bare names", "--short-names with an ops that reads dns_search (nanovms/ops#1815)")
 	want1(t, p, "", plan.Note, "bare names", "the package name resolves, not the compose name")
-	want1(t, p, "", plan.Note, "bare names", "<name>.service")
+	want1(t, p, "", plan.Note, "bare names", "or the name written as <pkg>.service")
+	if strings.Contains(itemsOf(p, "", plan.Note, "bare names")[0].Message, "<name>") {
+		t.Error("the note names <name>.service")
+	}
 
 	in := newInput(&fake{}, db, web)
 	in.ShortNames = true
@@ -807,6 +810,13 @@ func TestBareNamesNoteIsPrintedWithoutAFindingInAFile(t *testing.T) {
 
 	p, _ = one(t, &fake{}, web)
 	wantNone(t, p, "", plan.Note, "bare names")
+}
+
+func TestBareNamesNoteIsAlsoPrintedWithAFindingInAFile(t *testing.T) {
+	in := nameInput(map[string]string{"/etc/n.conf": "server backend:80;"}, false, "proxy", "backend")
+	p := mustGen(t, in)
+	want1(t, p, "proxy", plan.Note, "name at start", "does not resolve under ops compose")
+	want1(t, p, "", plan.Note, "bare names", "bare package names (backend, proxy) do not resolve under ops compose")
 }
 
 func TestEnvironmentSharedNote(t *testing.T) {
@@ -2322,9 +2332,27 @@ func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
 	in.Services["db"].Observed.MachineFiles = []string{"/proc/cpuinfo", "/sys/devices/system/cpu/possible"}
 	p := mustGen(t, in)
 	want1(t, p, "db", plan.Note, "machine", "/sys/devices/system/cpu/possible")
-	want1(t, p, "db", plan.Note, "machine", "on arm64 the kernel answers for cpuinfo itself and node does not get /proc/self/stat")
-	want1(t, p, "db", plan.Note, "machine", "process.memoryUsage().rss is not real")
+	want1(t, p, "db", plan.Note, "machine", "/dev/shm is written on any architecture; cpuinfo, cpu/possible and the stat files on x86_64 only")
+	if m := itemsOf(p, "db", plan.Note, "machine")[0].Message; strings.Contains(m, "node") || strings.Contains(m, "rss") {
+		t.Errorf("the node sentence is printed without /proc/self/stat: %q", m)
+	}
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("db"))), "db", plan.Note, "machine")
+}
+
+func TestMachineNoteSaysTheNodeFileOnlyWhenTheListHasIt(t *testing.T) {
+	in := newInput(&fake{}, svc("db"))
+	in.Services["db"].Observed.MachineFiles = []string{"/dev/shm", "/proc/self/stat"}
+	p := mustGen(t, in)
+	want1(t, p, "db", plan.Note, "machine", "the package carries /proc/self/stat, whether or not the program was seen opening it")
+	want1(t, p, "db", plan.Note, "machine", "process.memoryUsage().rss is not real")
+}
+
+func TestMachineNoteForSharedMemoryOnArm64(t *testing.T) {
+	in := newInput(&fake{}, svc("db"))
+	in.Services["db"].Observed.MachineFiles = []string{"/dev/shm"}
+	p := mustGen(t, in)
+	want1(t, p, "db", plan.Note, "machine", "/dev/shm is written on any architecture")
+	want1(t, p, "db", plan.Note, "machine", "on arm64 the kernel answers for cpuinfo itself")
 }
 
 func TestSecretBindSaysTheSecretIsInThePackage(t *testing.T) {

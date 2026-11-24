@@ -185,26 +185,33 @@ jobs:
             ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-$svc.txt 2>/dev/null | tail -1 | awk '{print $2}')
             echo "=== $svc $ip:$port $kind"
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
+            codes=""
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
                 # matrix.host overrides the Host header for every service of the row
                 if [ -n "${{ matrix.host }}" ]; then hdr="Host: ${{ matrix.host }}"; else hdr="Host: $ip:$port"; fi
+                rm -f /tmp/out/body-$svc.txt
                 code=$(curl -s -m 5 -H "$hdr" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
+                codes="$codes $code"
                 # keep the last code and retry on 4xx/5xx (a proxy answers 502 until its backend is up)
                 case "$code" in 2*|3*) break;; esac
               else
                 if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
               fi
-              sleep 10
+              [ "$i" = 24 ] || sleep 10
             done
             echo "answer: $code"
+            if [ "$kind" = http ]; then echo "codes of the tries:$codes"; fi
+            # the last try may get no answer (000) after an earlier try got a status: report that status
+            lastcode=""
+            for c in $codes; do case "$c" in 000|"") ;; *) lastcode=$c;; esac; done
             if [ "$kind" = http ]; then head -c 400 /tmp/out/body-$svc.txt 2>/dev/null || true; fi; echo
             # a service of the probe list that gives no answer fails the job, and so does one that
             # answers with an error status: green means 2xx or 3xx (or an open port), nothing weaker
             case "$code" in
               2*|3*|open) echo "result: $svc success ($code)" ;;
               4*|5*) echo "result: $svc reached, status $code is not a success"; probe_fail=1 ;;
-              *) echo "no answer from $svc"; probe_fail=1 ;;
+              *) if [ -n "$lastcode" ]; then echo "result: $svc reached, status $lastcode is not a success"; else echo "no answer from $svc"; fi; probe_fail=1 ;;
             esac
           done
           for svc in $(echo "${{ matrix.probe }}" | tr ' ' '\n' | cut -d: -f1 | sort -u); do
