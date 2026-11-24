@@ -1,0 +1,4 @@
+services:
+  kanboard:
+    build: .
+    entrypoint: ["php", "-S", "0.0.0.0:80", "-t", "/var/www/app"]

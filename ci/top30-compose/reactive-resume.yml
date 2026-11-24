@@ -1,0 +1,7 @@
+services:
+  reactive-resume:
+    build: .
+    environment:
+      APP_URL: http://localhost:3000
+      AUTH_SECRET: ci-only-secret-0123456789abcdef0123456789abcdef
+      DATABASE_URL: postgres://u:p@127.0.0.1:5432/x
