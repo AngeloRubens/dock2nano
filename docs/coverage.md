@@ -62,7 +62,7 @@ Every sample of docker/awesome-compose that has a compose file with a published 
 - elasticsearch-logstash-kibana, postgresql-pgadmin, aspnet-mssql: database ports are probed only where listed in the Probe column.
 - Services of a row that are not in its probe list start with the rest but are not asked.
 
-Reading of run 45372721961 (2026-11-24, ops 1183538 plus f3ee91e of the fork, nightly nanos): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
+Reading of run 45372721961 (2026-11-24, ops 1183538 plus f3ee91e of the fork, nightly nanos; runs before this change used ops 1183538 plus f3ee91e, later runs use ops 2177c54 without the fork commit): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
 
 Run 45372721961 ran at 56f19bf, where the probe stopped at the first 4xx or 5xx, so django-host (500) and django-ip (400) were measured with a single try.
 
