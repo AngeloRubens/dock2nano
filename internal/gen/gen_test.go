@@ -785,7 +785,7 @@ func TestServiceNamesNote(t *testing.T) {
 	if got := p.Services[0].Manifest.Env["DB_HOST"]; got != "" {
 		t.Errorf("db has DB_HOST = %q", got)
 	}
-	if got := p.Services[1].Manifest.Env["DB_HOST"]; got != "db" {
+	if got := p.Services[1].Manifest.Env["DB_HOST"]; got != "My_Db" {
 		t.Errorf("DB_HOST = %q, the value must not be rewritten", got)
 	}
 
