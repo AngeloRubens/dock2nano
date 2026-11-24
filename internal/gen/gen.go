@@ -1500,9 +1500,8 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	if len(g.plan.Services) < 2 {
 		return
 	}
-	var pairs, bare []string
+	var pairs []string
 	for _, svc := range g.plan.Services {
-		bare = append(bare, pkgOf[svc.Name])
 		pairs = append(pairs, svc.Name+" -> "+g.dnsName(pkgOf[svc.Name]))
 	}
 	var msg string
@@ -1531,9 +1530,6 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 		msg += " Environment variables whose value names another service were not rewritten: " + strings.Join(refs, "; ") + "."
 	}
 	g.add("", plan.Note, "service names", msg)
-	if !g.in.ShortNames {
-		g.add("", plan.Note, "bare names", "bare service names ("+strings.Join(bare, ", ")+") do not resolve under ops compose. Code or configuration that names a peer by its bare name (also inside a compiled jar or binary, where no file can be searched) needs --short-names, or the name written as <name>.service.")
-	}
 }
 
 // envNote says that ops compose shares one configuration between the packages.
