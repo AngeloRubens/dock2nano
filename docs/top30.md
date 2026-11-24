@@ -64,7 +64,7 @@ Each row, following the instructions of the tool and of docs/ only:
 
 Every job prints lines that start with ROW: the record of the table. A failed row prints its first error line as "ROW first error".
 
-Rules: no Dockerfile edited, no environment given, no retry of the tuning. Extra row runs: one, for filebrowser (a CI infrastructure failure, see Results).
+Rules: no Dockerfile edited, no environment given, no retry of the tuning. Extra row runs: one, for filebrowser (a CI infrastructure failure, see Results). The follow-up run 45439008280 (see Follow-up) is the one further run: 23 rows, once.
 
 ## Results
 
@@ -74,7 +74,7 @@ Counts of 30: converted 18 (convert exit 0, compose.yaml written); started 11 (o
 
 Extra row run: filebrowser, job 138581409098 failed in the step that builds dock2nano, with "##[error] ... github.com/go-ini/ini@v1.52.0: read https://proxy.golang.org/... stream error: stream ID 525; INTERNAL_ERROR". Rerun of that job alone (job 138596712813, same run): the row ran and the docker build failed. The rerun is the only extra run.
 
-Convert was not run for the 12 rows whose docker build failed (my choice, not in the instructions): what dock2nano reports for those Dockerfiles is not measured.
+Convert was not run for the 12 rows whose docker build failed (my choice, not in the instructions): what dock2nano reports for those Dockerfiles is not measured in this run. The follow-up below measures it.
 
 | row | repository | converted | started | probe | run id (job) | first error / reason |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -115,6 +115,62 @@ Post-up: no report printed a "then, once X is up" line in any of the 18 converte
 
 Address of each started row: from the console "assigned 192.168.33.N" line (ops instance logs).
 
+## Follow-up: run 45439008280
+
+Run 45439008280 (workflow top30, branch check/top30, matrix commit 82c0ea4). The matrix is 23 rows: the 12 rows of the first run whose docker build failed, the 7 with "ip timeout", and the 4 with no answer (dashy, verdaccio, directus, wallos). The 7 that answered in the first run were not rerun. Ops is the same pin, 2177c549. The tool code is the same as a3d780f: `git diff a3d780f HEAD -- '*.go'` is empty since then; the ROW lines print dock2nano=82c0ea4 because that commit is the checkout of the job (it holds the workflow change only). Commit dff626d (skip ci, not run) fixes one line of the workflow, see below.
+
+Conclusion of the run: failure, as in the first run (a red row is a row that did not answer). Jobs: 22 ran their row to the end. Linkwarden failed in the step "ops from source", before its row ran: `go build -o /tmp/ops .` printed "provider/aws/aws.go:12:2: github.com/aws/aws-sdk-go-v2/service/ebs@v1.27.10: read ... stream error: stream ID 117; INTERNAL_ERROR". This is the same kind of infrastructure failure as the filebrowser first try. Not rerun: the follow-up was meant to run once.
+
+Two changes of the workflow in this follow-up, both in .github/workflows/top30.yml: (1) when the docker build fails, the row runs convert on the Dockerfile as it is (same flags as the converted rows) and stops; (2) on every failed try of ops compose up, and at the end of each row, the workflow saves "ops instance list" and "ops instance logs NAME" (files instances-attempt-N.txt, console-attempt-N.txt, instances-final.txt, console-final.txt in the artifact). Defect found in the run: under the default shell of GitHub Actions (bash -e), a failing convert ended the step before its ROW lines, so the lines "ROW convert after the failed docker build" did not print for any row. The tool output is in the artifact (report-after-build-fail.txt) and the exit code is the step exit (1), read from the step log. Commit dff626d makes the line `|| xexit=$?`; it was not run.
+
+### A. Docker build failed (11 rows; shlink built this time)
+
+Shlink: its docker build succeeded in this run (117 seconds). In the first run it failed with "Failed to download rr". It converted (convert_exit=0) and is in table C.
+
+For the other 11, the tool printed (report-after-build-fail.txt, 9 to 10 lines each): the first line "NAME: building dock2nano/NAME/NAME:latest", then "dock2nano: service NAME: docker build: docker build --file /tmp/w/NAME/Dockerfile --tag ... --quiet -- /tmp/w/NAME: exit status 1: Dockerfile:N", then the Dockerfile excerpt with the failing line marked ">>>", then the docker ERROR line. No dock2nano line names the missing file or says what to do; the report says nothing else. No compose directory was written. The step exit code is 1 for all 11.
+
+| row | line 2 of the tool output (quoted, cut) | docker ERROR line (the cause, as docker printed it) | first run said |
+| --- | --- | --- | --- |
+| echo-server | "dock2nano: service echo-server: docker build: ... exit status 1: Dockerfile:3" | "/artifacts/build/release/linux/amd64/echo-server": not found | same |
+| datasette | "... service datasette: ... exit status 1: Dockerfile:13" | process "/bin/sh -c pip install https://github.com/simonw/datasette/archive/refs/tags/${VERSION}.zip ..." did not complete successfully | HTTP 404 on the same URL |
+| ttyd | "... service ttyd: ... exit status 1: Dockerfile:9" | "/dist/amd64/ttyd": not found | same |
+| filebrowser | "... service filebrowser: ... exit status 1: Dockerfile:21" | "/filebrowser": not found | same |
+| ntfy | "... service ntfy: ... exit status 1: Dockerfile:16" | "/ntfy": not found | same |
+| coredns | "... service coredns: ... exit status 1: Dockerfile:8" | "/coredns": not found | same |
+| prometheus | "... service prometheus: ... exit status 1: Dockerfile:18" | "/.build/linux-amd64/promtool": not found | "/.build/linux-amd64/prometheus" (docker names the first missing COPY; it varies) |
+| etcd | "... service etcd: ... exit status 1: Dockerfile:9" | "/etcd--linux-amd64/etcdutl": not found | "/etcd--linux-amd64/etcd" (same reason) |
+| tile38 | "... service tile38: ... exit status 1: Dockerfile:11" | "/packages/tile38--linux-amd64/tile38-benchmark": not found | same |
+| redlib | "... service redlib: ... exit status 1: Dockerfile:7" | process "/bin/sh -c curl -L ...redlib-${TARGET}.tar.gz ... | tar xz" did not complete successfully: exit code: 1 | same |
+| homarr | "... service homarr: ... exit status 1: Dockerfile:18" | "/.next/static": not found | same |
+
+### B. ip timeout (6 rows run, linkwarden not run in this follow-up)
+
+Compared with whoami (first run, job 138581408988, artifact top30-whoami): its up.log has "spawning instance.." and no "couldn't find mac" line; its console has "[3.348349] en1: assigned 192.168.33.85" and "Starting up on port 80"; ops instance list shows whoami Running at 192.168.33.85. The six B rows below had, in all three tries, "couldn't find mac" and "mac is an empty string" (pairs), and no "en1: assigned" line in any console.
+
+| row | docker build, convert | ops compose up tries | "couldn't find mac" lines per try (up.log) | console of the instance (instance logs, after try 3) | program output in the console | the report (observation, same as first run) |
+| --- | --- | --- | --- | --- | --- | --- |
+| kanboard | ok, 0 | 3 of 3 "ip timeout" | 19 | 0 lines | none | "the program started 9 child processes ... nanos has no fork" |
+| gitea | ok, 0 | 3 of 3 "ip timeout" | 19 | 0 lines | none | "the program started 36 child processes" |
+| gogs | ok, 0 | 3 of 3 "ip timeout" | 19 | 0 lines | none | "the program started 200 child processes" |
+| syncthing | ok, 0 | 3 of 3 "ip timeout" | 18 | 2 lines | yes: "2026-11-24 16:41:28 INF Invalid version string "992ae894";" then "does not match regexp ^v\d+\.\d+\.\d+..." | "the container stopped with status 1 before the end of the observation" |
+| glance | ok, 0 | 3 of 3 "ip timeout" | 18 | 1 line | yes: "parsing config: reading /app/config/glance.yml: open /app/config/glance.yml: no such file or directory" | "the container stopped with status 1" |
+| reactive-resume | ok, 0 | 3 of 3 "ip timeout" | 17 | 20 lines | yes: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/apps/server/node_modules/@t3-oss/env-core/dist/standard.js' imported from /app/apps/server/node_modules/@t3-oss/env-core/dist/index.js" | "the container stopped with status 1" |
+| linkwarden | not run in this follow-up (ops build failed, see above) | first run: 3 of 3 "ip timeout", 19 lines per try | first run: 19 | first run: not captured | first run report: "Prisma schema loaded from packages/prisma/schema.prisma | Error: ..." | first run: "the container stopped with status 1" |
+
+Every try of the six also printed "no sysroot in package", "spawning instance..", and in try 1 "ip link show dev ops0 exit status 1" (as whoami did). In each of the six, the instance list at the end of try 3 showed only the dns instance (the program instance is absent or stopped). Guest booted: the console of kanboard, gitea and gogs is empty, so nothing can be said about the boot; syncthing, glance and reactive-resume printed the program's own error and no "en1" line (no kernel or network line at all), so the console shows no address for the guest. What the output shows is that the program exited with status 1 (glance, reactive-resume, syncthing) or that nothing was printed (kanboard, gitea, gogs). Not established: why ops got no mac for the instance.
+
+### C. No answer (000 x24): dashy, verdaccio, directus, wallos, shlink
+
+| row | ops compose up | address (console "assigned") | probe codes | console at the end (instance logs) | instance list at the end | program output |
+| --- | --- | --- | --- | --- | --- | --- |
+| dashy | ok, try 1 | 192.168.33.90 | 000 x24 | 2 lines: "[3.346108] en1: assigned 192.168.33.90" | dns and dashy, both Running | none |
+| verdaccio | ok, try 1 | 192.168.33.162 | 000 x24 | 2 lines: "[3.476718] en1: assigned 192.168.33.162" | verdaccio Running | none |
+| directus | ok, try 1 | 192.168.33.178 | 000 x24 | 2 lines: "[3.722702] en1: assigned 192.168.33.178" | directus Running | none |
+| wallos | ok, try 1 | 192.168.33.238 | 000 x24 | 2 lines: "[3.443617] en1: assigned 192.168.33.238" | wallos Running | none |
+| shlink | ok, try 1 | 192.168.33.48 | 000 x24 | 2 lines: "[3.396552] en1: assigned 192.168.33.48" | shlink Running | none |
+
+The program instance is Running in ops and has an address, the guest got its address, and the program printed nothing in the console. Correction of the first run: its text said "after the wait ops instance list shows only dns". That is wrong: the first run's instances.txt of dashy, verdaccio, directus and wallos lists the program instance as Running (for example dashy 192.168.33.150). Not diagnosed: whether the program listens on the port of the probe; no HTTP answer on any try.
+
 ## Observed failure causes, grouped
 
 Fork or CI: filebrowser first try, job 138581409098: "stream error: stream ID 525; INTERNAL_ERROR" from proxy.golang.org while building dock2nano (infrastructure, rerun allowed).
@@ -125,9 +181,9 @@ Network or build argument: datasette "HTTP error 404 while getting https://githu
 
 Program: httpbin "OSError: [Errno 38] Function not implemented" (os.fork, gunicorn workers; nanos has no fork, as docs/limits.md "No fork" says).
 
-Ip timeout, ops compose up failed 3 of 3: kanboard, gitea, gogs, syncthing, glance, linkwarden, reactive-resume ("ip timeout" in up.log, every try).
+Ip timeout, ops compose up failed 3 of 3: kanboard, gitea, gogs, syncthing, glance, linkwarden, reactive-resume ("ip timeout" in up.log, every try; the follow-up, table B, has the console and the program output).
 
-No answer, instance gone or silent: verdaccio, wallos, directus, dashy, httpbin (see above). Not diagnosed: the instance list after the wait shows only dns, and the console has no program line.
+No answer, the instance is Running and silent: verdaccio, wallos, directus, dashy, shlink (see the follow-up, table C), and httpbin (see above, the fork error). Not diagnosed. (The first run's text said the instance list showed only dns: that was wrong, see the follow-up.)
 
 Port or Host: homepage 400 "Host validation failed" (the probe sends the address as Host; the same effect is described in docs/coverage.md for django).
 
@@ -150,4 +206,4 @@ Every item: file and line, what was unclear, missing, wrong, or contradicted by 
 
 ## What is not measured
 
-Conversion of the 12 rows with a docker build failure. Post-up scripts. Any program that answered 200 beyond the first try. The cause of the no-answer rows (verdaccio, wallos, directus, dashy, httpbin except the fork error). The ip timeout causes (only the first line of up.log is quoted).
+Conversion of the rows with a docker build failure: measured in the follow-up (11 rows; the output of convert for the Dockerfile as it is). Linkwarden in the follow-up (its job failed in the ops build). Post-up scripts. Any program that answered 200 beyond the first try. The cause of the no-answer rows (verdaccio, wallos, directus, dashy, httpbin except the fork error). The ip timeout causes (only the first line of up.log is quoted).
