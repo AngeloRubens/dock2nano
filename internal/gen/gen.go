@@ -1536,7 +1536,7 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	}
 	g.add("", plan.Note, "service names", msg)
 	if !g.in.ShortNames {
-		g.add("", plan.Note, "bare names", "bare package names ("+strings.Join(bare, ", ")+") do not resolve under ops compose. Code or configuration that names a peer by its bare name (also inside a compiled jar or binary, where no file can be searched) needs --short-names with an ops that reads dns_search (nanovms/ops#1815), or the name written as <pkg>.service. The names here are package names: with --short-names the package name resolves, not the compose name when they differ.")
+		g.add("", plan.Note, "bare names", "bare package names ("+strings.Join(bare, ", ")+") do not resolve under ops compose. Code or configuration that names a peer by its bare name (also inside a compiled jar or binary, where no file can be searched) needs --short-names with an ops that reads dns_search (nanovms/ops#1815), or the name written as <name>.service. The names here are package names: with --short-names the package name resolves, not the compose name when they differ.")
 	}
 }
 
