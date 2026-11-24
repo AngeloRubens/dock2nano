@@ -1,0 +1,230 @@
+name: top30
+# Rows of the matrix in docs/top30.md (each one a root Dockerfile and a port it listens on), converted
+# unmodified: docker builds the image, dock2nano converts the Dockerfile (--dockerfile) to a nanos package
+# and a compose.yaml, ops compose up starts it, and the strict probe asks the port (2xx or 3xx, or an open
+# TCP port is green). Every row prints "ROW" lines: that is the measured record. Runs on a push to a
+# check/** branch and by hand. This matrix is the 23 rows of the follow-up run (docs/top30.md, section
+# Follow-up): the 12 whose docker build failed (convert is run on them as it is), the 7 with ip timeout,
+# and the 4 with no answer. The other 7 rows of run 45432518617 answered and are not rerun.
+on:
+  push:
+    branches: ['check/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  row:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      OPS_HOME: /home/runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: echo-server, repo: jmalloc/echo-server, sha: 332dd6e8153b4315a3581a990f0b849f914a9a93, port: "8080", probe: http}
+          - {name: datasette, repo: simonw/datasette, sha: 775e8ba28525c6f7ca9552f126f1f88261978c2a, port: "8001", probe: http}
+          - {name: kanboard, repo: kanboard/kanboard, sha: 58a2605058219b1d20b32f98d78872a5b1d9ff12, port: "80", probe: http}
+          - {name: ttyd, repo: tsl0922/ttyd, sha: 2922cb89f518bae4d0fcf4d757a7419638fc71fc, port: "7681", probe: http}
+          - {name: gitea, repo: go-gitea/gitea, sha: b1a6cdadc83ebf4a33a69af8d457cc7f623f2d22, port: "3000", probe: http}
+          - {name: gogs, repo: gogs/gogs, sha: c2380640f6f0829354bb85a7cca4402e1adfa0d4, port: "3000", probe: http}
+          - {name: filebrowser, repo: filebrowser/filebrowser, sha: 833d908884d5c801f30f5c098d7977177eb3a36b, port: "80", probe: http}
+          - {name: dashy, repo: lissy93/dashy, sha: ea81d6cbdcb56b81fc20e2b466f6af6a8ad42293, port: "8080", probe: http}
+          - {name: verdaccio, repo: verdaccio/verdaccio, sha: 13e5bc79fefc2b41118216cd2fdc095209f0a330, port: "4873", probe: http}
+          - {name: shlink, repo: shlinkio/shlink, sha: 80599b89ff9b4ae0f9d19e849e6b747a94dde99c, port: "8080", probe: http}
+          - {name: directus, repo: directus/directus, sha: 4856582eec1ea426f115b79a875c44c819fe0b9d, port: "8055", probe: http}
+          - {name: ntfy, repo: binwiederhier/ntfy, sha: 889b6f071acd6a6ab5dcc7cc802a8a9b457cf2c0, port: "80", probe: http}
+          - {name: coredns, repo: coredns/coredns, sha: a0606842e8fa7136e8157494d92d4beb098221e1, port: "53", probe: tcp}
+          - {name: prometheus, repo: prometheus/prometheus, sha: ad8f26eed18a6aabfd9729bb281c6a3e53beabe9, port: "9090", probe: http}
+          - {name: etcd, repo: etcd-io/etcd, sha: 1f940dc7ecd194bfc4d1de602c5f0f3aef87586f, port: "2379", probe: tcp}
+          - {name: syncthing, repo: syncthing/syncthing, sha: 992ae894a44d8831bc92e002f68b4f20e5735117, port: "8384", probe: http}
+          - {name: wallos, repo: ellite/Wallos, sha: 6e43a0d819973f82d55b20e48367fe7605737651, port: "80", probe: http}
+          - {name: tile38, repo: tidwall/tile38, sha: 34f86375d07fa89d90a4afb5132a8e35af1583e4, port: "9851", probe: tcp}
+          - {name: redlib, repo: redlib-org/redlib, sha: ba116c1186f6b0f9d45f0ae50c827e13eb2f5ea2, port: "8080", probe: http}
+          - {name: homarr, repo: ajnart/homarr, sha: c5873c6e481144cd18a70139ef23ac04ca8ab158, port: "7575", probe: http}
+          - {name: glance, repo: glanceapp/glance, sha: 53aec7f392ca72143870dcb45526ec7c80a68f32, port: "8080", probe: http}
+          - {name: linkwarden, repo: linkwarden/linkwarden, sha: 24adcc146ba356632859a1e8adb4bffae2874d11, port: "3000", probe: http}
+          - {name: reactive-resume, repo: reactive-resume/reactive-resume, sha: 897bcf8e740a4ee918ac27d0dc17e1edd105446a, port: "3000", probe: tcp}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: docker version
+        run: docker version
+      - name: the tool
+        run: go build -o "$RUNNER_TEMP/d2n" .
+      - name: qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
+      - name: ops from source (nanovms/ops master 2177c549, with the arp fix of PR 1805 and PRs 1815-1818)
+        run: |
+          git clone https://github.com/nanovms/ops /tmp/ops-src
+          git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
+          git -C /tmp/ops-src merge-base --is-ancestor 987e075bbcc71e0384ec86edd2c79e1d908be8ff HEAD; echo "1805 ancestor of 2177c549: $?"
+          cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
+          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+      - name: nanos kernel (nightly, it reads uid and gid from the manifest)
+        run: |
+          ops update 2>&1 | tail -3
+          mkdir -p /tmp/nightly
+          curl -fsSL https://storage.googleapis.com/nanos/release/nightly/nanos-nightly-linux.tar.gz | tar xz -C /tmp/nightly
+          rel="$OPS_HOME/.ops/$(cat "$OPS_HOME/.ops/latest.txt")"
+          for f in kernel.img boot.img; do
+            src=$(find /tmp/nightly -name "$f" | head -1)
+            [ -n "$src" ] && cp -f "$src" "$rel/$f" && echo "replaced $f"
+          done
+          sudo install /tmp/ops /usr/local/bin/ops
+          ops pkg get eyberg/ops-dns:0.0.1
+      - name: the row (source, docker build, convert, the printed commands, probe)
+        env:
+          NAME: ${{ matrix.name }}
+          REPO: ${{ matrix.repo }}
+          SHA: ${{ matrix.sha }}
+          PORT: ${{ matrix.port }}
+          KIND: ${{ matrix.probe }}
+        run: |
+          set -u
+          R=/tmp/out/$NAME
+          mkdir -p "$R"
+          srcok=no; bld=not-run; conv=no; started=no; probe=not-run; upn=0
+          finish() {
+            echo "ROW result name=$NAME source=$srcok docker_build=$bld converted=$conv started=$started probe=$probe ops=$(git -C /tmp/ops-src rev-parse --short HEAD 2>/dev/null) dock2nano=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)"
+          }
+          trap finish EXIT
+          echo "ROW name=$NAME repo=$REPO sha=$SHA port=$PORT probe=$KIND"
+          echo "ROW dock2nano commit: $(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          echo "ROW ops commit: $(git -C /tmp/ops-src rev-parse HEAD)"
+
+          # 1. the source at the pinned commit, unmodified. The directory is named after the row, so the
+          # default name of the conversion (the name of the context directory) is the row name.
+          rm -rf "/tmp/w/$NAME" && mkdir -p "/tmp/w/$NAME" && cd "/tmp/w/$NAME"
+          git init -q && git remote add origin "https://github.com/$REPO.git"
+          if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
+            srcok=yes; echo "ROW source=ok $(git log --oneline -1 | cut -c1-100)"
+          else
+            echo "ROW source=fail: git fetch or checkout of $SHA"; exit 1
+          fi
+          [ -f Dockerfile ] || { echo "ROW no Dockerfile at the root"; exit 1; }
+
+          # 2. build with docker (timed here; the conversion builds the image again)
+          s=$(date +%s)
+          if docker build -t "top30-$NAME" "/tmp/w/$NAME" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
+          echo "ROW docker_build=$bld seconds=$(( $(date +%s) - s ))"
+          if [ "$bld" = fail ]; then
+            echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
+            # the tool is run on the Dockerfile as it is, with the same flags as below; the tool builds the image itself
+            cd "$GITHUB_WORKSPACE"
+            # the job shell is bash -e: a failing convert must not end the step before its ROW lines
+            xexit=0
+            "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1 || xexit=$?
+            echo "ROW convert after the failed docker build: convert_exit=$xexit; output of the tool, first 12 lines:"
+            head -12 "$R/report-after-build-fail.txt" | cut -c1-300
+            echo "ROW convert after the failed docker build: convert_exit=$xexit, output lines=$(wc -l < "$R/report-after-build-fail.txt")"
+            echo "ROW convert after the failed docker build: compose.yaml written: $([ -f "$R/compose-after-build-fail/compose.yaml" ] && echo yes || echo no)"
+            echo "ROW convert run after the failed docker build: the row stops here"; exit 1
+          fi
+
+          # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
+          cexit=$?
+          cat "$R/report.txt" | cut -c1-300
+          echo "ROW convert_exit=$cexit"
+          if [ "$cexit" = 0 ] && [ -f "$R/compose/compose.yaml" ]; then conv=yes; fi
+          echo "ROW report lines that name something not converted (quoted from the report):"
+          grep -i "not \|unsupported\|cannot\|could not\|left out\|dropped\|ignored\|no image\|skipped" "$R/report.txt" | cut -c1-300 | head -40
+          if [ "$conv" != yes ]; then
+            echo "ROW first error of the conversion: $(grep -i -m1 "error" "$R/report.txt" | cut -c1-300)"
+            exit 1
+          fi
+          echo "ROW compose.yaml:"; cut -c1-200 "$R/compose/compose.yaml"
+
+          # 4. the commands that the "Next steps" of the report print, run exactly as printed.
+          # the ops pkg line is "(once, if you do not have it yet)"; the up line is "sudo env ... ops compose up -f ..."
+          pkgcmd=$(grep -m1 "ops pkg get" "$R/report.txt" | sed -e 's/^ *//' -e 's/ *(once.*$//')
+          echo "ROW printed pkg command: $pkgcmd"
+          [ -n "$pkgcmd" ] && eval "$pkgcmd" 2>&1 | tail -2
+          upcmd=$(grep -m1 "ops compose up -f" "$R/report.txt" | sed -e 's/^ *//')
+          echo "ROW printed up command: $upcmd"
+          # limits.md documents that ops compose up needs retries (the dns instance can be late): up to three tries
+          up_ok=0
+          for attempt in 1 2 3; do
+            upn=$attempt
+            if eval "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
+            echo "ROW compose_up=failed attempt=$attempt"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
+            cp "$R/up.log" "$R/up-attempt-$attempt.log"
+            # the instance and its console, before the down of the next try removes them
+            sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
+            sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            echo "ROW attempt=$attempt console of $NAME: $(wc -l < "$R/console-attempt-$attempt.txt") lines; first lines:"
+            head -6 "$R/console-attempt-$attempt.txt" | cut -c1-200
+            if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
+          done
+          if [ "$up_ok" != 1 ]; then
+            echo "ROW first error of ops compose up: $(grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" "$R/up.log" | grep -i -m1 "error\|fail\|fatal\|timeout\|panic" | cut -c1-300)"
+            exit 1
+          fi
+          started=yes
+
+          # 5. post-up scripts: the report says "then, once X is up: <command>", the user runs it; run the printed command
+          grep "then, once" "$R/report.txt" | sed -e 's/^.*is up: //' -e 's/    (ops compose does not run it.*$//' | while IFS= read -r pu; do
+            echo "ROW printed post-up command: $pu"; sleep 30; eval "$pu" 2>&1 | tail -5
+          done
+
+          # 6. the strict probe: 2xx or 3xx, or an open TCP port, is the only green
+          sleep 60
+          sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
+          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
+          ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" | tail -1 | awk '{print $2}')
+          echo "ROW address=${ip:-none}"
+          if [ -z "$ip" ]; then probe=no-address; echo "ROW probe=no-address"; exit 1; fi
+          codes=""; code=""
+          for i in $(seq 1 24); do
+            if [ "$KIND" = http ]; then
+              rm -f "$R/body.txt"
+              code=$(curl -s -m 5 -H "Host: $ip:$PORT" -o "$R/body.txt" -w '%{http_code}' "http://$ip:$PORT/" || true)
+              codes="$codes $code"
+              if [ "$code" != 000 ]; then cp "$R/body.txt" "$R/body.last.txt" 2>/dev/null || true; fi
+              case "$code" in 2*|3*) break;; esac
+            else
+              if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$PORT" 2>/dev/null; then code=open; break; else code=closed; fi
+            fi
+            [ "$i" = 24 ] || sleep 10
+          done
+          lastcode=""
+          for c in $codes; do case "$c" in 000|"") ;; *) lastcode=$c;; esac; done
+          echo "ROW address=$ip:$PORT answer=$code"
+          if [ "$KIND" = http ]; then echo "ROW codes of the tries:$codes"; fi
+          case "$code" in
+            2*|3*|open) probe=success ;;
+            4*|5*) probe="reached-status-$code" ;;
+            *) if [ -n "$lastcode" ]; then probe="reached-status-$lastcode"; else probe=no-answer; fi ;;
+          esac
+          echo "ROW probe=$probe"
+          if [ "$KIND" = http ]; then head -c 300 "$R/body.last.txt" 2>/dev/null; echo; fi
+          echo "=== console of $NAME, last 25 lines"; tail -25 "$R/console.txt" | cut -c1-250
+          [ "$probe" = success ] && exit 0
+          exit 1
+      - name: instance list and console (before the down step removes the instance)
+        if: always()
+        run: |
+          N=${{ matrix.name }}
+          mkdir -p "/tmp/out/$N"
+          sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
+          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
+          echo "=== ROW ops instance list (end of the row), exit of the list is in the artifact"
+          sed 's/\x1b\[[0-9;]*m//g' "/tmp/out/$N/instances-final.txt" | cut -c1-200
+          echo "=== ROW ops instance logs $N (end of the row): $(wc -l < "/tmp/out/$N/console-final.txt") lines"
+          cut -c1-250 "/tmp/out/$N/console-final.txt"
+      - name: down
+        if: always()
+        run: |
+          cd /tmp/out/${{ matrix.name }}/compose 2>/dev/null && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top30-${{ matrix.name }}
+          path: /tmp/out/${{ matrix.name }}
+          if-no-files-found: ignore
