@@ -133,7 +133,7 @@ func TestBuildHintCopyFromContinuationLine(t *testing.T) {
 	}
 }
 
-func TestBuildHintCopyFromAfterOtherOption(t *testing.T) {
+func TestRegressionGuardBuildHintCopyFromAfterOtherOption(t *testing.T) {
 	h := hintFor("   3 | >>> COPY --chmod=755 --from=builder /a /a")
 	if !strings.Contains(h, "COPY --from") || strings.Contains(h, "build context") {
 		t.Errorf("hint %q", h)
@@ -141,7 +141,7 @@ func TestBuildHintCopyFromAfterOtherOption(t *testing.T) {
 }
 
 // a context line (not marked) with --from must not decide the hint
-func TestBuildHintCopyFromOnContextLineOnly(t *testing.T) {
+func TestRegressionGuardBuildHintCopyFromOnContextLineOnly(t *testing.T) {
 	h := hintFor("   2 |     COPY --from=builder /a /a\n   3 | >>> COPY dist/app /app")
 	if !strings.Contains(h, "build context") || strings.Contains(h, "COPY --from") {
 		t.Errorf("hint %q", h)
