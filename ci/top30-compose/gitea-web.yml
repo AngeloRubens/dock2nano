@@ -1,0 +1,6 @@
+services:
+  gitea:
+    build: .
+    command: ["/usr/local/bin/gitea", "web"]
+    environment:
+      GITEA_I_AM_BEING_UNSAFE_RUNNING_AS_ROOT: "true"

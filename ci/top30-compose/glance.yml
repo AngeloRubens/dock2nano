@@ -1,0 +1,5 @@
+services:
+  glance:
+    build: .
+    volumes:
+      - ./docs/glance.yml:/app/config/glance.yml
