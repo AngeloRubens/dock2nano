@@ -71,6 +71,12 @@ type HubUse struct {
 	// name of compose.yaml. Empty means the compose name of the service.
 	Instance string
 
+	// PasswordFile is the path on this machine of the file that the compose
+	// file gives to POSTGRES_PASSWORD_FILE (the file of a secret, as the host
+	// has it); empty when there is none or it is not known. The script reads
+	// the file when it runs; the tool never reads it.
+	PasswordFile string
+
 	// Recipe is what was read from the package.
 	Recipe *hub.Recipe
 }
@@ -394,10 +400,28 @@ func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
 	if u.EnvUncertain {
 		fixed["HUB_ENV_UNCERTAIN"] = "yes"
 	}
+	if u.PasswordFile != "" {
+		fixed["HUB_PWFILE"] = u.PasswordFile
+		fixed["HUB_PW"] = "yes"
+	}
 	// the image first, the observed environment over it, what the compose file
 	// gives the service over both: the order in which the manifest gets them
 	env := append(slices.Clone(u.ImageEnv), obs.Env...)
 	env = append(env, u.ComposeEnv...)
+	// whether a password is given is read from the names only, never the value
+	last := map[string]string{}
+	for _, e := range env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			last[k] = v
+		}
+	}
+	if last["POSTGRES_PASSWORD"] != "" {
+		fixed["HUB_PWENV"] = "yes"
+		fixed["HUB_PW"] = "yes"
+	}
+	if f := last["POSTGRES_PASSWORD_FILE"]; f != "" && u.PasswordFile == "" {
+		fixed["HUB_PWLOST"] = f
+	}
 	return env, fixed
 }
 
@@ -460,12 +484,22 @@ func postUpSaid(u HubUse, obs *observe.Result) string {
 	}
 	var what []string
 	if strings.Contains(script, "\nensure 'role'") {
-		what = append(what, "the role POSTGRES_USER, without a password")
+		what = append(what, "the role POSTGRES_USER")
 	}
 	if strings.Contains(script, "\nensure 'database'") {
 		what = append(what, "the database")
 	}
-	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the password, the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up. It needs psql on your machine, and sets no password. It was not run against the package by this tool."
+	_, fixed := noteInputs(u, obs)
+	pw := "It sets no password."
+	switch {
+	case fixed["HUB_PWFILE"] != "":
+		pw = "It sets the password of the role (ALTER ROLE) from the file " + fixed["HUB_PWFILE"] + ", the file of the secret of the compose file on this machine, read when the script runs (the variable POSTGRES_PASSWORD of the shell comes first, if it is set); the value is not in the script or in this report, and goes to psql only through PGPASSWORD and standard input, never as an argument."
+	case fixed["HUB_PWENV"] != "":
+		pw = "It sets the password of the role (ALTER ROLE) from the variable POSTGRES_PASSWORD of the shell that runs it (export it first; the value is not in the script or in this report, and goes to psql only through PGPASSWORD and standard input, never as an argument); if the variable is empty no password is set."
+	case fixed["HUB_PWLOST"] != "":
+		pw = "It sets no password: POSTGRES_PASSWORD_FILE is " + fixed["HUB_PWLOST"] + ", which is not the target of a file secret of the compose file, so the file on this machine is not known."
+	}
+	return "A script, post-up-<the pkg name of the service in compose.yaml>.sh (named in the item post-up script, and in the list of the written files), is written next to compose.yaml; it creates " + strings.Join(what, " and ") + ", each only if it is absent. It does not do what the rest of the entrypoint does (the files of /docker-entrypoint-initdb.d, initdb). ops compose up does NOT run it and neither does this tool: run it yourself after ops compose up, once the database is up (it waits up to 120 seconds for the port 5432). A service that connects to the database before the script has made it may exit; the timing was not measured (in one CI run a Spring backend first connected about 50 seconds after the start, after the database had been made), so start the database first, run the script, then the rest, if that happens. It needs psql on your machine (the script says how to install it). " + pw + " It was not run against the package by this tool."
 }
 
 // argsAfterName is the arguments of a command line without its first word.
@@ -677,7 +711,7 @@ func noteHave(note string, env []string, fixed map[string]string) map[string]str
 			} else if plainText(v) != v {
 				have["HUB_CONTROL"] = "yes"
 			}
-			if len(v) > maxIdent {
+			if len(v) > maxIdent && !strings.HasPrefix(sub[1], "HUB_PWFILE") {
 				have["HUB_TOOLONG"] = "yes"
 			}
 		}

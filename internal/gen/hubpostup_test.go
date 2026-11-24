@@ -58,7 +58,7 @@ func TestPostUpScriptCreatesTheDatabaseAsTheSuperuserOfFrancescolavra(t *testing
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
 	for _, want := range []string{
 		"#!/bin/sh\n", "set -eu\n", "Written by dock2nano", "-U 'postgres' -d template1 -w", "[ \"$i\" -lt \"$tries\" ]", "sleep 5",
-		"\n  host=$1\n", "command -v psql", "ops instance logs \"$instance\"", "instance='db'", "PGPASSFILE=/dev/null", "unset PGPASSWORD", "host=${PGHOST:-}", "tries=${POSTUP_TRIES:-12}", plan.PostUpMarker,
+		"\n  host=$1\n", "command -v psql", "ops instance logs \"$instance\"", "instance='db'", "PGPASSFILE=/dev/null", "unset PGPASSWORD", "host=${PGHOST:-}", "tries=${POSTUP_TRIES:-24}", "PGCONNECT_TIMEOUT=5", "ops instance list", plan.PostUpMarker,
 		`ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = '\''shop'\''' 'CREATE DATABASE "shop"'` + "\n",
 	} {
 		if !strings.Contains(s, want) {
@@ -79,14 +79,14 @@ func TestPostUpScriptUsesTheSuperuserOfEyberg(t *testing.T) {
 	syntaxOK(t, s)
 }
 
-func TestPostUpScriptCreatesTheRoleFirstWhenItIsNotTheSuperuserAndWritesNoPassword(t *testing.T) {
+func TestPostUpScriptCreatesTheRoleFirstWhenItIsNotTheSuperuserAndNeverWritesThePasswordValue(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_USER=app", "POSTGRES_PASSWORD=hunter2", "POSTGRES_INITDB_ARGS=--auth=md5")
 	role := strings.Index(s, `ensure 'role' 'SELECT 1 FROM pg_roles WHERE rolname = '\''app'\''' 'CREATE ROLE "app" LOGIN SUPERUSER'`)
 	db := strings.Index(s, `ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = '\''shop'\''' 'CREATE DATABASE "shop" OWNER "app"'`)
 	if role < 0 || db < 0 || role > db {
 		t.Errorf("role at %d, database at %d:\n%s", role, db, s)
 	}
-	for _, bad := range []string{"hunter2", "POSTGRES_PASSWORD", "PASSWORD '", "PASSWORD="} {
+	for _, bad := range []string{"hunter2", "PASSWORD='", "PASSWORD=h"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("the script holds %q:\n%s", bad, s)
 		}
@@ -184,7 +184,7 @@ func TestEntrypointItemSaysTheScriptIsRunByTheUserAndNotByOps(t *testing.T) {
 	if len(e) != 1 {
 		t.Fatalf("%+v", e)
 	}
-	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
+	for _, want := range []string{"post-up-<the pkg name", "is written next to compose.yaml", "creates the database, each only if it is absent", "up to 120 seconds", "may exit", "timing was not measured", "start the database first", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `CREATE DATABASE "shop"`} {
 		if !strings.Contains(e[0].Message, want) {
 			t.Errorf("the item lacks %q: %s", want, e[0].Message)
 		}
@@ -220,6 +220,7 @@ func fakes(t *testing.T) (bin, log string) {
 	}
 	psql := `#!/bin/sh
 printf '%s\n' "psql $*" >> "$LOG"
+case " $* " in *" -c "*) ;; *) sed 's/^/stdin> /' >> "$LOG" ;; esac
 printf '%s\n' "env PGPASSFILE=${PGPASSFILE-} PGPASSWORD=${PGPASSWORD-unset}" >> "$LOG"
 if [ -n "${FAKE_FAIL-}" ]; then echo "connection refused" >&2; exit 2; fi
 for a in "$@"; do
@@ -230,7 +231,7 @@ for a in "$@"; do
 done
 exit 0
 `
-	ops := "#!/bin/sh\nprintf '%s\\n' \"ops $*\" >> \"$LOG\"\nif [ -n \"${FAKE_LOGS-}\" ]; then printf '%b\\n' \"$FAKE_LOGS\"; fi\n"
+	ops := "#!/bin/sh\nprintf '%s\\n' \"ops $*\" >> \"$LOG\"\nif [ \"$2\" = list ]; then printf '%b\\n' \"${FAKE_LIST-}\"; exit 0; fi\nif [ -n \"${FAKE_LOGS-}\" ]; then printf '%b\\n' \"$FAKE_LOGS\"; fi\n"
 	sleep := "#!/bin/sh\nprintf '%s\\n' \"sleep $*\" >> \"$LOG\"\n"
 	for _, p := range [][2]string{{"psql", psql}, {"ops", ops}, {"sleep", sleep}} {
 		if err := os.WriteFile(filepath.Join(bin, p[0]), []byte(p[1]), 0o755); err != nil {
@@ -310,22 +311,22 @@ func TestPostUpScriptSaysWhenPsqlIsMissing(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
 	empty := t.TempDir()
 	out, _, err := runScript(t, s, empty, nil, "10.0.0.7")
-	if err == nil || !strings.Contains(out, "psql is not installed") {
+	if err == nil || !strings.Contains(out, "psql is not installed") || !strings.Contains(out, "apt install postgresql-client") {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
 
-func TestPostUpScriptTries12TimesAndThenFails(t *testing.T) {
+func TestPostUpScriptTries24TimesAndThenFails(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
 	out, log, err := runScript(t, s, "", []string{"FAKE_FAIL=1"}, "10.0.0.7")
-	if err == nil || !strings.Contains(out, "did not answer after 12 tries") {
+	if err == nil || !strings.Contains(out, "did not answer after 24 tries") {
 		t.Errorf("%v\n%s", err, out)
 	}
-	if n := strings.Count(log, "-c SELECT 1\n"); n != 13 {
-		t.Errorf("psql asked %d times, want 12 and one more to show the answer:\n%s", n, log)
+	if n := strings.Count(log, "-c SELECT 1\n"); n != 25 {
+		t.Errorf("psql asked %d times, want 24 and one more to show the answer:\n%s", n, log)
 	}
-	if n := strings.Count(log, "sleep 5\n"); n != 11 {
-		t.Errorf("%d sleeps of 5 seconds, want 11:\n%s", n, log)
+	if n := strings.Count(log, "sleep 5\n"); n != 23 {
+		t.Errorf("%d sleeps of 5 seconds, want 23:\n%s", n, log)
 	}
 	// POSTUP_TRIES changes the number of tries; a value that is not a number is not used
 	_, log, _ = runScript(t, s, "", []string{"FAKE_FAIL=1", "POSTUP_TRIES=3"}, "10.0.0.7")
@@ -333,8 +334,8 @@ func TestPostUpScriptTries12TimesAndThenFails(t *testing.T) {
 		t.Errorf("POSTUP_TRIES=3: psql asked %d times, want 4:\n%s", n, log)
 	}
 	_, log, _ = runScript(t, s, "", []string{"FAKE_FAIL=1", "POSTUP_TRIES=x"}, "10.0.0.7")
-	if n := strings.Count(log, "-c SELECT 1\n"); n != 13 {
-		t.Errorf("POSTUP_TRIES=x: psql asked %d times, want 13:\n%s", n, log)
+	if n := strings.Count(log, "-c SELECT 1\n"); n != 25 {
+		t.Errorf("POSTUP_TRIES=x: psql asked %d times, want 25:\n%s", n, log)
 	}
 	if strings.Contains(log, "CREATE") {
 		t.Errorf("%s", log)
@@ -440,5 +441,175 @@ func TestPostUpScriptIsNotWrittenWhenTheEnvironmentIsNotCertain(t *testing.T) {
 func TestFillTextKeepsLiteralBraces(t *testing.T) {
 	if got := fillText("a ${{X:-}} {{b}} {A}", []string{"A=1"}, nil, false); got != "a ${X:-} {b} 1" {
 		t.Errorf("%q", got)
+	}
+}
+
+// pwLines are the lines of the log of the fakes that psql was called with, one
+// per call: the arguments only.
+func argvLines(log string) []string {
+	var out []string
+	for _, l := range strings.Split(log, "\n") {
+		if strings.HasPrefix(l, "psql ") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func pwFile(t *testing.T, content string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "password.txt")
+	if err := os.WriteFile(f, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestPostUpScriptReadsThePasswordFileAtRunTimeAndPassesItOnlyThroughTheEnvironmentAndStdin(t *testing.T) {
+	const pw = "s3cr'et$x"
+	f := pwFile(t, pw+"\n")
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.PasswordFile = f
+	s := postUpFor(t, u, "POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/db_password")
+	if !strings.Contains(s, "pwfile='"+f+"'") || strings.Contains(s, "s3cr") || strings.Contains(s, "POSTGRES_PASSWORD") {
+		t.Errorf("the script does not name the file, or holds the value:\n%s", s)
+	}
+	syntaxOK(t, s)
+	out, log, err := runScript(t, s, "", nil, "10.0.0.7")
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, log)
+	}
+	if !strings.Contains(log, "PGPASSWORD="+pw+"\n") {
+		t.Errorf("psql did not get the password in PGPASSWORD:\n%s", log)
+	}
+	if !strings.Contains(log, `stdin> ALTER ROLE "postgres" PASSWORD 's3cr''et$x';`) {
+		t.Errorf("the statement did not reach psql on standard input:\n%s", log)
+	}
+	for _, l := range argvLines(log) {
+		if strings.Contains(l, "s3cr") || strings.Contains(l, "PASSWORD") {
+			t.Errorf("the password or its statement is in an argument: %s", l)
+		}
+	}
+	if strings.Contains(out, "s3cr") {
+		t.Errorf("the password was printed:\n%s", out)
+	}
+}
+
+func TestPostUpScriptTakesThePasswordFromTheShellWhenTheComposeFileGivesItInTheEnvironment(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop", "POSTGRES_USER=app", "POSTGRES_PASSWORD=hunter2")
+	if strings.Contains(s, "hunter2") || !strings.Contains(s, "pw=${POSTGRES_PASSWORD:-}") {
+		t.Errorf("%s", s)
+	}
+	out, log, err := runScript(t, s, "", []string{"POSTGRES_PASSWORD=from-the-shell"}, "10.0.0.7")
+	if err != nil || !strings.Contains(log, "PGPASSWORD=from-the-shell\n") || !strings.Contains(log, `stdin> ALTER ROLE "app" PASSWORD 'from-the-shell';`) {
+		t.Errorf("%v\n%s\n%s", err, out, log)
+	}
+	for _, l := range argvLines(log) {
+		if strings.Contains(l, "from-the-shell") {
+			t.Errorf("the password is in an argument: %s", l)
+		}
+	}
+	// the role is made before its password is set
+	if strings.Index(log, "CREATE ROLE") > strings.Index(log, "ALTER ROLE") {
+		t.Errorf("the password is set before the role exists:\n%s", log)
+	}
+	// without the variable no password is set, and it says so
+	out, log, err = runScript(t, s, "", nil, "10.0.0.7")
+	if err != nil || strings.Contains(log, "ALTER ROLE") || !strings.Contains(out, "no password is set") {
+		t.Errorf("%v\n%s\n%s", err, out, log)
+	}
+}
+
+func TestPostUpScriptSetsNoPasswordWhenTheComposeFileGivesNone(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	if strings.Contains(s, "ALTER ROLE") || strings.Contains(s, "pw=") || strings.Contains(s, "export PGPASSWORD") {
+		t.Errorf("%s", s)
+	}
+}
+
+func TestPostUpScriptFailsWhenTheFileOfThePasswordCannotBeRead(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.PasswordFile = filepath.Join(t.TempDir(), "missing.txt")
+	s := postUpFor(t, u, "POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/x")
+	out, log, err := runScript(t, s, "", nil, "10.0.0.7")
+	if err == nil || !strings.Contains(out, "the file of the password cannot be read") || strings.Contains(log, "psql") {
+		t.Errorf("%v\n%s\n%s", err, out, log)
+	}
+}
+
+func TestPostUpScriptWithAPasswordFileThatIsNotKnownSetsNoPasswordAndTheReportSaysWhy(t *testing.T) {
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/x"}
+	items := ApplyHubWhole(u, obs)
+	s := PostUpScript(u, obs)
+	if s == "" || strings.Contains(s, "ALTER ROLE") {
+		t.Errorf("%s", s)
+	}
+	e := hubFind(items, "hub entrypoint")
+	if len(e) != 1 || !strings.Contains(e[0].Message, "It sets no password: POSTGRES_PASSWORD_FILE is /run/secrets/x, which is not the target of a file secret") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestEntrypointItemSaysWhereThePasswordComesFromAndNeverItsValue(t *testing.T) {
+	f := pwFile(t, "topsecretvalue")
+	u := postUpUse(t, "francescolavra", "postgres", "16.2")
+	u.PasswordFile = f
+	obs := hubWholeObs()
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD_FILE=/run/secrets/x"}
+	e := hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 {
+		t.Fatalf("%+v", e)
+	}
+	for _, want := range []string{"It sets the password of the role (ALTER ROLE) from the file " + f, "read when the script runs", "only through PGPASSWORD and standard input, never as an argument"} {
+		if !strings.Contains(e[0].Message, want) {
+			t.Errorf("the item lacks %q: %s", want, e[0].Message)
+		}
+	}
+	if strings.Contains(e[0].Message, "topsecretvalue") {
+		t.Errorf("the value is in the report: %s", e[0].Message)
+	}
+	// from the environment of the compose file
+	obs.Env = []string{"POSTGRES_DB=shop", "POSTGRES_PASSWORD=hunter2"}
+	u.PasswordFile = ""
+	e = hubFind(ApplyHubWhole(u, obs), "hub entrypoint")
+	if len(e) != 1 || !strings.Contains(e[0].Message, "from the variable POSTGRES_PASSWORD of the shell that runs it") || strings.Contains(e[0].Message, "hunter2") {
+		t.Errorf("%+v", e)
+	}
+}
+
+func TestPostUpScriptTakesTheAddressFromOpsInstanceListBeforeTheConsole(t *testing.T) {
+	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
+	table := "+-------+------+\\n| \x1b[1;36m PID \x1b[0m | \x1b[1;36m NAME  \x1b[0m | \x1b[1;36m IMAGE \x1b[0m | \x1b[1;36m STATUS \x1b[0m | \x1b[1;36m CREATED \x1b[0m | \x1b[1;36m PRIVATE IPS  \x1b[0m | PORT |\\n" +
+		"| 21978 | dns     | /h/dns | Running | 11 seconds ago | 192.168.33.204 |      |\\n" +
+		"| 22027 | db      | /h/db  | Running | 7 seconds ago  | 192.168.33.64  |      |\\n" +
+		"| 22072 | dbx     | /h/dbx | Running | 3 seconds ago  | 192.168.33.49  | 8000 |\\n"
+	out, log, err := runScript(t, s, "", []string{"FAKE_LIST=" + table, "FAKE_LOGS=assigned 192.168.33.9"})
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, log)
+	}
+	if !strings.Contains(log, "psql -X -h 192.168.33.64 ") || strings.Contains(log, "ops instance logs") {
+		t.Errorf("the address of the row db was not used:\n%s", log)
+	}
+}
+
+func TestPostUpScriptAcceptsTheNamesOfTheLettersDigitsUnderscoreAndHyphen(t *testing.T) {
+	for _, name := range []string{"shop", "my-db_1", "-lead", "9lead", "UPPER_x", strings.Repeat("a", 63)} {
+		s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB="+name, "POSTGRES_USER="+name+"u")
+		if len(name+"u") > 63 {
+			if s != "" {
+				t.Errorf("%s: a name of %d bytes was accepted", name, len(name)+1)
+			}
+			continue
+		}
+		if !strings.Contains(s, `'CREATE DATABASE "`+name+`" OWNER "`+name+`u"'`) {
+			t.Errorf("%s: %s", name, s)
+		}
+		syntaxOK(t, s)
+		out, log, err := runScript(t, s, "", nil, "10.0.0.7")
+		if err != nil || !strings.Contains(log, `-c CREATE DATABASE "`+name+`" OWNER "`+name+`u"`) {
+			t.Errorf("%s: %v\n%s\n%s", name, err, out, log)
+		}
 	}
 }

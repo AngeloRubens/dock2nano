@@ -27,7 +27,11 @@
 # secret or have a fallback. It is written next to compose.yaml for the user to
 # run after ops compose up, only if it holds a line that starts with "ensure '",
 # and the row needs an entrypoint_note, which announces it. A variable whose
-# name says PASS, PWD, SECRET, TOKEN or KEY is never written. The text is
+# name says PASS, PWD, SECRET, TOKEN or KEY is never written. The tool sets
+# HUB_PW (a password is given), HUB_PWENV (POSTGRES_PASSWORD is set: the script
+# reads it from the shell when it runs) and HUB_PWFILE (the path on this machine
+# of the file of POSTGRES_PASSWORD_FILE: the script reads it when it runs); they
+# say that there is a password, never its value. The text is
 # checked when the table is read.
 rows:
   - images: [postgres, postgresql]
@@ -52,24 +56,34 @@ rows:
       # Written by dock2nano, to be run by you after "ops compose up": ops compose
       # does not run it. Read it before you run it.
       # It does NOT do all that the entrypoint of the postgres image does (the
-      # password and the files of /docker-entrypoint-initdb.d are not handled). It
-      # creates, each one only if it is absent:
-      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the role POSTGRES_USER, with LOGIN SUPERUSER and WITHOUT a password
+      # files of /docker-entrypoint-initdb.d are not handled). It creates, each
+      # one only if it is absent:
+      [[if POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the role POSTGRES_USER, with LOGIN SUPERUSER
       [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the database POSTGRES_DB (else POSTGRES_USER), owned by that role
       [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]#   - the database POSTGRES_DB (else POSTGRES_USER)
+      [[end]][[if HUB_PW]]# and then sets the password of the role {POSTGRES_USER,HUB_SUPERUSER:sh}
+      # (ALTER ROLE). The value is read when the script runs, is passed to psql
+      # only through PGPASSWORD and standard input, and is never printed.
       [[end]]# It assumes: psql is installed on this machine, and the server accepts
-      # the superuser {HUB_SUPERUSER:sh} without a password (psql is run with -w: it
-      # fails instead of asking). This script sets no password, ignores PGPASSWORD
-      # and ~/.pgpass, and the statements CREATE ROLE and OWNER were never run
-      # against the package in any CI run.
+      # the superuser {HUB_SUPERUSER:sh} without a password (the package of the hub
+      # trusts every address; psql is run with -w: it fails instead of asking).
+      # This script ignores ~/.pgpass and a PGPASSWORD of your shell.
+      [[if HUB_PWENV]]# The password is the variable POSTGRES_PASSWORD of the shell that runs this
+      # script (export it first), or else the file of the secret.
+      [[end]]# The statement CREATE ROLE with OWNER was never run against the package in a
+      # CI run; CREATE DATABASE and ALTER ROLE were (one run, no owner).
       # Usage: post-up-{HUB_INSTANCE}.sh [address of the database]
-      # Without an address it uses PGHOST, and then the last "assigned" address in
-      # the output of: ops instance logs {HUB_INSTANCE}
-      # POSTUP_TRIES is the number of tries to connect, 5 seconds apart (12).
+      # Without an address it uses PGHOST, then the PRIVATE IPS column of
+      # ops instance list for the instance {HUB_INSTANCE}, and then the last
+      # "assigned" address in the output of: ops instance logs {HUB_INSTANCE}
+      # POSTUP_TRIES is the number of tries to connect, 5 seconds apart (24: 120
+      # seconds in all).
       set -eu
 
       PGPASSFILE=/dev/null
       export PGPASSFILE
+      PGCONNECT_TIMEOUT=5
+      export PGCONNECT_TIMEOUT
       unset PGPASSWORD
 
       instance={HUB_INSTANCE:sh}
@@ -83,21 +97,39 @@ rows:
           echo "no address: give it as the first argument or in PGHOST (ops is not installed here, so it cannot be read from ops instance logs)" >&2
           exit 1
         fi
-        host=$(ops instance logs "$instance" 2>/dev/null | grep -o 'assigned [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | tail -n 1 | awk '{print $2}' || true)
+        host=$(ops instance list 2>/dev/null | awk -F'|' -v n="$instance" '{ g = $3; gsub(/ /, "", g); if (g == n) { ip = $7; gsub(/ /, "", ip); print ip } }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -n 1 || true)
+        if [ -z "$host" ]; then
+          host=$(ops instance logs "$instance" 2>/dev/null | grep -o 'assigned [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | tail -n 1 | awk '{print $2}' || true)
+        fi
       fi
       if [ -z "$host" ]; then
-        echo "no address: the console of $instance has no assigned address (is it up? ops needs the same OPS_HOME and user as for ops compose up); give the address as the first argument or in PGHOST" >&2
+        echo "no address: ops instance list and the console of $instance give none (is it up? ops needs the same OPS_HOME and user as for ops compose up); give the address as the first argument or in PGHOST" >&2
         exit 1
       fi
       if ! command -v psql >/dev/null 2>&1; then
-        echo "psql is not installed on this machine: install the client of postgres and run this again" >&2
+        echo "psql is not installed on this machine: install the client of postgres (apt install postgresql-client, dnf install postgresql, brew install libpq, apk add postgresql-client) and run this again" >&2
         exit 1
       fi
-      tries=${{POSTUP_TRIES:-12}}
+      tries=${{POSTUP_TRIES:-24}}
       case "$tries" in
-        ''|*[!0-9]*|0) tries=12 ;;
+        ''|*[!0-9]*|0) tries=24 ;;
       esac
 
+      [[if HUB_PW]]pw=
+      [[end]][[if HUB_PWENV]]pw=${{POSTGRES_PASSWORD:-}}
+      [[end]][[if HUB_PWFILE]]if [ -z "$pw" ]; then
+        pwfile={HUB_PWFILE:sh}
+        if [ ! -r "$pwfile" ]; then
+          echo "the file of the password cannot be read: $pwfile" >&2
+          exit 1
+        fi
+        pw=$(cat "$pwfile")
+      fi
+      [[end]][[if HUB_PW]]if [ -n "$pw" ]; then
+        PGPASSWORD=$pw
+        export PGPASSWORD
+      fi
+      [[end]]
       psql_su() {
         psql -X -h "$host" -U {HUB_SUPERUSER:sh} -d template1 -w -tA -v ON_ERROR_STOP=1 "$@"
       }
@@ -147,7 +179,16 @@ rows:
       [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident} OWNER {POSTGRES_USER:ident}'
       [[end]][[if POSTGRES_DB,POSTGRES_USER!="postgres" and not POSTGRES_USER!=HUB_SUPERUSER and not HUB_CONTROL and not HUB_TOOLONG]]ensure 'database' 'SELECT 1 FROM pg_database WHERE datname = {POSTGRES_DB,POSTGRES_USER:lit}' 'CREATE DATABASE {POSTGRES_DB,POSTGRES_USER:ident}'
       [[end]]
-      echo "done"
+      [[if HUB_PW]]# the statement goes to psql on standard input, never as an argument; the
+      # errors of psql are not shown, as they can quote the statement
+      if [ -n "$pw" ]; then
+        esc=$(printf '%s' "$pw" | sed "s/'/''/g")
+        {{ printf '%s' 'ALTER ROLE {POSTGRES_USER,HUB_SUPERUSER:ident} PASSWORD '; printf "'%s';\n" "$esc"; }} | psql_su >/dev/null 2>&1 || {{ echo "failed: could not set the password of the role" >&2; exit 1; }}
+        echo "set the password of the role"
+      else
+        echo "no password is set: the password was not found (POSTGRES_PASSWORD is empty in this shell, or the file is empty)"
+      fi
+      [[end]]echo "done"
     reason: postgres starts a process per connection and nanos runs one process; the hub builds run it with threads
     restart_note: >-
       A restart of the same disk was seen failing: after an unclean stop (the

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/AngeloRubens/dock2nano/internal/hub"
+	"github.com/AngeloRubens/dock2nano/internal/observe"
 	"github.com/AngeloRubens/dock2nano/internal/output"
 	"github.com/AngeloRubens/dock2nano/internal/plan"
 )
@@ -35,7 +37,7 @@ func TestPostgresServiceGetsAPostUpScriptThatTheWriterPutsNextToCompose(t *testi
 		t.Errorf("file name %q", svc.PostUpFile)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "sets no password", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
+	for _, want := range []string{"post-up-my-db.sh is written next to compose.yaml", "ops compose up does NOT run it", "run it yourself after ops compose up", "from the variable POSTGRES_PASSWORD of the shell that runs it", `-c 'CREATE DATABASE "example" OWNER "app"'`, "run by hand", "then, once my_db is up:", "post-up-my-db.sh    (ops compose does not run it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say %q:\n%s", want, out)
 		}
@@ -115,5 +117,59 @@ func TestPostgresServiceWithAnEnvironmentThatIsNotCertainGetsNoScript(t *testing
 	}
 	if out := h.stdout.String(); !strings.Contains(out, "No script is written for it: the environment of the service could not be read completely") {
 		t.Errorf("%s", out)
+	}
+}
+
+// The shape of the spring-postgres example: POSTGRES_DB and a password that
+// comes from a file secret of the compose file.
+const springPG = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_DB: example\n      POSTGRES_PASSWORD_FILE: /run/secrets/db-password\n    secrets:\n      - db-password\nsecrets:\n  db-password:\n    file: db/password.txt\n"
+
+func TestPostUpScriptReadsThePasswordFromTheFileOfTheSecretOnTheHost(t *testing.T) {
+	h := pgWhole(t, springPG, func(h *hubHarness) { h.write("db/password.txt", "x\n") })
+	svc := h.plan.Services[0]
+	want := filepath.Join(h.dir, "db", "password.txt")
+	for _, w := range []string{"pwfile='" + want + "'", `ensure 'database'`, `'ALTER ROLE "postgres" PASSWORD '`} {
+		if !strings.Contains(svc.PostUp, w) {
+			t.Errorf("the script lacks %q:\n%s", w, svc.PostUp)
+		}
+	}
+	if strings.Contains(svc.PostUp, "/run/secrets") {
+		t.Errorf("the path in the container is in the script:\n%s", svc.PostUp)
+	}
+	out := h.stdout.String()
+	for _, w := range []string{"from the file " + want, "read when the script runs", "after ops compose up", "may exit", "timing was not measured"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("the report lacks %q:\n%s", w, out)
+		}
+	}
+}
+
+func TestPostUpScriptNeverHoldsThePasswordOfTheFileOfTheSecret(t *testing.T) {
+	h := pgWhole(t, springPG, func(h *hubHarness) { h.write("db/password.txt", "needle-value-9\n") })
+	if strings.Contains(h.plan.Services[0].PostUp, "needle-value-9") || strings.Contains(h.stdout.String(), "needle-value-9") || strings.Contains(h.stderr.String(), "needle-value-9") {
+		t.Errorf("the password is in the script or the report")
+	}
+}
+
+func TestPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
+	h := newHubHarness(t, "postgres:16", func(sysroot string) *observe.Result {
+		return &observe.Result{Sysroot: sysroot, Program: "/usr/lib/postgresql/16/bin/postgres", Argv: []string{"postgres"}, UID: -1, GID: -1}
+	})
+	h.write("compose.yaml", springPG)
+	rows, err := hub.DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.HubRequired = rows
+	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
+	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
+	h.run("convert", "--no-hub")
+	if h.plan == nil {
+		return
+	}
+	for _, s := range h.plan.Services {
+		if s.PostUp != "" {
+			t.Errorf("a script was made with --no-hub:\n%s", s.PostUp)
+		}
 	}
 }
