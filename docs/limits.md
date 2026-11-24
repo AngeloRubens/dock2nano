@@ -139,7 +139,7 @@ Cause: ops often reports "ip timeout" although the guest has an address. Two cau
 
 Kind: gap in ops.
 
-Also: ops compose up panics inside ops when the dns instance is late. The tool does not retry: it prints one ops compose up command (see the next steps it prints), so run it again if it fails. The CI workflows of the project run it up to three times (docs/top30.md on the branch check/top30 records 3 tries per row that reached ops compose up).
+Also: ops compose up panics inside ops when the dns instance is late. The tool does not retry: it prints one ops compose up command (see the next steps it prints), so run it again if it fails. The CI workflows of the project run it up to three tries (docs/top30.md on the branch check/top30 records the tries per row that reached ops compose up).
 
 ## Hub packages
 
