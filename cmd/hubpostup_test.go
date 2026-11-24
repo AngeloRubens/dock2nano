@@ -164,14 +164,16 @@ func TestPostUpScriptIsNotWrittenWithNoHub(t *testing.T) {
 	h.stub.pkgs = []hub.Package{hubPkg("francescolavra", "postgres", "16.2")}
 	h.stub.wholeFiles = map[string]string{"postgres": "ELF"}
 	h.run("convert", "--no-hub")
-	if h.plan == nil || len(h.plan.Services) != 1 {
-		t.Fatalf("no plan was made:\n%s\n%s", h.stdout.String(), h.stderr.String())
-	}
-	if s := h.plan.Services[0]; s.PostUp != "" {
-		t.Errorf("a script was made with --no-hub:\n%s", s.PostUp)
+	// the service is not converted: no plan with a script, no line of the next steps
+	if h.plan != nil {
+		for _, s := range h.plan.Services {
+			if s.PostUp != "" {
+				t.Errorf("a script was made with --no-hub:\n%s", s.PostUp)
+			}
+		}
 	}
 	out := h.stdout.String()
-	if !strings.Contains(out, "--no-hub") || strings.Contains(out, "then, once") || strings.Contains(out, "post-up-db.sh") {
+	if !strings.Contains(out, "--no-hub turns the hub off") || strings.Contains(out, "then, once") || strings.Contains(out, "post-up-db.sh") {
 		t.Errorf("the output does not show the hub off, or announces a script:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(h.dir, "post-up-db.sh")); err == nil {
