@@ -83,6 +83,26 @@ func TestCwdAtExec(t *testing.T) {
 7     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
 1     <... clone resumed>) = 7
 `, `execve("/bin/a"`, "/", "/data"},
+		{"two clones open at once: the child is copied from its real parent", `1     chdir("/a") = 0
+2     chdir("/b") = 0
+1     clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+2     clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+3     openat(AT_FDCWD, "x", O_RDONLY) = 3
+1     <... clone resumed>) = 3
+3     execve("/bin/p", ["p"], 0x1 /* 1 var */) = 0
+`, `execve("/bin/p"`, "/", "/a"},
+		{"a clone that failed is not an open clone", `1     chdir("/a") = 0
+1     clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+1     <... clone resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+2     chdir("/b") = 0
+3     execve("/bin/p", ["p"], 0x1 /* 1 var */) = 0
+`, `execve("/bin/p"`, "/", "/b"},
+		{"a pid that is used again starts from its new parent", `7     chdir("/old") = 0
+7     +++ exited with 0 +++
+1     chdir("/p") = 0
+1     clone(child_stack=NULL, flags=SIGCHLD) = 7
+7     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0
+`, `execve("/bin/a"`, "/", "/p"},
 		{"a thread made without CLONE_FS has its own copy of the directory", `1     clone(child_stack=0x1, flags=CLONE_VM|CLONE_SIGHAND|CLONE_THREAD|SIGCHLD) = 5
 5     chdir("/threaddir") = 0
 1     execve("/bin/a", ["a"], 0x1 /* 1 var */) = 0

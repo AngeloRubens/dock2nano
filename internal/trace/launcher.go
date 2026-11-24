@@ -291,14 +291,22 @@ func Supervisor(program string, argv []string) string {
 	}
 	// the script an interpreter runs: the first argument that is not an option or the value of one
 	// (python3 -u -W ignore /usr/bin/supervisord)
-	skipValue := false
 scriptArg:
-	for _, a := range argv[min(1, len(argv)):] {
+	for i := 1; i < len(argv); i++ {
+		a := argv[i]
 		switch {
-		case skipValue:
-			skipValue = false
-		case a == "-W" || a == "-X" || a == "-Q" || a == "-c" || a == "-m":
-			skipValue = true
+		case a == "-c":
+			// python -c code: no script follows
+			break scriptArg
+		case a == "-m":
+			// python -m supervisor.supervisord: the module is the program
+			if i+1 < len(argv) {
+				mod := argv[i+1]
+				names = append(names, mod[strings.LastIndex(mod, ".")+1:])
+			}
+			break scriptArg
+		case a == "-W" || a == "-X" || a == "-Q":
+			i++
 		case strings.HasPrefix(a, "-"):
 		default:
 			if strings.HasPrefix(a, "/") {
