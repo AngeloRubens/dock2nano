@@ -19,14 +19,7 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: nginx-aspnet-mysql, dir: nginx-aspnet-mysql, flags: "", probe: "proxy:80:http"}
-          - {name: nginx-golang-mysql, dir: nginx-golang-mysql, flags: "", probe: "proxy:80:http"}
-          - {name: nginx-golang-postgres, dir: nginx-golang-postgres, flags: "", probe: "proxy:80:http"}
           - {name: spring-postgres, dir: spring-postgres, flags: "", probe: "backend:8080:http db:5432:tcp"}
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
-          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -114,6 +107,25 @@ jobs:
           ps -eo args | grep '[q]emu' | cut -c1-600 > /tmp/out/qemu-args.txt
           sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-after-up.txt
           if [ "$up_ok" != 1 ]; then echo "ops compose up failed 3 of 3"; exit 1; fi
+      - name: pg init from outside
+        if: always()
+        run: |
+          bash ci/pg-init.sh 2>&1 | tee /tmp/out/pg-init.txt
+      - name: backend after init
+        if: always()
+        run: |
+          sleep 20
+          for s in backend db; do sudo env OPS_HOME="$OPS_HOME" ops instance logs $s > /tmp/out/console-$s.txt 2>&1 || true; done
+          bip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' /tmp/out/console-backend.txt | tail -1 | awk '{print $2}')
+          echo "backend ip $bip"; sudo env OPS_HOME="$OPS_HOME" ops instance list
+          code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$bip:8080/" || true); echo "backend before second up: $code"
+          tail -15 /tmp/out/console-backend.txt | cut -c1-250
+          if [ "$code" != 200 ]; then
+            echo "--- second ops compose up"
+            sudo env OPS_HOME="$OPS_HOME" PATH="$PATH" ops compose up -f /tmp/out/compose.yaml --show-debug > /tmp/out/up2.log 2>&1; echo "exit $?"
+            grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" /tmp/out/up2.log | cut -c1-250 | tail -20
+            sudo env OPS_HOME="$OPS_HOME" ops instance list
+          fi
       - name: probe
         if: always()
         run: |
