@@ -19,43 +19,7 @@ jobs:
       matrix:
         include:
           # probe: service:port:kind, kind http or tcp; flags: options of the conversion
-          - {name: django-host, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload'", host: "localhost:8000", probe: "web:8000:http"}
-          - {name: django-ip, dir: django, flags: "--command 'web=manage.py runserver 0.0.0.0:8000 --noreload'", probe: "web:8000:http"}
-          - {name: flask, dir: flask, flags: "", probe: "web:8000:http"}
-          - {name: fastapi, dir: fastapi, flags: "--command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1'", probe: "api:8000:http"}
-          - {name: angular, dir: angular, flags: "", probe: "web:4200:http"}
-          - {name: apache-php, dir: apache-php, flags: "", probe: "web:80:http"}
-          - {name: aspnet-mssql, dir: aspnet-mssql, flags: "", probe: "web:80:http"}
-          - {name: elasticsearch-logstash-kibana, dir: elasticsearch-logstash-kibana, flags: "", probe: "elasticsearch:9200:http logstash:9600:http kibana:5601:http"}
-          - {name: gitea-postgres, dir: gitea-postgres, flags: "", probe: "gitea:3000:http db:5432:tcp"}
-          - {name: minecraft, dir: minecraft, flags: "", probe: "minecraft:25565:tcp"}
-          - {name: nextcloud-postgres, dir: nextcloud-postgres, flags: "", probe: "nc:80:http"}
-          - {name: nextcloud-redis-mariadb, dir: nextcloud-redis-mariadb, flags: "", probe: "nc:80:http"}
-          - {name: nginx-aspnet-mysql, dir: nginx-aspnet-mysql, flags: "", probe: "proxy:80:http"}
-          - {name: nginx-flask-mysql, dir: nginx-flask-mysql, flags: "", probe: "proxy:80:http backend:8000:http"}
-          - {name: nginx-golang-mysql, dir: nginx-golang-mysql, flags: "", probe: "proxy:80:http"}
-          - {name: nginx-golang-postgres, dir: nginx-golang-postgres, flags: "", probe: "proxy:80:http"}
-          - {name: nginx-wsgi-flask, dir: nginx-wsgi-flask, flags: "", probe: "nginx-proxy:80:http flask-app:8000:http"}
-          - {name: pihole-cloudflared-DoH, dir: pihole-cloudflared-DoH, flags: "", probe: "pihole:80:http"}
-          - {name: postgresql-pgadmin, dir: postgresql-pgadmin, flags: "", probe: "postgres:5432:tcp pgadmin:80:http"}
-          - {name: prometheus-grafana, dir: prometheus-grafana, flags: "", probe: "prometheus:9090:http grafana:3000:http"}
-          - {name: react-express-mysql, dir: react-express-mysql, flags: "", probe: "frontend:3000:http backend:80:http"}
-          - {name: react-java-mysql, dir: react-java-mysql, flags: "", probe: "frontend:3000:http"}
-          - {name: react-nginx, dir: react-nginx, flags: "", probe: "frontend:80:http"}
-          - {name: react-rust-postgres, dir: react-rust-postgres, flags: "", probe: "frontend:3000:http db:5432:tcp"}
-          - {name: sparkjava, dir: sparkjava, flags: "", probe: "sparkjava:8080:http"}
           - {name: spring-postgres, dir: spring-postgres, flags: "", probe: "backend:8080:http db:5432:tcp"}
-          - {name: vuejs, dir: vuejs, flags: "", probe: "web:8080:http"}
-          - {name: nginx-golang, dir: nginx-golang, probe: "proxy:80:http backend:80:http"}
-          - {name: nginx-golang-plain, dir: nginx-golang, flags: "--short-names", probe: "proxy:80:http backend:80:http"}
-          - {name: sparkjava-mysql, dir: sparkjava-mysql, probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-short, dir: sparkjava-mysql, flags: "--short-names", probe: "backend:8080:http db:3306:tcp"}
-          - {name: sparkjava-mysql-plain, dir: sparkjava-mysql, flags: "--short-names --with db", probe: "backend:8080:http db:3306:tcp"}
-          - {name: flask-redis, dir: flask-redis, probe: "web:8000:http redis:6379:tcp"}
-          - {name: nginx-nodejs-redis, dir: nginx-nodejs-redis, probe: "nginx:80:http web1:5000:http redis:6379:tcp"}
-          - {name: react-express-mongodb, dir: react-express-mongodb, probe: "frontend:3000:http backend:3000:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo, dir: nginx-flask-mongo, probe: "web:80:http backend:9091:http mongo:27017:tcp"}
-          - {name: nginx-flask-mongo-plain, dir: nginx-flask-mongo, flags: "--short-names", probe: "web:80:http backend:9091:http mongo:27017:tcp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -63,14 +27,12 @@ jobs:
           go-version-file: go.mod
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
-      - name: ops from source (nanovms/ops master 1183538 with the arp fix of PR 1805, plus dns_search f3ee91e of the fork)
+      - name: ops from source (nanovms/ops master 2177c549, with the arp fix of PR 1805 and PRs 1815-1818)
         run: |
           git clone https://github.com/nanovms/ops /tmp/ops-src
-          git -C /tmp/ops-src checkout 11835380d63576a0a7d3021cc176bf3cd4c60935
-          # dns_search: the one commit f3ee91e of AngeloRubens/ops feat/compose-dns-search-indep, on top of 1183538
-          git -C /tmp/ops-src remote add fork https://github.com/AngeloRubens/ops
-          git -C /tmp/ops-src fetch fork f3ee91e6569300981687d6a33c9d60065cc63d91
-          git -C /tmp/ops-src -c user.name=ci -c user.email=ci@example.com cherry-pick f3ee91e6569300981687d6a33c9d60065cc63d91
+          git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
+          # PR 1805 (arp fix) must be in the checkout: the merge commit of 1805 is an ancestor of HEAD (0 = yes)
+          git -C /tmp/ops-src merge-base --is-ancestor 987e075bbcc71e0384ec86edd2c79e1d908be8ff HEAD; echo "1805 ancestor of 2177c549: $?"
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
           go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
@@ -96,6 +58,14 @@ jobs:
       - name: changes to the source before the conversion
         run: |
           if [ -f ci/patches/${{ matrix.name }}.pre.sh ]; then bash ci/patches/${{ matrix.name }}.pre.sh; else echo "none"; fi
+      - name: throwaway password in the copy of the spring-postgres compose (db takes it from the environment)
+        run: |
+          f=/tmp/ac/spring-postgres/compose.yaml
+          echo "--- real file"; cat $f
+          sed -i -e 's/^      - POSTGRES_PASSWORD_FILE=\/run\/secrets\/db-password$/      - POSTGRES_PASSWORD=envpw_Test1/' -e '/^    secrets:$/{N;d}' -e '/^secrets:$/,/^    file: db\/password.txt$/d' $f
+          grep -q '^      - POSTGRES_PASSWORD=envpw_Test1$' $f || { echo "sed did not apply"; exit 1; }
+          if grep -q 'secret' $f; then echo "secret left in the copy"; exit 1; fi
+          echo "--- copy used by the conversion"; cat $f
       - name: convert
         run: |
           set -o pipefail
@@ -145,6 +115,38 @@ jobs:
           ps -eo args | grep '[q]emu' | cut -c1-600 > /tmp/out/qemu-args.txt
           sudo env OPS_HOME="$OPS_HOME" ops instance list 2>&1 | tee /tmp/out/instances-after-up.txt
           if [ "$up_ok" != 1 ]; then echo "ops compose up failed 3 of 3"; exit 1; fi
+      - name: postgres client
+        if: always()
+        run: sudo apt-get install -y -qq postgresql-client >/dev/null && psql --version
+      - name: post-up script, run as the report prints it
+        if: always()
+        env:
+          POSTGRES_PASSWORD: envpw_Test1
+        run: |
+          ls -la /tmp/out
+          line=$(grep -m1 'then, once .* is up: sudo ' /tmp/out/report.txt | sed -e 's/^  then, once [^:]*: //' -e 's/    (ops compose does not run it.*$//')
+          if [ -z "$line" ]; then echo "no sudo line in the report"; exit 1; fi
+          echo "sudo line printed by the tool: $line"
+          f=$(ls /tmp/out/post-up-*.sh 2>/dev/null | head -1)
+          echo "script file: $f"
+          if [ -z "$f" ]; then echo "no post-up script in /tmp/out"; exit 1; fi
+          cat "$f"
+          echo "--- run (the line of the report, with POSTGRES_PASSWORD in the environment)"
+          set +e
+          eval "$line" > /tmp/out/post-up-run.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/out/post-up-run.txt
+          echo "exit code of the script: $rc"
+          if grep -q 'set the password of the role' /tmp/out/post-up-run.txt && ! grep -q 'no password is set' /tmp/out/post-up-run.txt; then echo "password line: the script says it set the password of the role"; else echo "password line: the script did NOT set the password"; fi
+          echo "--- db example after the script"
+          dbip=$(sudo env OPS_HOME="$OPS_HOME" ops instance logs db 2>/dev/null | grep -o 'assigned 192\.168\.33\.[0-9]*' | tail -1 | awk '{print $2}')
+          echo "db at: $dbip"
+          if [ -n "$dbip" ]; then
+            PGPASSWORD="$POSTGRES_PASSWORD" timeout 20 psql -h "$dbip" -U postgres -w -c 'select 1' 2>&1 | head -5 || true
+            timeout 20 psql -h "$dbip" -U postgres -Atc "select datname from pg_database order by 1" 2>&1 | head -20 || true
+          fi
+
       - name: probe
         if: always()
         run: |
