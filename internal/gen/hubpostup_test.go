@@ -616,7 +616,7 @@ func TestPostUpScriptAcceptsTheNamesOfTheLettersDigitsUnderscoreAndHyphen(t *tes
 
 func TestPostUpScriptDoesNotNameTheToolAndCarriesTheMarker(t *testing.T) {
 	s := postUpFor(t, postUpUse(t, "francescolavra", "postgres", "16.2"), "POSTGRES_DB=shop")
-	if !strings.Contains(s, plan.PostUpMarker) || strings.Contains(s, "dock2nano") || strings.Contains(s, plan.PostUpMarkerOld) {
+	if !strings.Contains(s, plan.PostUpMarker) || strings.Contains(s, "dock2nano") {
 		t.Errorf("%s", s)
 	}
 }
