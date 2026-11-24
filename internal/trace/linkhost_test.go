@@ -62,9 +62,7 @@ func TestLinkHostFileDoesNotLeadOutOfTheSysroot(t *testing.T) {
 	root := filepath.Join(parent, "sysroot")
 	write(t, filepath.Join(root, "pkg/d/a"), "a")
 	write(t, filepath.Join(parent, "outside/keep"), "keep")
-	if err := LinkHostFile(root, "../../outside", "/pkg/d"); err != nil {
-		t.Fatal(err)
-	}
+	wantSkipped(t, LinkHostFile(root, "../../outside", "/pkg/d"), "leads outside the package")
 	if info, err := os.Lstat(filepath.Join(root, "pkg/d")); err != nil || !info.IsDir() {
 		t.Errorf("the directory is replaced: %v, %v", info, err)
 	}
@@ -92,9 +90,7 @@ func TestLinkHostFileDoesNotFollowAnExistingLinkOutOfTheSysroot(t *testing.T) {
 	if err := os.Symlink("../../host", filepath.Join(root, "a/b")); err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkHostFile(root, "../y", "/a/b/x"); err != nil {
-		t.Fatal(err)
-	}
+	wantSkipped(t, LinkHostFile(root, "../y", "/a/b/x"), "outside the package")
 	if info, err := os.Lstat(filepath.Join(host, "x")); err != nil || !info.IsDir() {
 		t.Errorf("the folder of this machine was replaced: %v, %v", info, err)
 	}
