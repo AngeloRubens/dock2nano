@@ -1,11 +1,9 @@
 name: top30
-# Rows of the matrix in docs/top30.md (each one a root Dockerfile and a port it listens on), converted
-# unmodified: docker builds the image, dock2nano converts the Dockerfile (--dockerfile) to a nanos package
-# and a compose.yaml, ops compose up starts it, and the strict probe asks the port (2xx or 3xx, or an open
-# TCP port is green). Every row prints "ROW" lines: that is the measured record. Runs on a push to a
-# check/** branch and by hand. This matrix is the 23 rows of the follow-up run (docs/top30.md, section
-# Follow-up): the 12 whose docker build failed (convert is run on them as it is), the 7 with ip timeout,
-# and the 4 with no answer. The other 7 rows of run 45432518617 answered and are not rerun.
+# Rows of the JVM and .NET extension of docs/top30.md (section Java and .NET): a repository at a pinned sha,
+# a Dockerfile path inside it and a build context, converted unmodified: docker builds the image, dock2nano
+# converts the Dockerfile (--dockerfile, --context, --name) to a nanos package and a compose.yaml, ops compose
+# up starts it, and the strict probe asks the port (2xx or 3xx, or an open TCP port is green). Every row prints
+# "ROW" lines: that is the measured record. Runs on a push to a check/** branch and by hand.
 on:
   push:
     branches: ['check/**']
@@ -22,29 +20,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: echo-server, repo: jmalloc/echo-server, sha: 332dd6e8153b4315a3581a990f0b849f914a9a93, port: "8080", probe: http}
-          - {name: datasette, repo: simonw/datasette, sha: 775e8ba28525c6f7ca9552f126f1f88261978c2a, port: "8001", probe: http}
-          - {name: kanboard, repo: kanboard/kanboard, sha: 58a2605058219b1d20b32f98d78872a5b1d9ff12, port: "80", probe: http}
-          - {name: ttyd, repo: tsl0922/ttyd, sha: 2922cb89f518bae4d0fcf4d757a7419638fc71fc, port: "7681", probe: http}
-          - {name: gitea, repo: go-gitea/gitea, sha: b1a6cdadc83ebf4a33a69af8d457cc7f623f2d22, port: "3000", probe: http}
-          - {name: gogs, repo: gogs/gogs, sha: c2380640f6f0829354bb85a7cca4402e1adfa0d4, port: "3000", probe: http}
-          - {name: filebrowser, repo: filebrowser/filebrowser, sha: 833d908884d5c801f30f5c098d7977177eb3a36b, port: "80", probe: http}
-          - {name: dashy, repo: lissy93/dashy, sha: ea81d6cbdcb56b81fc20e2b466f6af6a8ad42293, port: "8080", probe: http}
-          - {name: verdaccio, repo: verdaccio/verdaccio, sha: 13e5bc79fefc2b41118216cd2fdc095209f0a330, port: "4873", probe: http}
-          - {name: shlink, repo: shlinkio/shlink, sha: 80599b89ff9b4ae0f9d19e849e6b747a94dde99c, port: "8080", probe: http}
-          - {name: directus, repo: directus/directus, sha: 4856582eec1ea426f115b79a875c44c819fe0b9d, port: "8055", probe: http}
-          - {name: ntfy, repo: binwiederhier/ntfy, sha: 889b6f071acd6a6ab5dcc7cc802a8a9b457cf2c0, port: "80", probe: http}
-          - {name: coredns, repo: coredns/coredns, sha: a0606842e8fa7136e8157494d92d4beb098221e1, port: "53", probe: tcp}
-          - {name: prometheus, repo: prometheus/prometheus, sha: ad8f26eed18a6aabfd9729bb281c6a3e53beabe9, port: "9090", probe: http}
-          - {name: etcd, repo: etcd-io/etcd, sha: 1f940dc7ecd194bfc4d1de602c5f0f3aef87586f, port: "2379", probe: tcp}
-          - {name: syncthing, repo: syncthing/syncthing, sha: 992ae894a44d8831bc92e002f68b4f20e5735117, port: "8384", probe: http}
-          - {name: wallos, repo: ellite/Wallos, sha: 6e43a0d819973f82d55b20e48367fe7605737651, port: "80", probe: http}
-          - {name: tile38, repo: tidwall/tile38, sha: 34f86375d07fa89d90a4afb5132a8e35af1583e4, port: "9851", probe: tcp}
-          - {name: redlib, repo: redlib-org/redlib, sha: ba116c1186f6b0f9d45f0ae50c827e13eb2f5ea2, port: "8080", probe: http}
-          - {name: homarr, repo: ajnart/homarr, sha: c5873c6e481144cd18a70139ef23ac04ca8ab158, port: "7575", probe: http}
-          - {name: glance, repo: glanceapp/glance, sha: 53aec7f392ca72143870dcb45526ec7c80a68f32, port: "8080", probe: http}
-          - {name: linkwarden, repo: linkwarden/linkwarden, sha: 24adcc146ba356632859a1e8adb4bffae2874d11, port: "3000", probe: http}
-          - {name: reactive-resume, repo: reactive-resume/reactive-resume, sha: 897bcf8e740a4ee918ac27d0dc17e1edd105446a, port: "3000", probe: tcp}
+          - {name: openliberty, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http}
+          - {name: tomcat, repo: docker-library/tomcat, sha: 66f36aac84471fdf6bcbb42628b895c8d7e82704, dockerfile: 11.0/jdk21/temurin-noble/Dockerfile, context: "11.0/jdk21/temurin-noble", port: "8080", probe: http}
+          - {name: spring-guide, repo: spring-guides/gs-spring-boot-docker, sha: f6e96e447d8e1e36086ffb8cb3564c19e26674a4, dockerfile: complete/Dockerfile, context: "complete", port: "8080", probe: http}
+          - {name: halo, repo: halo-dev/halo, sha: d29609ae2846c3c9c98990f4902e65bea6c63f75, dockerfile: Dockerfile, context: ".", port: "8090", probe: http}
+          - {name: quarkus-gs, repo: quarkusio/quarkus-quickstarts, sha: b3e90af5f60b94a1acb14736be97e34127f079ec, dockerfile: getting-started/src/main/docker/Dockerfile.jvm, context: "getting-started", port: "8080", probe: http}
+          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http}
+          - {name: keycloak, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http}
+          - {name: jenkins, repo: jenkinsci/docker, sha: 155bf2878d9880c32fe9534269811d306186ec09, dockerfile: debian/Dockerfile, context: "debian", port: "8080", probe: http}
+          - {name: sonarqube, repo: SonarSource/docker-sonarqube, sha: d6830792f2f6837132c4e67a7dc249c9aba6dabe, dockerfile: community-build/Dockerfile, context: "community-build", port: "9000", probe: http}
+          - {name: aspnetapp, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http}
+          - {name: orchardcore, repo: OrchardCMS/OrchardCore, sha: d4071e015b9df9a53e1a0355eea825bccff07a45, dockerfile: Dockerfile, context: ".", port: "80", probe: http}
+          - {name: btcpay, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -53,7 +40,7 @@ jobs:
       - name: docker version
         run: docker version
       - name: the tool
-        run: go build -o "$RUNNER_TEMP/d2n" .
+        run: for i in 1 2 3; do go build -o "$RUNNER_TEMP/d2n" . && break; sleep 20; done; test -x "$RUNNER_TEMP/d2n"
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source (nanovms/ops master 2177c549, with the arp fix of PR 1805 and PRs 1815-1818)
@@ -62,7 +49,7 @@ jobs:
           git -C /tmp/ops-src checkout 2177c549df3fab2662d6386042c74bec859275bd
           git -C /tmp/ops-src merge-base --is-ancestor 987e075bbcc71e0384ec86edd2c79e1d908be8ff HEAD; echo "1805 ancestor of 2177c549: $?"
           cd /tmp/ops-src && git rev-parse HEAD^ HEAD && git log --oneline | head -1
-          go build -o /tmp/ops . && sudo install /tmp/ops /usr/local/bin/ops
+          for i in 1 2 3; do go build -o /tmp/ops . && break; echo "go build of ops failed, try $i"; sleep 20; done; test -x /tmp/ops && sudo install /tmp/ops /usr/local/bin/ops
       - name: nanos kernel (nightly, it reads uid and gid from the manifest)
         run: |
           ops update 2>&1 | tail -3
@@ -80,6 +67,8 @@ jobs:
           NAME: ${{ matrix.name }}
           REPO: ${{ matrix.repo }}
           SHA: ${{ matrix.sha }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CTX: ${{ matrix.context }}
           PORT: ${{ matrix.port }}
           KIND: ${{ matrix.probe }}
         run: |
@@ -91,24 +80,25 @@ jobs:
             echo "ROW result name=$NAME source=$srcok docker_build=$bld converted=$conv started=$started probe=$probe ops=$(git -C /tmp/ops-src rev-parse --short HEAD 2>/dev/null) dock2nano=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)"
           }
           trap finish EXIT
-          echo "ROW name=$NAME repo=$REPO sha=$SHA port=$PORT probe=$KIND"
+          echo "ROW name=$NAME repo=$REPO sha=$SHA dockerfile=$DOCKERFILE context=$CTX port=$PORT probe=$KIND"
           echo "ROW dock2nano commit: $(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           echo "ROW ops commit: $(git -C /tmp/ops-src rev-parse HEAD)"
 
           # 1. the source at the pinned commit, unmodified. The directory is named after the row, so the
           # default name of the conversion (the name of the context directory) is the row name.
-          rm -rf "/tmp/w/$NAME" && mkdir -p "/tmp/w/$NAME" && cd "/tmp/w/$NAME"
+          W=/tmp/w/$NAME
+          rm -rf "$W" && mkdir -p "$W" && cd "$W"
           git init -q && git remote add origin "https://github.com/$REPO.git"
           if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
             srcok=yes; echo "ROW source=ok $(git log --oneline -1 | cut -c1-100)"
           else
             echo "ROW source=fail: git fetch or checkout of $SHA"; exit 1
           fi
-          [ -f Dockerfile ] || { echo "ROW no Dockerfile at the root"; exit 1; }
+          [ -f "$DOCKERFILE" ] || { echo "ROW no Dockerfile at $DOCKERFILE"; exit 1; }
 
           # 2. build with docker (timed here; the conversion builds the image again)
           s=$(date +%s)
-          if docker build -t "top30-$NAME" "/tmp/w/$NAME" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
+          if docker build -t "top30-$NAME" -f "$W/$DOCKERFILE" "$W/$CTX" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
           echo "ROW docker_build=$bld seconds=$(( $(date +%s) - s ))"
           if [ "$bld" = fail ]; then
             echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
@@ -116,7 +106,7 @@ jobs:
             cd "$GITHUB_WORKSPACE"
             # the job shell is bash -e: a failing convert must not end the step before its ROW lines
             xexit=0
-            "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1 || xexit=$?
+            "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose-after-build-fail" --ops-home "$OPS_HOME" --pull > "$R/report-after-build-fail.txt" 2>&1 || xexit=$?
             echo "ROW convert after the failed docker build: convert_exit=$xexit; output of the tool, first 12 lines:"
             head -12 "$R/report-after-build-fail.txt" | cut -c1-300
             echo "ROW convert after the failed docker build: convert_exit=$xexit, output lines=$(wc -l < "$R/report-after-build-fail.txt")"
@@ -126,7 +116,7 @@ jobs:
 
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
-          "$RUNNER_TEMP/d2n" convert --dockerfile "/tmp/w/$NAME/Dockerfile" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
+          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
           cexit=$?
           cat "$R/report.txt" | cut -c1-300
           echo "ROW convert_exit=$cexit"
