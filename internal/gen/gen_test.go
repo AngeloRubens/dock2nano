@@ -2648,7 +2648,7 @@ func TestNetworkNoteWithShortNamesSaysPackageName(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "", plan.Note, "service names", "by its package name")
 	want1(t, p, "", plan.Note, "service names", "my-app (or my-app.service)")
-	want1(t, p, "", plan.Note, "service names", "an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47) does this by default")
+	want1(t, p, "", plan.Note, "service names", "only an ops that includes nanovms/ops#1815 (ops master since 2177c54; not in any release up to 0.1.47) reads it, and it already puts service in the search line of resolv.conf by default")
 }
 
 func TestEnvNoteListsVariablesNamingAnyOtherService(t *testing.T) {
