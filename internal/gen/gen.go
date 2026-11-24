@@ -908,17 +908,10 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 		observed = append([]string{all[0]}, observed[2:]...)
 	}
 	entrypointStays := false
+	_ = entrypointStays
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
-	case adv.Requires != "" && !slices.ContainsFunc(all, func(w string) bool {
-		// a word of its own: not a piece of a shell script
-		return path.Base(w) == adv.Requires && !strings.ContainsAny(w, " \t\n;&|$")
-	}):
-		return adv.Reason + "; no command is suggested, because the service does not start the program through " + adv.Requires + ", which the command was written for"
-	case ep != nil && len(*ep) == 1 && adv.Server == "apache" && path.Base((*ep)[0]) == "docker-php-entrypoint":
-		// the entrypoint stays and runs the command: measured with this one
-		entrypointStays = true
 	case ep != nil && len(*ep) > 0:
 		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
 			return adv.Reason + "; no command string is given, because the service has an entrypoint that the observed command does not start with: --command replaces the command and keeps the entrypoint, so a command written after the entrypoint may still work if the entrypoint execs its arguments, but that was not checked"
