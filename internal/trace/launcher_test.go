@@ -419,6 +419,22 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 `, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
 			ChildLaunchers: []string{`npm (script "start")`}}},
+		{"a launcher started from a thread of the program is named", `1     execve("/entrypoint.sh", ["/entrypoint.sh"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+5     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "1", Path: "/entrypoint.sh", Argv: []string{"/entrypoint.sh"}, Line: 0,
+			ChildLaunchers: []string{`npm (script "start")`}}},
+		{"a helper that a thread of the launcher started is not run", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
+1     clone(child_stack=0x1000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS) = 5
+5     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 6
+6     execve("/usr/bin/git", ["git", "status"], 0x7ffd1 /* 5 vars */) = 0
+6     +++ exited with 0 +++
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/local/bin/node", ["node", "server.js"], 0x7ffd1 /* 5 vars */) = 0
+`, Exec{Pid: "9", Path: "/usr/local/bin/node", Argv: []string{"node", "server.js"}, Line: 6,
+			NotRun:     []string{"git"},
+			PassedOver: []Exec{{Pid: "1", Path: "/usr/local/bin/node", Argv: []string{"node", "/usr/local/bin/npm", "start"}, Line: 0}}}},
 		{"a shell that executes the program in its own process", `1     execve("/usr/local/bin/node", ["node", "/usr/local/bin/npm", "start"], 0x7ffd1 /* 5 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/bin/sh", ["sh", "-c", "node migrate.js && node server.js"], 0x7ffd1 /* 5 vars */) = 0
