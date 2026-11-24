@@ -30,7 +30,7 @@ func buildHint(text string) string {
 		m = missingSourceOld.FindStringSubmatch(text)
 	}
 	if m != nil {
-		if copyFrom.MatchString(text) {
+		if false && copyFrom.MatchString(text) {
 			return fmt.Sprintf("hint: the Dockerfile copies %q with COPY --from: the stage or image named in --from has no %s: "+
 				"check the path the earlier stage writes.", m[1], m[1])
 		}
