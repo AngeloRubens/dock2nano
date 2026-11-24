@@ -134,11 +134,7 @@ func SingleProcess(program string, argv []string) (SingleProcessAdvice, bool) {
 // apacheEnv is the environment that apache2-foreground of the Debian images sets, from
 // /etc/apache2/envvars, before it runs apache2 -DFOREGROUND. It is a fixed list: nothing of the
 // command line or of the environment of the user is copied into it.
-var apacheEnv = []string{
-	"APACHE_RUN_USER=www-data", "APACHE_RUN_GROUP=www-data",
-	"APACHE_PID_FILE=/var/run/apache2/apache2.pid", "APACHE_RUN_DIR=/var/run/apache2",
-	"APACHE_LOCK_DIR=/var/lock/apache2", "APACHE_LOG_DIR=/var/log/apache2",
-}
+var apacheEnv = []string{}
 
 // ApacheCaveat says how far the suggestion for apache2 was measured.
 const ApacheCaveat = "measured on one image only, php:7.2-apache, which answered 200 on nanos with this command; an image with an entrypoint of its own that checks the command (nextcloud) was tried once with the same command, apache started and exited again and again, and the cause is not known; the user, group and directories are the values of the Debian image, not read from yours: review them"
@@ -175,9 +171,7 @@ func apacheAdvice(argv []string) (SingleProcessAdvice, bool) {
 		return adv, true
 	}
 	adv.Requires = "apache2-foreground"
-	adv.Caveat = ApacheCaveat
-	adv.Assumed = "environment values (user, group and directories)"
-	adv.Command = append(append([]string{"env"}, apacheEnv...), "apache2", "-DONE_PROCESS", "-DFOREGROUND")
+			adv.Command = append(append([]string{"env"}, apacheEnv...), "apache2", "-DONE_PROCESS", "-DFOREGROUND")
 	return adv, true
 }
 
