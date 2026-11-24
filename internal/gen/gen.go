@@ -926,9 +926,18 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 		}
 		observed = append([]string{all[0]}, observed[2:]...)
 	}
+	entrypointStays := false
 	switch {
 	case err != nil:
 		return adv.Reason + "; no command is suggested, because the entrypoint of the service could not be read"
+	case adv.Requires != "" && !slices.ContainsFunc(all, func(w string) bool {
+		// a word of its own: not a piece of a shell script
+		return path.Base(w) == adv.Requires && !strings.ContainsAny(w, " \t\n;&|$")
+	}):
+		return adv.Reason + "; no command is suggested, because the service does not start the program through " + adv.Requires + ", which the command was written for"
+	case ep != nil && len(*ep) == 1 && adv.Server == "apache" && path.Base((*ep)[0]) == "docker-php-entrypoint":
+		// the entrypoint stays and runs the command: measured with this one
+		entrypointStays = true
 	case ep != nil && len(*ep) > 0:
 		if !slices.Equal(words[:min(len(*ep), len(words))], *ep) {
 			return adv.Reason + "; no command string is given, because the service has an entrypoint that the observed command does not start with: --command replaces the command and keeps the entrypoint, so a command written after the entrypoint may still work if the entrypoint execs its arguments, but that was not checked"
@@ -947,15 +956,26 @@ func (g *generator) singleProcessNote(s *compose.Service, obs *observe.Result) s
 	if adv.Assumed != "" {
 		msg += fmt.Sprintf(" (the %s of this command were assumed, not found in the command line)", adv.Assumed)
 	}
+	if entrypointStays {
+		msg += " (the entrypoint docker-php-entrypoint of the service stays and runs this command: --command replaces only the command)"
+	}
+	if adv.Caveat != "" {
+		msg += " (" + adv.Caveat + ")"
+	}
 	if adv.Server == "gunicorn" {
 		msg += " (settings of the configuration file (environment, working directory, application, worker class) are not carried; gunicorn also reads gunicorn.conf.py in the working directory and GUNICORN_CMD_ARGS)"
 		if slices.Contains(adv.Command, "--app-dir") {
 			msg += " (--chdir was written as --app-dir, which does not change the working directory: the service must run in that directory, for example with working_dir, for relative paths)"
 		}
 	}
-	if len(all) > 0 && !slices.Equal(all, observed) {
+	rest := all
+	if entrypointStays {
+		// the entrypoint was named above: what remains is the command
+		rest = all[len(*ep):]
+	}
+	if len(all) > 0 && !slices.Equal(rest, observed) {
 		through := "another command"
-		if w, ok := firstDifference(all, observed); ok {
+		if w, ok := firstDifference(rest, observed); ok {
 			through = fmt.Sprintf("%q", w)
 		}
 		msg += fmt.Sprintf(". The service starts this program through %s; what that does before it (and any wrapper) is left out of the suggestion", through)

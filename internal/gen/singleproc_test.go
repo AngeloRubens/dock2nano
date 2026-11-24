@@ -249,3 +249,93 @@ func TestQuoteWordsRoundTripsThroughEffectiveCommand(t *testing.T) {
 		}
 	}
 }
+
+const apacheEnvCommand = "env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND"
+
+func apacheInput(t *testing.T, argv []string, img *docker.ImageConfig) Input {
+	t.Helper()
+	in := processesInput(t, "/usr/sbin/"+argv[0], argv)
+	si := in.Services["web"]
+	si.Image = img
+	in.Services["web"] = si
+	return in
+}
+
+// the php:7.2-apache image: ENTRYPOINT docker-php-entrypoint, CMD apache2-foreground
+func TestProcessesItemSuggestsApacheWithTheEnvironment(t *testing.T) {
+	in := apacheInput(t, []string{"apache2", "-DFOREGROUND"}, &docker.ImageConfig{Entrypoint: []string{"docker-php-entrypoint"}, Cmd: []string{"apache2-foreground"}})
+	msg := processesMessage(t, in)
+	for _, want := range []string{
+		"apache2 starts several processes (fork, prefork)",
+		"--command 'web=" + apacheEnvCommand + "'",
+		"the environment values (user, group and directories) of this command were assumed",
+		"measured on one image only, php:7.2-apache",
+		"nextcloud",
+		"the cause is not known",
+		"the entrypoint docker-php-entrypoint of the service stays",
+		"review it; nothing was changed",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q: %q", want, msg)
+		}
+	}
+	// the program named as started before it is apache2-foreground, not the entrypoint that was said to stay
+	if !strings.Contains(msg, `through "apache2-foreground"; what that does`) || strings.Contains(msg, `through "docker-php-entrypoint"`) {
+		t.Errorf("message = %q", msg)
+	}
+}
+
+func TestProcessesItemApacheNeedsTheForegroundScript(t *testing.T) {
+	// the service starts apache2 itself, not through apache2-foreground: its environment is not the one assumed
+	in := apacheInput(t, []string{"apache2", "-DFOREGROUND"}, &docker.ImageConfig{Cmd: []string{"apache2", "-DFOREGROUND"}})
+	msg := processesMessage(t, in)
+	if strings.Contains(msg, "--command '") || !strings.Contains(msg, "does not start the program through apache2-foreground") {
+		t.Errorf("message = %q", msg)
+	}
+	// another entrypoint: not the one measured, the generic refusal
+	in = apacheInput(t, []string{"apache2", "-DFOREGROUND"}, &docker.ImageConfig{Entrypoint: []string{"/entrypoint.sh"}, Cmd: []string{"apache2-foreground"}})
+	msg = processesMessage(t, in)
+	if strings.Contains(msg, "--command '") || !strings.Contains(msg, "has an entrypoint") {
+		t.Errorf("entrypoint.sh: message = %q", msg)
+	}
+	// no entrypoint
+	in = apacheInput(t, []string{"apache2", "-DFOREGROUND"}, &docker.ImageConfig{Cmd: []string{"apache2-foreground"}})
+	if msg := processesMessage(t, in); !strings.Contains(msg, "--command 'web="+apacheEnvCommand+"'") || strings.Contains(msg, "stays and runs") {
+		t.Errorf("no entrypoint: message = %q", msg)
+	}
+}
+
+// the program and the number of arguments are named, the arguments never
+func TestProcessesItemApacheDoesNotEchoArguments(t *testing.T) {
+	in := apacheInput(t, []string{"apache2", "-DFOREGROUND", "-c", "SetEnv DB_PASSWORD hunter2"}, &docker.ImageConfig{Cmd: []string{"apache2-foreground"}})
+	msg := processesMessage(t, in)
+	if strings.Contains(msg, "hunter2") || strings.Contains(msg, "DB_PASSWORD") || strings.Contains(msg, "--command '") {
+		t.Errorf("message = %q", msg)
+	}
+	if !strings.Contains(msg, "apache2 was started with 3 arguments") || !strings.Contains(msg, "no command is suggested") {
+		t.Errorf("message = %q", msg)
+	}
+}
+
+func TestProcessesItemHttpdHasNoCommand(t *testing.T) {
+	in := apacheInput(t, []string{"httpd", "-DFOREGROUND"}, &docker.ImageConfig{Cmd: []string{"httpd-foreground"}})
+	msg := processesMessage(t, in)
+	if strings.Contains(msg, "--command '") || !strings.Contains(msg, "httpd starts several processes") || !strings.Contains(msg, "AH00014") || strings.Count(msg, "no command is suggested") != 1 {
+		t.Errorf("message = %q", msg)
+	}
+}
+
+// apache2-foreground inside a shell script is not the service starting it as a program
+func TestProcessesItemApacheNeedsTheScriptAsAWordOfItsOwn(t *testing.T) {
+	for _, cmd := range []compose.Command{
+		{Shell: "sh -c 'chown -R www-data /var/www && exec /usr/local/bin/apache2-foreground'", Set: true},
+		{Exec: []string{"sh", "-c", "chown -R www-data /var/www && exec /usr/local/bin/apache2-foreground"}, Set: true},
+	} {
+		in := apacheInput(t, []string{"apache2", "-DFOREGROUND"}, nil)
+		in.Project.Services[0].Command = cmd
+		msg := processesMessage(t, in)
+		if strings.Contains(msg, "--command '") || !strings.Contains(msg, "does not start the program through apache2-foreground") {
+			t.Errorf("message = %q", msg)
+		}
+	}
+}

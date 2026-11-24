@@ -268,3 +268,79 @@ func TestQuoteWords(t *testing.T) {
 		t.Errorf("a single quote in %q", got)
 	}
 }
+
+const apacheCommand = "env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND"
+
+func TestSingleProcessApache2SuggestsTheEnvironmentForm(t *testing.T) {
+	adv, ok := SingleProcess("/usr/sbin/apache2", []string{"apache2", "-DFOREGROUND"})
+	if !ok || adv.Server != "apache" || adv.Withheld {
+		t.Fatalf("adv = %+v, %v", adv, ok)
+	}
+	if got := strings.Join(adv.Command, " "); got != apacheCommand {
+		t.Errorf("command = %q", got)
+	}
+	if adv.Requires != "apache2-foreground" || adv.Assumed == "" || !strings.Contains(adv.Caveat, "php:7.2-apache") || !strings.Contains(adv.Caveat, "nextcloud") || !strings.Contains(adv.Caveat, "cause is not known") {
+		t.Errorf("adv = %+v", adv)
+	}
+	if !strings.Contains(adv.Reason, "several processes") {
+		t.Errorf("reason = %q", adv.Reason)
+	}
+}
+
+// the arguments of apache2 are not repeated: only their number is told, and no command is given
+func TestSingleProcessApache2NeverEchoesArguments(t *testing.T) {
+	adv, ok := SingleProcess("/usr/sbin/apache2", []string{"apache2", "-DFOREGROUND", "-c", "Include /secret/token-XYZ"})
+	if !ok || !adv.Withheld || len(adv.Command) != 0 {
+		t.Fatalf("adv = %+v, %v", adv, ok)
+	}
+	if !strings.Contains(adv.Reason, "3 arguments") || strings.Contains(adv.Reason, "XYZ") || strings.Contains(adv.Reason, "-c") {
+		t.Errorf("reason = %q", adv.Reason)
+	}
+	// the arguments are not in any field
+	if strings.Contains(adv.Caveat+adv.Assumed+strings.Join(adv.Command, " "), "XYZ") {
+		t.Errorf("adv = %+v", adv)
+	}
+}
+
+func TestSingleProcessHttpdGivesNoCommand(t *testing.T) {
+	adv, ok := SingleProcess("/usr/local/apache2/bin/httpd", []string{"httpd", "-DFOREGROUND"})
+	if !ok || adv.Server != "apache" || len(adv.Command) != 0 || adv.Withheld {
+		t.Fatalf("adv = %+v, %v", adv, ok)
+	}
+	if !strings.Contains(adv.Reason, "AH00014") || !strings.Contains(adv.Reason, "httpd:2.4-alpine") || !strings.Contains(adv.Reason, "no evidence against -DONE_PROCESS itself") || strings.Contains(adv.Reason, "no command is suggested") {
+		t.Errorf("reason = %q", adv.Reason)
+	}
+}
+
+func TestSingleProcessApacheAlreadyInOneProcess(t *testing.T) {
+	for _, argv := range [][]string{
+		{"apache2", "-DONE_PROCESS", "-DFOREGROUND"},
+		{"apache2", "-X"},
+		{"httpd", "-DONE_PROCESS"},
+	} {
+		if _, ok := SingleProcess("/usr/sbin/"+argv[0], argv); ok {
+			t.Errorf("%v: advice given", argv)
+		}
+	}
+}
+
+// busybox runs httpd as an applet: it has no -DONE_PROCESS, and was given no advice before
+func TestSingleProcessApacheIsNotBusyboxHttpd(t *testing.T) {
+	for _, program := range []string{"/bin/busybox-extras", "/bin/busybox", "/usr/sbin/busybox"} {
+		if adv, ok := SingleProcess(program, []string{"httpd", "-f", "-p", "8081"}); ok {
+			t.Errorf("%s: advice %+v", program, adv)
+		}
+	}
+	if _, ok := SingleProcess("/usr/sbin/httpd", []string{"httpd", "-f", "-p", "8081"}); !ok {
+		t.Errorf("the httpd program itself is not read as apache")
+	}
+}
+
+func TestSingleProcessApache2CountsArgumentsInTheSingular(t *testing.T) {
+	for argv, want := range map[string]string{"apache2": "without arguments", "apache2 -k": "with 1 argument that", "apache2 -k start": "with 2 arguments"} {
+		adv, ok := SingleProcess("/usr/sbin/apache2", strings.Fields(argv))
+		if !ok || !adv.Withheld || !strings.Contains(adv.Reason, want) {
+			t.Errorf("%q: %+v %v", argv, adv, ok)
+		}
+	}
+}
