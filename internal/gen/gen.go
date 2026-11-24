@@ -1562,42 +1562,31 @@ func (g *generator) networkNote(pkgOf map[string]string) {
 	} else {
 		msg = "a service reaches another as <pkg>.service, which always resolves; the bare <pkg> also resolves with an ops that includes nanovms/ops#1815 (" + opsMasterNote + "), so the compose name works only when it equals the package name: " + strings.Join(pairs, ", ") + "."
 	}
-	// variables whose value names any other service; a compose name that differs from the
-	// package name never resolves, one that equals it resolves only with nanovms/ops#1815
-	var diffRefs, sameRefs []string
-	var differing, same []plan.Service
-	for _, o := range g.plan.Services {
-		if pkgOf[o.Name] != o.Name {
-			differing = append(differing, o)
-		} else {
-			same = append(same, o)
+	// only a service whose compose name differs from its package name is not reached by that name
+	var differing []plan.Service
+	for _, svc := range g.plan.Services {
+		if pkgOf[svc.Name] != svc.Name {
+			differing = append(differing, svc)
 		}
 	}
+	var refs []string
 	for _, svc := range g.plan.Services {
-		var dv, sv []string
+		var vars []string
 		for _, n := range sortedEnvNames(svc.Manifest.Env) {
 			tokens := strings.FieldsFunc(svc.Manifest.Env[n], func(r rune) bool {
 				return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-')
 			})
 			if refersToOther(tokens, svc.Name, differing) {
-				dv = append(dv, n)
-			}
-			if refersToOther(tokens, svc.Name, same) {
-				sv = append(sv, n)
+				vars = append(vars, n)
 			}
 		}
-		if len(dv) > 0 {
-			diffRefs = append(diffRefs, svc.Name+": "+strings.Join(dv, ", "))
-		}
-		if len(sv) > 0 {
-			sameRefs = append(sameRefs, svc.Name+": "+strings.Join(sv, ", "))
+		if len(vars) > 0 {
+			refs = append(refs, svc.Name+": "+strings.Join(vars, ", "))
 		}
 	}
-	if len(diffRefs) > 0 {
-		msg += " Environment variables whose value names a service whose compose name differs from its package name were not rewritten and never resolve, with or without --short-names (write <pkg>.service): " + strings.Join(diffRefs, "; ") + "."
-	}
-	if len(sameRefs) > 0 {
-		msg += " Environment variables whose value names a service by its package name were not rewritten: the bare name resolves only with an ops that includes nanovms/ops#1815, with a released ops (up to 0.1.47) write <pkg>.service: " + strings.Join(sameRefs, "; ") + "."
+	// with the names of the compose file in the dns, those values need no rewriting
+	if len(refs) > 0 && !g.in.ShortNames {
+		msg += " Environment variables whose value names a service whose compose name differs from its package name were not rewritten: " + strings.Join(refs, "; ") + "."
 	}
 	g.add("", plan.Note, "service names", msg)
 	if !g.in.ShortNames {
