@@ -285,8 +285,15 @@ func Supervisor(program string, argv []string) string {
 	if len(argv) > 0 {
 		names = append(names, argv[0])
 	}
-	if len(argv) > 1 && strings.HasPrefix(argv[1], "/") {
-		names = append(names, argv[1])
+	// the script an interpreter runs: the first argument that is not an option (python3 -u /usr/bin/supervisord)
+	for _, a := range argv[min(1, len(argv)):] {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if strings.HasPrefix(a, "/") {
+			names = append(names, a)
+		}
+		break
 	}
 	for _, n := range names {
 		if b := path.Base(n); ProcessSupervisors[b] {

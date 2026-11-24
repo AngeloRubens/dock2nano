@@ -808,12 +808,6 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		if out, ok := r.procRead(ctx, id, "working directory", []string{"readlink", base + "cwd"}); ok {
 			cwd = strings.TrimSpace(string(out))
 		}
-		// The program may change its directory while it runs (rr goes to the folder of its config):
-		// /proc says where it is now, and the package starts it where it started.
-		if dir := trace.CwdAtExec(raw, startDir, final.Line); dir != "" && dir != cwd {
-			r.vlogf("the program started in %s and is in %s now; %s is used\n", dir, cwd, dir)
-			cwd = dir
-		}
 		if out, ok := r.procRead(ctx, id, "executable", []string{"readlink", base + "exe"}); ok {
 			exe = strings.TrimSpace(string(out))
 		}
@@ -828,6 +822,13 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 	} else {
 		r.warnOnce(NoteStoppedBeforeProc + ": the command line, environment and directory are those of the image")
+	}
+	// The program may change its directory while it runs (rr goes to the folder of its config):
+	// /proc says where it is now, and the package starts it where it started, which the trace
+	// knows even when the program had stopped before /proc was read.
+	if dir := trace.CwdAtExec(raw, startDir, final.Line); dir != "" && dir != cwd {
+		r.vlogf("the program started in %s; %q is where it was at the end; %s is used\n", dir, cwd, dir)
+		cwd = dir
 	}
 	if len(cmdline) == 0 {
 		cmdline = argv
@@ -1079,6 +1080,11 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 		if isUID {
 			r.vlogf("the user of the image, uid %d, is %s\n", uid, name)
 		}
+		if home == "" {
+			// docker would have given the program the home of its user; here HOME stays /root
+			text := fmt.Sprintf(NoteImageRuns+"%s, whose home directory is not known (%s); HOME was left as the container has it (/root), where that user may not be able to write", name, homeWhy(why))
+			r.warnOnce(r.redact(text))
+		}
 		return name, home, nil
 	}
 	text := fmt.Sprintf(NoteImageRuns+"uid %d, which has no name in /etc/passwd; it was observed as root", uid)
@@ -1087,6 +1093,15 @@ func (r *run) resolveUser(ctx context.Context, image, user string) (name, home s
 	}
 	r.warnOnce(r.redact(text))
 	return "", "", nil
+}
+
+// homeWhy says why the home of a user is not known: /etc/passwd could not be read, or has no usable
+// entry.
+func homeWhy(readError string) string {
+	if readError != "" {
+		return "/etc/passwd could not be read: " + readError
+	}
+	return "/etc/passwd has no entry with an absolute home for it"
 }
 
 // passwdHome is the home directory (the sixth field) of the first entry of /etc/passwd named name,
@@ -1624,17 +1639,20 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	relative := map[string]string{}
 	queue := slices.Clone(paths)
 	// place puts what link leads to under name: a link with the text it had, or a copy
+	// a link or a copy that was left out on purpose is a warning, never an error
+	skipped := func(err error) error {
+		var left *trace.LinkSkipped
+		if errors.As(err, &left) {
+			r.warnOnce(r.redact(NoteNotCarried + left.Error()))
+			return nil
+		}
+		return err
+	}
 	place := func(link, name string) error {
 		if text, ok := relative[name]; ok {
-			err := trace.LinkHostFile(sysroot, text, name)
-			var clash *trace.LinkConflict
-			if errors.As(err, &clash) {
-				r.warnOnce(r.redact(NoteNotCarried + name + ": " + clash.Error()))
-				return nil
-			}
-			return err
+			return skipped(trace.LinkHostFile(sysroot, text, name))
 		}
-		return trace.CopyHostFile(sysroot, link, name)
+		return skipped(trace.CopyHostFile(sysroot, link, name))
 	}
 
 	notCarried := func(p string, why string) {

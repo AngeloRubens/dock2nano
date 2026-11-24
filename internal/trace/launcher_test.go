@@ -211,6 +211,7 @@ func TestSupervisor(t *testing.T) {
 		{"runsvdir in /sbin", "/sbin/runsvdir", []string{"runsvdir", "-P", "/etc/service"}, "runsvdir"},
 		{"runsvdir in /usr/sbin", "/usr/sbin/runsvdir", []string{"runsvdir", "/etc/service"}, "runsvdir"},
 		{"supervisord started through a python shebang", "/usr/bin/python3", []string{"/usr/bin/python3", "/usr/bin/supervisord", "-n"}, "supervisord"},
+		{"supervisord with an option of python first", "/usr/bin/python3", []string{"python3", "-u", "/usr/bin/supervisord", "-n"}, "supervisord"},
 		{"a python program that is not a supervisor", "/usr/bin/python3", []string{"python3", "/app/main.py"}, ""},
 		{"a program of the user called nodemon in a bin directory of the user", "/app/bin/nodemon", []string{"nodemon"}, ""},
 		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},

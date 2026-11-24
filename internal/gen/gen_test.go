@@ -1652,19 +1652,38 @@ func TestPassedOverRunsAreCountedInOrderAndCapped(t *testing.T) {
 	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "and 5 more")
 }
 
-func TestPassedOverInitIsNamedAndExplained(t *testing.T) {
+func passedOverInput(t *testing.T, labels ...string) Input {
+	t.Helper()
 	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "server.js"}, "")
-	o := in.Services["web"].Observed
-	o.PassedOver = []string{"tini"}
-	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (tini)")
-	// an init alone is not a launcher: the npm wording is not added for it
-	wantNone(t, mustGen(t, in), "web", plan.Note, "launcher passed over")
-	o.PassedOver = []string{"dumb-init", "sh -c"}
-	want1(t, mustGen(t, in), "web", plan.Note, "init passed over", "through an init (dumb-init)")
-	want1(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "sh -c (outermost first)")
-	wantNoText(t, mustGen(t, in), "web", plan.Note, "launcher passed over", "dumb-init")
-	o.PassedOver = []string{`npm (script "start")`}
-	wantNoText(t, mustGen(t, in), "web", plan.Note, "init passed over", "init")
+	in.Services["web"].Observed.PassedOver = labels
+	return in
+}
+
+func TestPassedOverInitIsNamedAndExplained(t *testing.T) {
+	want1(t, mustGen(t, passedOverInput(t, "tini")), "web", plan.Note, "init passed over", "through an init (tini)")
+}
+
+func TestPassedOverInitAfterAnInitIsNamedWithItsName(t *testing.T) {
+	want1(t, mustGen(t, passedOverInput(t, "dumb-init", "sh -c")), "web", plan.Note, "init passed over", "through an init (dumb-init)")
+}
+
+// an init alone is not a launcher: the launcher note is not added for it
+func TestPassedOverInitAloneHasNoLauncherNote(t *testing.T) {
+	wantNone(t, mustGen(t, passedOverInput(t, "tini")), "web", plan.Note, "launcher passed over")
+}
+
+// an init and a shell: the note names the shell and not the init, and has no npm sentence
+func TestPassedOverInitAndShellNoteLeavesTheInitAndNpmOut(t *testing.T) {
+	p := mustGen(t, passedOverInput(t, "dumb-init", "sh -c"))
+	want1(t, p, "web", plan.Note, "launcher passed over", "sh -c (outermost first)")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "dumb-init")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "npm_*")
+}
+
+func TestPassedOverRealLauncherKeepsTheNpmSentence(t *testing.T) {
+	p := mustGen(t, passedOverInput(t, "tini", `npm (script "start")`, "sh -c"))
+	want1(t, p, "web", plan.Note, "launcher passed over", "The npm_* variables are kept as observed")
+	wantNoText(t, p, "web", plan.Note, "launcher passed over", "tini")
 }
 
 func TestAnInitThatStaysTheProgramIsReported(t *testing.T) {

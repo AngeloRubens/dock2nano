@@ -875,7 +875,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	g.passedOverNote(s, obs)
 	supervisor := g.supervisorNote(s, obs)
 	if trace.IsInit(obs.Program) {
-		g.add(s.Name, plan.Unsupported, "init kept", fmt.Sprintf("the program is an init (%s): the observation did not find exactly one program that it started and that was still running, so the init was kept. An init starts its program as a child process, which nanos cannot do, so the package may not start. Run the program the init starts directly: command: in the compose file, or --command SERVICE=CMD with the entrypoint of the image removed (entrypoint: [] in the compose file)", path.Base(obs.Program)))
+		g.add(s.Name, plan.Unsupported, "init kept", fmt.Sprintf("the program is an init (%s): the observation kept it as the program: it found no single program that the init had started and that was still running (the container may have stopped, or the init started none or several). An init starts its program as a child process, which nanos cannot do, so the package may not start. Run the program the init starts directly: command: in the compose file, or --command SERVICE=CMD with the entrypoint of the image removed (entrypoint: [] in the compose file)", path.Base(obs.Program)))
 		supervisor = true
 	}
 	g.childLauncherNote(s, obs, supervisor)
@@ -1097,6 +1097,19 @@ func firstArg(argv []string) string {
 	return argv[0]
 }
 
+// passedLauncher says whether one of the labels of the commands passed over is a package manager
+// launcher (npm, npx, yarn, pnpm, corepack): a plain shell or an init is not one.
+func passedLauncher(labels []string) bool {
+	for _, l := range labels {
+		name, _, _ := strings.Cut(l, " ")
+		switch name {
+		case "npm", "npx", "yarn", "yarnpkg", "pnpm", "pnpx", "corepack":
+			return true
+		}
+	}
+	return false
+}
+
 // passedOverNote says what the observation passed over: the commands the image starts (a launcher,
 // the shells around it) and the package runs the program the launcher started, which is a different
 // thing. The commands are named, never printed: the arguments of a command line are user text, and
@@ -1111,7 +1124,16 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 		}
 	}
 	if len(passed) > 0 {
-		g.add(s.Name, plan.Note, "launcher passed over", fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command the launcher started (in package.manifest). The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command. %s", cappedJoin(runsCounted(passed), ", then "), where))
+		launcher := passedLauncher(passed)
+		started := "they started"
+		if launcher {
+			started = "the launcher started"
+		}
+		msg := fmt.Sprintf("the commands passed over were %s (outermost first), and the package runs the command %s (in package.manifest).", cappedJoin(runsCounted(passed), ", then "), started)
+		if launcher {
+			msg += " The npm_* variables are kept as observed, and what the launcher did around the command is lost: the pre and post scripts, if the launcher runs them, and the signals it passes to the command."
+		}
+		g.add(s.Name, plan.Note, "launcher passed over", msg+" "+where)
 	}
 	for _, l := range obs.PassedOver {
 		if trace.IsInit(l) {
@@ -1177,9 +1199,6 @@ func (g *generator) childLauncherNote(s *compose.Service, obs *observe.Result, s
 		return
 	}
 	who := "the program, a script of the image or an init,"
-	if trace.IsInit(obs.Program) {
-		supervisor = true
-	}
 	if supervisor {
 		who = "the program (an init or a supervisor)"
 	}

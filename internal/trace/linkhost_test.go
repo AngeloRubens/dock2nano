@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,9 +115,9 @@ func TestLinkHostFileKeepsTheDirectoryWhenAFileMeetsADirectory(t *testing.T) {
 	write(t, filepath.Join(root, "pkg/x/dist/sub/b.js"), "b")
 	write(t, filepath.Join(root, "store/x/dist/sub"), "a file where the other has a directory")
 	err := LinkHostFile(root, "../store/x", "/pkg/x")
-	var clash *LinkConflict
-	if !errors.As(err, &clash) || clash.Path != "dist/sub" {
-		t.Fatalf("err = %v, want a *LinkConflict at dist/sub", err)
+	var left *LinkSkipped
+	if !errors.As(err, &left) || !strings.Contains(left.Why, "dist/sub") {
+		t.Fatalf("err = %v, want a *LinkSkipped that names dist/sub", err)
 	}
 	for _, f := range []string{"pkg/x/dist/a.js", "pkg/x/dist/sub/b.js"} {
 		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
@@ -141,5 +142,114 @@ func TestLinkHostFileKeepsTheModeOfTheDirectoriesItMoves(t *testing.T) {
 	info, err := os.Stat(filepath.Join(root, "store/x/private"))
 	if err != nil || info.Mode().Perm() != 0700 {
 		t.Errorf("mode = %v, %v; want 0700", info, err)
+	}
+}
+
+func wantSkipped(t *testing.T, err error, why string) {
+	t.Helper()
+	var left *LinkSkipped
+	if !errors.As(err, &left) || !strings.Contains(left.Why, why) {
+		t.Fatalf("err = %v, want a *LinkSkipped with %q", err, why)
+	}
+}
+
+func mustExist(t *testing.T, p string) {
+	t.Helper()
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+// a link to the directory itself: the merge would move it into itself and remove it
+func TestLinkHostFileSkipsALinkToItself(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a/x/file"), "f")
+	wantSkipped(t, LinkHostFile(root, "x", "/a/x"), "into itself")
+	mustExist(t, filepath.Join(root, "a/x/file"))
+}
+
+// a link into a subdirectory of the directory: removing the directory would remove the target
+func TestLinkHostFileSkipsALinkIntoItsOwnSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a/x/sub/f"), "f")
+	wantSkipped(t, LinkHostFile(root, "x/sub", "/a/x"), "into itself")
+	mustExist(t, filepath.Join(root, "a/x/sub/f"))
+}
+
+// a link to a directory that holds the directory
+func TestLinkHostFileSkipsALinkToADirectoryThatHoldsIt(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "p/q/x/file"), "f")
+	write(t, filepath.Join(root, "p/other"), "o")
+	wantSkipped(t, LinkHostFile(root, "..", "/p/q/x"), "into itself")
+	mustExist(t, filepath.Join(root, "p/q/x/file"))
+}
+
+// the directory is, through a link of the image, a folder of this machine, and the link leads inside
+func TestLinkHostFileSkipsADirectoryThatIsOutsideTheSysroot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "sysroot")
+	host := filepath.Join(parent, "host")
+	write(t, filepath.Join(host, "x/precious"), "p")
+	write(t, filepath.Join(root, "y/file"), "y")
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../host", filepath.Join(root, "a/b")); err != nil {
+		t.Fatal(err)
+	}
+	// from the folder of this machine, ../sysroot/y is inside the sysroot
+	wantSkipped(t, LinkHostFile(root, "../sysroot/y", "/a/b/x"), "outside the package")
+	mustExist(t, filepath.Join(host, "x/precious"))
+	if _, err := os.Stat(filepath.Join(root, "y/precious")); err == nil {
+		t.Errorf("a file of this machine was moved into the sysroot")
+	}
+}
+
+// what the link leads to does not exist: the reason is given, nothing is moved
+func TestLinkHostFileSaysWhenTheTargetIsNotThere(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a/x/file"), "f")
+	wantSkipped(t, LinkHostFile(root, "../gone", "/a/x"), "not in the package")
+	mustExist(t, filepath.Join(root, "a/x/file"))
+}
+
+// a directory that cannot be written (mode 0555) is moved, with its mode
+func TestLinkHostFileMovesAReadOnlyDirectory(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "pkg/x/ro/a"), "a")
+	if err := os.Chmod(filepath.Join(root, "pkg/x/ro"), 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(root, "store/x/ro"), 0755) })
+	write(t, filepath.Join(root, "store/x/other"), "o")
+	if err := LinkHostFile(root, "../store/x", "/pkg/x"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(root, "store/x/ro"))
+	if err != nil || info.Mode().Perm() != 0555 {
+		t.Errorf("mode = %v, %v; want 0555", info, err)
+	}
+	mustExist(t, filepath.Join(root, "store/x/ro/a"))
+}
+
+// a new link or a copy whose directory is, through a link of the image, a folder of this machine
+func TestLinkHostFileAndCopyHostFileDoNotWriteThroughALinkOutOfTheSysroot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "sysroot")
+	host := filepath.Join(parent, "host")
+	if err := os.MkdirAll(host, 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "src/file"), "data")
+	// root/a leads to parent/host
+	if err := os.Symlink("../host", filepath.Join(root, "a")); err != nil {
+		t.Fatal(err)
+	}
+	wantSkipped(t, LinkHostFile(root, "../src/file", "/a/new"), "outside the package")
+	wantSkipped(t, CopyHostFile(root, "/src/file", "/a/copy"), "outside the package")
+	entries, _ := os.ReadDir(host)
+	if len(entries) != 0 {
+		t.Errorf("the folder of this machine got %v", entries)
 	}
 }

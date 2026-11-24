@@ -1820,7 +1820,7 @@ func TestObserveRelativePathWithoutAWorkingDirIsReadAgainstRoot(t *testing.T) {
 }
 
 func TestObserveUserIsResolvedThroughPasswd(t *testing.T) {
-	passwd := "root:x:0:0:root:/root:/bin/sh\n# comment:x:9:9\ngrafana:x:472:0:g:/h:/sbin/nologin\n"
+	passwd := "root:x:0:0:root:/root:/bin/sh\n# comment:x:9:9\ngrafana:x:472:0:g:/h:/sbin/nologin\napp:x:1000:1000::/home/app:/bin/sh\nweb:x:1001:1001::/home/web:/bin/sh\n"
 	for _, tc := range []struct {
 		name      string
 		imageUser string
@@ -2526,7 +2526,7 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 		`the image runs as "4294967296", which is not a uid; it was observed as root`,
 	})
 
-	// a name that holds digits is a name (a regression guard: it passes without the lookup of names too)
+	// a name that holds digits is a name; it has no entry in /etc/passwd of the scene, which is said
 	s := newScene(t)
 	s.d.cfg.User = "12ab"
 	res, err := s.observe(t, context.Background())
@@ -2537,10 +2537,50 @@ func TestResolveUserWithTooManyDigitsIsObservedAsRoot(t *testing.T) {
 	if i := slices.Index(*traced.Entrypoint, "-u"); i < 0 || (*traced.Entrypoint)[i+1] != "12ab" {
 		t.Errorf("entrypoint = %q, want -u 12ab", *traced.Entrypoint)
 	}
+	var said []string
 	for _, w := range res.Warnings {
 		if strings.Contains(w, "the image runs as") {
-			t.Errorf("warning %q", w)
+			said = append(said, w)
 		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "12ab, whose home directory is not known") {
+		t.Errorf("warnings = %q, want one about the home of 12ab", said)
+	}
+}
+
+// a user that /etc/passwd of the image does not give a home, or cannot be read: said, never silent
+func TestObserveSaysWhenTheHomeOfTheUserIsNotKnown(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		noPasswd bool
+		passwd   string
+		why      string
+	}{
+		{"no entry", false, "root:x:0:0:root:/root:/bin/sh\n", "has no entry with an absolute home"},
+		{"a relative home", false, "node:x:1000:1000::home:/bin/sh\n", "has no entry with an absolute home"},
+		{"no /etc/passwd", true, "", "could not be read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			s.d.cfg.User = "node"
+			s.d.cfg.Env = []string{"PATH=/usr/bin"}
+			if !tc.noPasswd {
+				s.d.files["/etc/passwd"] = entry{data: tc.passwd}
+			}
+			res, err := s.observe(t, context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, w := range res.Warnings {
+				if strings.Contains(w, "node, whose home directory is not known") && strings.Contains(w, tc.why) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("warnings = %q, want one that says the home of node is not known (%s)", res.Warnings, tc.why)
+			}
+		})
 	}
 }
 
@@ -3588,4 +3628,33 @@ func TestObserveWorkingDirectoryIsWhereTheProgramStartedNotWhereItEnded(t *testi
 		t.Fatal(err)
 	}
 	equal(t, "working dir", res.WorkingDir, "/etc/shlink")
+}
+
+// a directory that files opened through a link left cannot be merged into the one the link leads
+// to when the second has a file where the first has a directory: kept, and said
+func TestObserveSaysWhenALinkedDirectoryCannotBeMerged(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/pkg/lib/sub/a.js", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/pkg/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/store/lib/sub", O_RDONLY) = 9` + "\n"
+	s.d.files["/pkg/lib/sub/a.js"] = entry{data: "a"}
+	s.d.files["/pkg/lib"] = entry{link: "../store/lib"}
+	s.d.files["/store/lib"] = entry{dir: true}
+	s.d.files["/store/lib/sub"] = entry{data: "a file where the other has a directory"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "pkg/lib") && strings.Contains(w, "disagree on what sub is") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %q, want one about /pkg/lib and sub", res.Warnings)
+	}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "pkg/lib/sub/a.js")); err != nil {
+		t.Errorf("the directory was not kept: %v", err)
+	}
 }
