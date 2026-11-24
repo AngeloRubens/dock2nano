@@ -400,10 +400,6 @@ func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
 	if u.EnvUncertain {
 		fixed["HUB_ENV_UNCERTAIN"] = "yes"
 	}
-	if u.PasswordFile != "" {
-		fixed["HUB_PWFILE"] = u.PasswordFile
-		fixed["HUB_PW"] = "yes"
-	}
 	// the image first, the observed environment over it, what the compose file
 	// gives the service over both: the order in which the manifest gets them
 	env := append(slices.Clone(u.ImageEnv), obs.Env...)
@@ -416,8 +412,6 @@ func noteInputs(u HubUse, obs *observe.Result) ([]string, map[string]string) {
 		}
 	}
 	if last["POSTGRES_PASSWORD"] != "" {
-		fixed["HUB_PWENV"] = "yes"
-		fixed["HUB_PW"] = "yes"
 	}
 	if f := last["POSTGRES_PASSWORD_FILE"]; f != "" && u.PasswordFile == "" {
 		fixed["HUB_PWLOST"] = f
