@@ -796,8 +796,9 @@ func TestServiceNamesNote(t *testing.T) {
 func TestBareNamesNoteIsPrintedWithoutAFindingInAFile(t *testing.T) {
 	web, db := svc("web"), svc("db")
 	p := mustGen(t, newInput(&fake{}, db, web))
-	want1(t, p, "", plan.Note, "bare names", "bare service names (db, web) do not resolve under ops compose")
-	want1(t, p, "", plan.Note, "bare names", "--short-names")
+	want1(t, p, "", plan.Note, "bare names", "bare package names (db, web) do not resolve under ops compose")
+	want1(t, p, "", plan.Note, "bare names", "--short-names with an ops that reads dns_search (nanovms/ops#1815)")
+	want1(t, p, "", plan.Note, "bare names", "the package name resolves, not the compose name")
 	want1(t, p, "", plan.Note, "bare names", "<name>.service")
 
 	in := newInput(&fake{}, db, web)
@@ -2321,6 +2322,8 @@ func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
 	in.Services["db"].Observed.MachineFiles = []string{"/proc/cpuinfo", "/sys/devices/system/cpu/possible"}
 	p := mustGen(t, in)
 	want1(t, p, "db", plan.Note, "machine", "/sys/devices/system/cpu/possible")
+	want1(t, p, "db", plan.Note, "machine", "on arm64 the kernel answers for cpuinfo itself and node does not get /proc/self/stat")
+	want1(t, p, "db", plan.Note, "machine", "process.memoryUsage().rss is not real")
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("db"))), "db", plan.Note, "machine")
 }
 

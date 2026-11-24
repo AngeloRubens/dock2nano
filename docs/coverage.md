@@ -1,6 +1,6 @@
 # Coverage of docker/awesome-compose
 
-Every sample of docker/awesome-compose that has a compose file with a published or exposed HTTP or TCP port is a row of the matrix of .github/workflows/compose-up.yml. Plain rows (no flags) measure what the tool does without help. Flags appear only where the project notes record a command that was needed (django, fastapi). Results are filled from CI runs of the fork; until then a cell is "not run". The probe is strict: green means the status is 2xx or 3xx, or the TCP port is open. A 4xx or 5xx answer prints "result: SVC reached, status N is not a success" and fails the job.
+Every sample of docker/awesome-compose that has a compose file with a published or exposed HTTP or TCP port is a row of the matrix of .github/workflows/compose-up.yml. Plain rows (no flags) measure what the tool does without help. Flags appear where the project notes record a command that was needed (django, fastapi), where a Host override is set (django-host), and in the later rows that carry --short-names or --with db. The probe is strict: green means the status is 2xx or 3xx, or the TCP port is open. A 4xx or 5xx answer prints "result: SVC reached, status N is not a success" and fails the job.
 
 ## Results
 
@@ -64,12 +64,12 @@ Every sample of docker/awesome-compose that has a compose file with a published 
 
 Reading of run 45372721961 (2026-11-24, ops master, nightly nanos): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
 
-Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measured on the fork CI):
+Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measured on the fork CI; run 45383667105 is branch check/short-names, commit 62c33e8):
 
 | sample | change | result | run id |
 |---|---|---|---|
 | nginx-golang-mysql | --short-names | green | 45383667105 |
-| nginx-aspnet-mysql | --short-names | proxy reached, status 502 (the backend does not answer through it) | 45383667105 |
+| nginx-aspnet-mysql | --short-names | 502 at the first try, the probe did not retry (loop fixed after this run); to be re-run | 45383667105 |
 | nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
 | spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
 | gitea-postgres | --short-names | red: the program chosen is the supervisor s6-svscan (fork), the guest reboots | 45383667105 |

@@ -1,7 +1,7 @@
 name: compose-up
 # Converts compose files of docker/awesome-compose, starts each result with "ops compose up" on
 # nanos and asks the ports it names. One compose file per job. A job is red when compose up fails
-# 3 of 3 or a service of the probe list gives no address or no answer; the output is the finding. Runs on a push whose head commit message contains [compose-up], and by hand.
+# 3 of 3 or a service of the probe list gives no address, no answer or a 4xx/5xx status; the output is the finding. Runs on a push whose head commit message contains [compose-up], and by hand.
 on:
   push:
   workflow_dispatch:
@@ -187,9 +187,11 @@ jobs:
             [ -z "$ip" ] && { echo "no address"; probe_fail=1; continue; }
             for i in $(seq 1 24); do
               if [ "$kind" = http ]; then
+                # matrix.host overrides the Host header for every service of the row
                 if [ -n "${{ matrix.host }}" ]; then hdr="Host: ${{ matrix.host }}"; else hdr="Host: $ip:$port"; fi
                 code=$(curl -s -m 5 -H "$hdr" -o /tmp/out/body-$svc.txt -w '%{http_code}' "http://$ip:$port/" || true)
-                case "$code" in 2*|3*|4*|5*) break;; esac
+                # keep the last code and retry on 4xx/5xx (a proxy answers 502 until its backend is up)
+                case "$code" in 2*|3*) break;; esac
               else
                 if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then code=open; break; else code=closed; fi
               fi
@@ -209,7 +211,7 @@ jobs:
             sudo env OPS_HOME="$OPS_HOME" ops instance logs $svc > /tmp/out/console-$svc.txt 2>&1 || true
             echo "=== console of $svc, last 25 lines"; tail -25 /tmp/out/console-$svc.txt | cut -c1-250
           done
-          if [ "$probe_fail" != 0 ]; then echo "probe: a service did not answer"; exit 1; fi
+          if [ "$probe_fail" != 0 ]; then echo "probe: a service did not answer or answered with an error status"; exit 1; fi
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4

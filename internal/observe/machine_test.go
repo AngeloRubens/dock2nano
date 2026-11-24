@@ -145,3 +145,30 @@ func TestSelfStatIsWrittenForNodeOnly(t *testing.T) {
 		t.Errorf("wrote = %v for a program that is not node", wrote)
 	}
 }
+
+func TestSelfStatKeepsAFileOfTheSysrootAndSkipsArm64AndKnowsNodejs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proc", "self", "stat")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte("mine\n"), 0o444)
+	wrote, err := writeMachineFiles(dir, "amd64", "/usr/bin/node", nil)
+	if err != nil || len(wrote) != 0 {
+		t.Fatalf("wrote = %v, err = %v, want nothing over an existing file", wrote, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "mine\n" {
+		t.Errorf("the file was replaced: %q", b)
+	}
+	arm := t.TempDir()
+	wrote, _ = writeMachineFiles(arm, "arm64", "/usr/bin/node", nil)
+	if len(wrote) != 0 {
+		t.Errorf("wrote = %v on arm64", wrote)
+	}
+	if _, err := os.Lstat(filepath.Join(arm, "proc", "self", "stat")); err == nil {
+		t.Error("proc/self/stat exists on arm64")
+	}
+	js := t.TempDir()
+	wrote, _ = writeMachineFiles(js, "amd64", "/usr/bin/nodejs", nil)
+	if len(wrote) != 1 || wrote[0] != "/proc/self/stat" {
+		t.Errorf("wrote = %v for nodejs", wrote)
+	}
+}

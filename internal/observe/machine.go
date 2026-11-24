@@ -44,7 +44,8 @@ func usesSharedMemory(opened []string) bool {
 	return false
 }
 
-// writeMachineFiles puts into sysroot the machine files that the program opened, on x86_64 only
+// writeMachineFiles puts into sysroot the machine files that the program opened (and, for node,
+// proc/self/stat whether or not it was seen opening it), on x86_64 only
 // (on aarch64 the kernel answers for cpuinfo itself, and a file of ours in its place would stop it
 // from making its own). A file the sysroot already has is left alone. It returns the paths it
 // wrote.
@@ -72,7 +73,7 @@ func writeMachineFiles(sysroot, arch, program string, opened []string) ([]string
 	}
 	for _, name := range names {
 		// node asks for its own resident memory at start, and the observation may not have opened
-		// the file, so the self file is not conditioned on what was opened
+		// the file, so the self file is not conditioned on what was opened; on arm64 it is not written
 		switch {
 		case name == selfStatName:
 		case strings.HasPrefix(name, "proc/") && strings.HasSuffix(name, "/stat"):
@@ -150,7 +151,7 @@ func isNode(program string) bool {
 }
 
 // selfStat is one plausible line of /proc/self/stat with the resident memory (the twenty-fourth
-// word, in pages) filled.
+// word, in pages) filled. Only that field matters to node; the others are zero.
 func selfStat() string {
 	words := []string{"1", "(node)", "R", "0", "1", "1"}
 	for len(words) < 52 {
