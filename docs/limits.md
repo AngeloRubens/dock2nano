@@ -69,7 +69,7 @@ Cause: ops-dns (version 0.0.1, source not public) answers only names under .serv
 
 Kind: hard limit of ops-dns, worked around. Reported as nanovms/ops#1812 (short names, dns_search). The fix is nanovms/ops#1815 (dns_search, merged 2026-11-18), which writes "search service" in the resolv.conf of each guest.
 
-Tool flag: --short-names writes dns_search: [service] in compose.yaml. Verified on nanos: the sparkjava backend resolved db (the mariadb log shows its connection).
+Bare package names (db, backend) resolve inside the guests without any flag with an ops that includes nanovms/ops#1815 (ops master at 2177c54). Measured: sparkjava-mysql and nginx-golang-mysql were green with no flags, run 45393646760. With an older ops (before nanovms/ops#1815) a bare name does not resolve; pass --short-names, which writes dns_search: [service] in compose.yaml (verified on nanos: the sparkjava backend resolved db, the mariadb log shows its connection). The compose service name resolves only when it equals the package name; otherwise write <pkg>.service.
 
 ## Volumes
 

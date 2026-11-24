@@ -60,8 +60,9 @@ Flags of convert:
   --force            replace package folders and a compose.yaml that exist
   --strict           exit with status 2 if the report has an unsupported item
   --short-names      let the services reach each other by the name of the compose file (db) and
-                     not only as db.service: writes dns_search: [service] in compose.yaml, which
-                     needs an ops that reads it
+                     not only as db.service: writes dns_search: [service] in compose.yaml; only
+                     needed with an ops older than nanovms/ops#1815, with a newer one bare names
+                     resolve without it
   --exercise [SVC=]REQ  ask the program for something once it is up, so that the files it opens
                      only to answer are carried: /health is asked of the first port the image
                      exposes, http://container:9000/ping names the port (can be repeated); with
