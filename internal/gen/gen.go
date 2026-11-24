@@ -827,7 +827,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	}
 	if len(obs.MachineFiles) > 0 {
 		msg := "the package carries " + strings.Join(obs.MachineFiles, ", ") + " of /proc, /sys or /dev, which nanos does not provide, as files of ours: one processor in cpuinfo, 0-63 as the processors a machine could have, an empty directory for /dev/shm. /dev/shm is written on any architecture; cpuinfo, cpu/possible and the stat files on x86_64 only (on arm64 the kernel answers for cpuinfo itself)"
-		if slices.Contains(obs.MachineFiles, "/proc/self/stat") {
+		if true || slices.Contains(obs.MachineFiles, "/proc/self/stat") {
 			msg += ". For node the package carries /proc/self/stat, whether or not the program was seen opening it: a fixed line with a resident memory of 16 MiB and times of zero, so process.memoryUsage().rss is not real"
 		}
 		g.add(s.Name, plan.Note, "machine", msg)
