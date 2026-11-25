@@ -20,14 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: openliberty-nokvm, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "no", env: "", tries: "60"}
-          - {name: openliberty-kvm, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: tomcat-kvm, repo: docker-library/tomcat, sha: 66f36aac84471fdf6bcbb42628b895c8d7e82704, dockerfile: 11.0/jdk21/temurin-noble/Dockerfile, context: "11.0/jdk21/temurin-noble", port: "8080", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: wildfly-kvm, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: sonarqube-kvm, repo: SonarSource/docker-sonarqube, sha: d6830792f2f6837132c4e67a7dc249c9aba6dabe, dockerfile: community-build/Dockerfile, context: "community-build", port: "9000", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: aspnetapp-kvm, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: btcpay-kvm, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "", tries: "60"}
-          - {name: kanboard-kvm, repo: kanboard/kanboard, sha: 58a2605058219b1d20b32f98d78872a5b1d9ff12, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "yes", env: "", tries: "60"}
+          - {name: php-cli, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
+          - {name: php-cli-alpine, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
+          - {name: php-apache, repo: local, sha: ci/php/apache, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
+          - {name: php-fpm, repo: local, sha: ci/php/fpm, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -103,7 +99,7 @@ jobs:
           W=/tmp/w/$NAME
           rm -rf "$W" && mkdir -p "$W" && cd "$W"
           git init -q && git remote add origin "https://github.com/$REPO.git"
-          if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
+          if { [ "$REPO" = local ] && cp -r "$GITHUB_WORKSPACE/$SHA/." "$W/"; } || { git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; }; then
             if [ "${FULL:-}" = yes ]; then git fetch -q --filter=blob:none --unshallow --tags origin && echo "ROW full history and tags fetched: $(git describe --tags --always)"; fi
             srcok=yes; echo "ROW source=ok $(git log --oneline -1 | cut -c1-100)"
           else
@@ -128,6 +124,15 @@ jobs:
             echo "ROW convert after the failed docker build: compose.yaml written: $([ -f "$R/compose-after-build-fail/compose.yaml" ] && echo yes || echo no)"
             echo "ROW convert run after the failed docker build: the row stops here"; exit 1
           fi
+
+          # 2b. evidence: the image as docker runs it, and the raw strace of the observation
+          docker inspect --format '{{json .Config}}' "top30-$NAME" > "$R/image-config.json" 2>&1 || true
+          echo "ROW image config: $(cut -c1-700 "$R/image-config.json")"
+          timeout 25 docker run --rm --name "run-$NAME" "top30-$NAME" > "$R/docker-run.log" 2>&1 || true
+          echo "ROW docker run of the image as it is (25 s): $(wc -l < "$R/docker-run.log") lines; first 12 and last 8:"
+          head -12 "$R/docker-run.log" | cut -c1-250; echo ...; tail -8 "$R/docker-run.log" | cut -c1-250
+          docker rm -f "run-$NAME" >/dev/null 2>&1 || true
+          mkdir -p "$R/trace"; export DOCK2NANO_KEEP_TRACE="$R/trace"
 
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
@@ -220,6 +225,26 @@ jobs:
           echo "=== console of $NAME, last 25 lines"; tail -25 "$R/console.txt" | cut -c1-250
           [ "$probe" = success ] && exit 0
           exit 1
+      - name: evidence (package, manifest, port scan)
+        if: always()
+        run: |
+          N=${{ matrix.name }}
+          R=/tmp/out/$N
+          P=$(ls -d "$OPS_HOME"/.ops/local_packages/amd64/${N}_* 2>/dev/null | head -1)
+          echo "ROW package dir: $P"
+          if [ -n "$P" ]; then
+            ls -la "$P" | head -20
+            echo "ROW sysroot top level:"; ls -la "$P/sysroot" 2>&1 | head -40
+            find "$P" -maxdepth 1 -type f -name '*.manifest' -exec cp {} "$R/" \; 2>/dev/null || true
+            sudo find "$P" \( -type f -o -type l \) | sed "s|^$P||" | sort | gzip > "$R/package-files.txt.gz"
+            echo "ROW package files: $(zcat "$R/package-files.txt.gz" | wc -l)"
+            echo "ROW manifest:"; cat "$P"/package.manifest 2>/dev/null | cut -c1-400 | head -60 || true
+          fi
+          ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" 2>/dev/null | tail -1 | awk '{print $2}')
+          if [ -n "$ip" ]; then
+            sudo apt-get install -y -qq nmap >/dev/null 2>&1 || true
+            echo "ROW port scan of $ip (1-10000)"; sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
+          fi
       - name: instance list and console (before the down step removes the instance)
         if: always()
         run: |
