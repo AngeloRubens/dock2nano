@@ -7,7 +7,7 @@ R={
  'supervisor-uses-the-prefix':[(L,'if b := path.Base(n); IsProcessSupervisor(b) {','if b := path.Base(n); ProcessSupervisors[b] {')],
  'script-is-told-by-exact-names':[(L,'if b := path.Base(n); ProcessSupervisors[b] {','if b := path.Base(n); IsProcessSupervisor(b) {')],
  'soft-advice':[(G,r'if trace.IsProcessSupervisor(name) && !trace.StartsEveryService(name) {','if false && trace.IsProcessSupervisor(name) && !trace.StartsEveryService(name) {')],
- 'strong-advice-only-for-the-top':[(G,r'if trace.StartsEveryService(name) {','if trace.IsProcessSupervisor(name) {')],
+ 'strong-advice-only-for-the-top':[(G,'if trace.IsProcessSupervisor(name) && !trace.StartsEveryService(name) {','if trace.IsProcessSupervisor(name) {')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:
