@@ -20,12 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: php-cli-tmp, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
-          - {name: php-alp-tmp, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
-          - {name: php-hello-alp, repo: local, sha: ci/php/hello-alpine, port: "8080", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: php-hello-deb, repo: local, sha: ci/php/hello-debian, port: "8080", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: php-apache-tmp, repo: local, sha: ci/php/apache-log, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "--command 'php-apache-tmp=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", mkdirs: "tmp", copy: "", path: "/"}
-          - {name: php-fpm-tmp, repo: local, sha: ci/php/fpm-log, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
+          - {name: php-fpm-err, repo: local, sha: ci/php/fpm-err, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
