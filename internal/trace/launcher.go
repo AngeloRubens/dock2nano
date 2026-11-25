@@ -545,7 +545,7 @@ func besideLabel(program string, argv []string) string {
 		for i := 0; i < len(args); i++ {
 			a := args[i]
 			switch {
-			case a == "-c" || a == "-e" || a == "-E" || a == "-p" || a == "--eval" || a == "--print":
+			case a == "--eval" || a == "--print" || (len(a) >= 2 && a[0] == '-' && a[1] != '-' && strings.ContainsRune("ceEp", rune(a[len(a)-1]))):
 				return label
 			case a == "-m" && i+1 < len(args):
 				return add(" -m ", args[i+1])
