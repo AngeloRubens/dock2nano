@@ -306,7 +306,7 @@ type run struct {
 	localNames bool
 	// hostname: the hostname the package was given.
 	hostname string
-	once       map[string]bool
+	once     map[string]bool
 
 	// created are the paths the program created while it ran.
 	created map[string]bool
