@@ -1237,7 +1237,7 @@ func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool
 		return false
 	}
 	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
-	if trace.ProcessSupervisors[name] {
+	if trace.IsProcessSupervisor(name) {
 		msg = name + " is a process supervisor: it starts every service of the image (a web server, an ssh server, a cron) as child processes, and nanos has no fork, so it cannot run on nanos. Run the one server you need as the only process: give it as command: (and entrypoint: when the entrypoint of the image does not run its arguments) in the compose file, or with --command SERVICE=CMD. A program that itself starts workers (php-fpm, nginx) needs its own single-process option; see docs/limits.md, Process supervisors"
 	}
 	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {

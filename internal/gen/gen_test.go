@@ -1528,6 +1528,11 @@ func TestSupervisorIsNamedAndNotPassedOver(t *testing.T) {
 	want1(t, mustGen(t, in3), "web", plan.Unsupported, "supervisor", "need a service each")
 }
 
+func TestAnS6ToolGetsTheProcessSupervisorAdvice(t *testing.T) {
+	in, _ := launcherInput(t, "/command/s6-supervise", []string{"s6-supervise", "web"}, "")
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "supervisor", "s6-supervise is a process supervisor")
+}
+
 func TestProcessSupervisorHasItsOwnAdvice(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "")
 	p := mustGen(t, in)
