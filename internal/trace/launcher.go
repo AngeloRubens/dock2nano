@@ -274,6 +274,13 @@ var supervisors = map[string]bool{
 // ProcessSupervisors are the supervisors that start every service of the image, not one program.
 var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsv": true, "runsvdir": true, "supervisord": true}
 
+// StartsEveryService says whether a supervisor is one that starts every service of the image (the
+// top of a tree: s6-svscan, runsvdir, supervisord), not a tool of a supervision suite that looks
+// after one service (runsv, s6-supervise) or does something else (s6-log, s6-setuidgid).
+func StartsEveryService(name string) bool {
+	return name == "s6-svscan" || name == "runsvdir" || name == "supervisord"
+}
+
 // IsProcessSupervisor says whether a file name is one of the process supervisors: the ones listed,
 // and every tool of s6 (s6-svscan, s6-supervise, s6-svc, ...), which images that are built on it
 // bring in dozens and which are all named alike. The rule is the one of isSupervisor in the survey
@@ -298,6 +305,9 @@ func Supervisor(program string, argv []string) string {
 	if len(argv) > 0 {
 		names = append(names, argv[0])
 	}
+	// what an interpreter runs (a script, a module) is told by the exact names only: a path that is
+	// an argument of a server (/etc/s6-overlay) does not make it a supervisor
+	var scripts []string
 	// the script an interpreter runs: the first argument that is not an option or the value of one
 	// (python3 -u -W ignore /usr/bin/supervisord)
 	// (python -c code: the code is not an absolute path, so it ends the search without a name)
@@ -315,7 +325,7 @@ scriptArg:
 			// python -m supervisor.supervisord: the module is the program
 			if i+1 < len(argv) {
 				mod := argv[i+1]
-				names = append(names, mod[strings.LastIndex(mod, ".")+1:])
+				scripts = append(scripts, mod[strings.LastIndex(mod, ".")+1:])
 			}
 			break scriptArg
 		case a == "-W" || a == "-X" || a == "-Q":
@@ -323,13 +333,18 @@ scriptArg:
 		case strings.HasPrefix(a, "-"):
 		default:
 			if strings.HasPrefix(a, "/") {
-				names = append(names, a)
+				scripts = append(scripts, a)
 			}
 			break scriptArg
 		}
 	}
 	for _, n := range names {
 		if b := path.Base(n); IsProcessSupervisor(b) {
+			return b
+		}
+	}
+	for _, n := range scripts {
+		if b := path.Base(n); ProcessSupervisors[b] {
 			return b
 		}
 	}
