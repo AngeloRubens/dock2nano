@@ -3615,6 +3615,37 @@ func TestObserveFileOpenedThroughALinkedDirectoryKeepsTheLink(t *testing.T) {
 	}
 }
 
+// A link at the top of the image (/lib -> usr/lib, the merged /usr of Debian, Ubuntu and RHEL images)
+// is not made in the package: ops reads a top-level entry that is a link to a directory as a file
+// ("cannot read file .../sysroot/lib: is a directory": wildfly, aspnetapp and btcpay, runs
+// 45623763472 and 45638309540). The directory is kept, with the files opened under its name.
+func TestObserveALinkAtTheTopOfTheImageIsNotMade(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/usr/lib/x86_64-linux-gnu/libm.so.6", O_RDONLY) = 9` + "\n"
+	s.d.files["/lib/x86_64-linux-gnu/libc.so.6"] = entry{data: "c"}
+	s.d.files["/lib"] = entry{link: "usr/lib"}
+	s.d.files["/usr/lib/x86_64-linux-gnu/libm.so.6"] = entry{data: "m"}
+	s.d.files["/usr/lib"] = entry{dir: true}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filepath.Join(res.Sysroot, "lib"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		t.Errorf("/lib is %v, want a directory: ops cannot read a link at the top of the package", info.Mode())
+	}
+	for _, f := range []string{"lib/x86_64-linux-gnu/libc.so.6", "usr/lib/x86_64-linux-gnu/libm.so.6"} {
+		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
 // rr (shlink) starts in /etc/shlink and goes to the folder of its config: the package has to start
 // it where it started, or it resolves its relative config path from the wrong place.
 func TestObserveWorkingDirectoryIsWhereTheProgramStartedNotWhereItEnded(t *testing.T) {
