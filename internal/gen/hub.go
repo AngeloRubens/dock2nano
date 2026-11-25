@@ -344,7 +344,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		dropped = fmt.Sprintf(" The %d %s seen when your image was observed do not apply to this build.", obs.Children, plural(obs.Children, "child process", "child processes"))
 	}
 	obs.Children, obs.ChildCalls = 0, nil
-	obs.PassedOver, obs.NotRun, obs.ChildLaunchers = nil, nil, nil
+	obs.PassedOver, obs.NotRun, obs.ChildLaunchers, obs.Beside = nil, nil, nil, nil
 	obs.StoppedEarly = false
 	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
 	obs.Vanished = 0
