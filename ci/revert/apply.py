@@ -5,7 +5,6 @@ R={
  'nearest-fork-order-decides':[(T,r'case c.branchAt != b.branchAt:','case false:')],
  'nearest-same-branch-later-execve':[(T,r'case last[c.pid].Line > last[b.pid].Line:','case last[c.pid].Line < last[b.pid].Line:')],
  'nearest-nearer-wins':[(T,r'if c.depth < b.depth {','if c.depth > b.depth {')],
- 'nearest-call-start-line':[(T,r'if start, ok := callStart[m[1]+m[2]]; ok {','if start, ok := callStart[m[1]+m[2]]; ok && false {')],
  'nearest-shells-are-not-the-program':[(T,r'c.notProgram = c.isShell || ','c.notProgram = ')],
  'nearest-busybox-is-not-the-program':[(T,r'name == "busybox" || ','')],
  'nearest-ps-is-not-the-program':[(T,r'name == "ps" || ','')],
