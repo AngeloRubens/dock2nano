@@ -1144,11 +1144,20 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 		g.add(s.Name, plan.Unsupported, "also ran beside the program", fmt.Sprintf("the image starts the program under a shell that ran more than one program, and the observation took the one nearest to the shell (the branch the shell forked last, at equal distance) for the program. These ran beside it and are not run by the package: %s. If one of them is the program, say it with command: or --command; a worker and a server are two services.%s %s", listed(distinctCounted(obs.Beside)), pipelineSaid(obs.BesideNear), where))
 	}
 	if len(obs.BeforeWaiter) > 0 {
-		g.add(s.Name, plan.Unsupported, "program is a waiter", fmt.Sprintf("the program the observation found is %s, a command that only waits or copies: the shell of the image started the programs below and then ran it as its last command, and the package would run the wait, not them: %s. The server is probably one of them: say it with command: or --command. %s", path.Base(obs.Program), listed(distinctCounted(obs.BeforeWaiter)), where))
+		g.add(s.Name, plan.Unsupported, "program is a waiter", fmt.Sprintf("the program the observation found is %s, a command that only waits or copies: the shell of the image started the programs below and then ran it as its last command, and the package would run the wait, not them: %s. The server is probably one of them: say it with command: or --command. %s", waiterName(obs), listed(distinctCounted(obs.BeforeWaiter)), where))
 	}
 	if len(obs.NotRun) > 0 {
 		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
 	}
+}
+
+// waiterName is the name of the program as the image called it (argv[0]), which is the applet when
+// the file is busybox.
+func waiterName(obs *observe.Result) string {
+	if len(obs.Argv) > 0 && obs.Argv[0] != "" {
+		return path.Base(obs.Argv[0])
+	}
+	return path.Base(obs.Program)
 }
 
 // pipelineSaid is the sentence about a pipeline, when one of the programs beside the program ran at the same distance: a
