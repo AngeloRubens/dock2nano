@@ -315,8 +315,6 @@ type run struct {
 	created map[string]bool
 	// gone are the created paths that docker cp could not find.
 	gone map[string]bool
-	// links is where each link that was met leads to (cleaned, absolute), by the path it was met at.
-	links map[string]string
 	// notCarried counts the paths that could not be carried and are warned about.
 	notCarried int
 	// imageValues are the values of the environment of the image, which redact leaves alone.
@@ -535,7 +533,7 @@ func Observe(ctx context.Context, d Docker, o Options) (res *Result, err error) 
 	if err := checkBinds(o.Binds); err != nil {
 		return nil, err
 	}
-	r := &run{d: d, o: o, once: map[string]bool{}, created: map[string]bool{}, gone: map[string]bool{}, links: map[string]string{}}
+	r := &run{d: d, o: o, once: map[string]bool{}, created: map[string]bool{}, gone: map[string]bool{}}
 
 	sysroot, err := os.MkdirTemp("", "dock2nano-sysroot-")
 	if err != nil {
@@ -946,13 +944,6 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	}
 	// the file the program was started through can be a link, and a program finds its libraries
 	// beside the file it really is
-	if exe == "" {
-		// /proc could not be read (an image without cat and readlink, a distroless one): the links
-		// that were met on the way to the program tell where it really is. java of such an image is
-		// /usr/bin/java -> /etc/alternatives/java -> /usr/lib/jvm/.../bin/java, and the JVM finds
-		// libjli.so at ../lib of the last, not of the first.
-		exe = r.endOfLinks(program)
-	}
 	if exe != "" && exe != program {
 		if _, err := os.Stat(filepath.Join(sysroot, filepath.FromSlash(exe))); err == nil {
 			program = exe
@@ -1726,7 +1717,6 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 		switch got.kind {
 		case kindLink:
 			link := trace.ResolveLink(p, got.link)
-			r.links[p] = link
 			if !strings.HasPrefix(got.link, "/") {
 				relative[p] = got.link
 			}
@@ -1770,19 +1760,6 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 		}
 	}
 	return nil
-}
-
-// endOfLinks follows the links that copyTouched met from p, and gives the path where they end, or p
-// itself when p is not a link. It stops at 40 links, as the kernel does.
-func (r *run) endOfLinks(p string) string {
-	for i := 0; i < 40; i++ {
-		next, ok := r.links[p]
-		if !ok {
-			return p
-		}
-		p = next
-	}
-	return p
 }
 
 // sleepContext waits d or until ctx ends.
