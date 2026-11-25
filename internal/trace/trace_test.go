@@ -1022,6 +1022,21 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/opt/java/bin/java", ["java", "-jar", "x"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "9", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "x"}, Line: 5}, true},
+		{"a sleep that started after the server (measured: the loop forks first, the server is exec'd later) is not the program", `1     execve("/bin/sh", ["sh", "-c", "(while :; do sleep 60; done) & python3 -m http.server & wait"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD <unfinished ...>
+11    execve("/usr/local/bin/python3", ["python3", "-m", "http.server"], 0x7ffd1 /* 1 vars */ <unfinished ...>
+1     <... clone resumed>) = 11
+11    <... execve resumed>) = 0
+10    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
+12    execve("/bin/sleep", ["sleep", "60"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "11", Path: "/usr/local/bin/python3", Argv: []string{"python3", "-m", "http.server"}, Line: 3}, true},
+		{"tail beside the server is not the program", `1     execve("/bin/sh", ["sh", "-c", "server & tail -f /dev/null"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/tail", ["tail", "-f", "/dev/null"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2}, true},
 		{"a server started through a forked subshell is as near as one started directly", `1     execve("/bin/sh", ["sh", "-c", "sleep 100 & (java -jar x &)"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/bin/sleep", ["sleep", "100"], 0x7ffd1 /* 1 vars */) = 0

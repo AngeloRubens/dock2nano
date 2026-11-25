@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: ["nearest-rule-off", "nearest-latest-wins-at-same-depth", "nearest-nearest-wins", "nearest-shells-are-not-the-program", "nearest-ps-is-not-the-program", "nearest-supervisors-are-not-the-program", "nearest-only-for-a-shell", "nearest-subshell-is-the-shell", "nearest-exited-are-not-candidates"]
+        name: ["nearest-rule-off", "nearest-latest-wins-at-same-depth", "nearest-nearest-wins", "nearest-shells-are-not-the-program", "nearest-ps-is-not-the-program", "nearest-supervisors-are-not-the-program", "nearest-only-for-a-shell", "nearest-subshell-is-the-shell", "nearest-exited-are-not-candidates", "nearest-sleep-is-not-the-program", "nearest-tail-is-not-the-program"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

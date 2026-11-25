@@ -10,6 +10,8 @@ R={
  'nearest-only-for-a-shell':[(T,'len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {','len(children) > 1 && (shells[path.Base(last[process].Path)] || isInit) {')],
  'nearest-subshell-is-the-shell':[(T,'			for hops := 0; hops < 64 && !below; hops++ {\n				up := starter(x)','			for hops := 0; hops < 64 && !below; hops++ {\n				up := parent[x]')],
  'nearest-exited-are-not-candidates':[(T,'		for _, candidate := range running {\n			if candidate == shell {','		for _, candidate := range append(running, "9") {\n			if _, ok := last[candidate]; !ok || candidate == shell {')],
+ 'nearest-sleep-is-not-the-program':[(T,'name == "sleep" || ','')],
+ 'nearest-tail-is-not-the-program':[(T,'name == "tail" || ','')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:
