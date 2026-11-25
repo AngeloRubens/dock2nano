@@ -271,7 +271,9 @@ var supervisors = map[string]bool{
 	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
 }
 
-// ProcessSupervisors are the supervisors that start every service of the image, not one program.
+// ProcessSupervisors are the names, apart from the s6- prefix, of the programs of a process
+// supervision suite: the ones that start every service of the image (s6-svscan, runsvdir,
+// supervisord, see StartsEveryService) and runsv, which looks after one service.
 var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsv": true, "runsvdir": true, "supervisord": true}
 
 // StartsEveryService says whether a supervisor is one that starts every service of the image (the
