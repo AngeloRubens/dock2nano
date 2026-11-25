@@ -1069,14 +1069,14 @@ func TestFinalExec(t *testing.T) {
 8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/bin/resolver", ["resolver"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "8", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 4}, true},
-		{"nested shells count as steps: the nearest program wins", `1     execve("/bin/sh", ["sh", "-c", "(sh -c deep) & sleep 100"], 0x7ffd1 /* 1 vars */) = 0
+		{"nested shells count as steps: the nearest program wins", `1     execve("/bin/sh", ["sh", "-c", "(sh -c deep) & worker"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/bin/sh", ["sh", "-c", "deep"], 0x7ffd1 /* 1 vars */) = 0
 7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/bin/deep", ["deep"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
-9     execve("/bin/sleep", ["sleep", "100"], 0x7ffd1 /* 1 vars */) = 0
-`, Exec{Pid: "9", Path: "/bin/sleep", Argv: []string{"sleep", "100"}, Line: 6}, true},
+9     execve("/usr/bin/worker", ["worker"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "9", Path: "/usr/bin/worker", Argv: []string{"worker"}, Line: 6}, true},
 		{"nested shells at the same depth: the later one", `1     execve("/bin/sh", ["sh", "-c", "x"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/bin/sh", ["sh", "-c", "a"], 0x7ffd1 /* 1 vars */) = 0
