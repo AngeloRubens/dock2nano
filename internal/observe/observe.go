@@ -217,6 +217,15 @@ type Result struct {
 	// launcher was passed over.
 	PassedOver []string
 
+	// Beside are the labels of the programs that ran under the shell the observation passed over for
+	// the program, were not chosen and are not below the program ("celery worker" of "celery worker
+	// & gunicorn app"). The package does not run them.
+	Beside []string
+	// BesideNear: one of them ran at the same distance from the shell as the program (see trace.Exec).
+	BesideNear bool
+	// BeforeWaiter: the program is a command that only waits or copies, and these ran under it.
+	BeforeWaiter []string
+
 	// NotRun are the labels of the commands that ran before the program or beside it, and ended
 	// ("npm (script "migrate")" of "npm run migrate && npm start"): the package does not run them.
 	NotRun []string
@@ -965,6 +974,9 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		Vanished:           len(r.gone),
 		PassedOver:         passedOver,
 		NotRun:             final.NotRun,
+		Beside:             final.Beside,
+		BesideNear:         final.BesideNear,
+		BeforeWaiter:       final.BeforeWaiter,
 		ChildLaunchers:     final.ChildLaunchers,
 		Children:           len(children),
 		ChildCalls:         childCalls,

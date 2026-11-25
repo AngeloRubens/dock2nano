@@ -217,6 +217,11 @@ func TestSupervisor(t *testing.T) {
 		{"python -c with an argument that looks like a script", "/usr/bin/python3", []string{"python3", "-c", "import x", "/usr/bin/supervisord"}, ""},
 		{"python -m of another module", "/usr/bin/python3", []string{"python3", "-m", "mod", "/x/supervisord"}, ""},
 		{"python -m of the module of supervisord", "/usr/bin/python3", []string{"python3", "-m", "supervisor.supervisord", "-n"}, "supervisord"},
+		{"the arguments of a program that is not an interpreter are its own: a path called runsv", "/usr/local/bin/myserver", []string{"myserver", "/etc/sv/runsv"}, ""},
+		{"tail of a file called runsv", "/usr/bin/tail", []string{"tail", "-f", "/var/log/runsv"}, ""},
+		{"myserver given /etc/supervisord", "/usr/local/bin/myserver", []string{"myserver", "/etc/supervisord"}, ""},
+		{"python3 runs the script supervisord", "/usr/bin/python3", []string{"python3", "/usr/bin/supervisord"}, "supervisord"},
+		{"a shell runs the script supervisord", "/bin/sh", []string{"sh", "/usr/bin/supervisord"}, "supervisord"},
 		{"a python program that is not a supervisor", "/usr/bin/python3", []string{"python3", "/app/main.py"}, ""},
 		{"a program of the user called nodemon in a bin directory of the user", "/app/bin/nodemon", []string{"nodemon"}, ""},
 		{"nodemon bin", "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "nodemon"},
@@ -496,5 +501,60 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 				t.Errorf("FinalExec = %+v, %v; want %+v", got, found, tt.want)
 			}
 		})
+	}
+}
+
+func TestBesideLabel(t *testing.T) {
+	for _, tt := range []struct {
+		program string
+		argv    []string
+		want    string
+	}{
+		{"/usr/local/bin/python3.12", []string{"python3", "app.py"}, "python3 app.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-u", "-W", "ignore", "/srv/app/worker.py", "--secret", "x"}, "python3 worker.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-m", "celery", "worker"}, "python3 -m celery"},
+		{"/opt/java/bin/java", []string{"java", "-Xmx1g", "-jar", "/opt/app.jar", "--port=1"}, "java -jar app.jar"},
+		{"/usr/local/bin/node", []string{"node", "--require", "dotenv", "server.js"}, "node server.js"},
+		{"/usr/bin/nginx", []string{"nginx", "-g", "daemon off;"}, "nginx"},
+		{"/usr/bin/python3", []string{"python3"}, "python3"},
+		// the code of -c, -e, -p is not a name
+		{"/usr/local/bin/python3.12", []string{"python3", "-c", "import app; app.run(token='s3cr3t')"}, "python3"},
+		{"/usr/local/bin/node", []string{"node", "-e", "require('x')('s3cr3t')"}, "node"},
+		{"/usr/bin/ruby", []string{"ruby", "-e", "puts 's3cr3t'"}, "ruby"},
+		{"/usr/bin/perl", []string{"perl", "-E", "say 's3cr3t'"}, "perl"},
+		{"/usr/bin/perl", []string{"perl", "-pe", "s/a/b/"}, "perl"},
+		{"/usr/local/bin/node", []string{"node", "--eval", "x"}, "node"},
+		{"/usr/local/bin/node", []string{"node", "--print", "x"}, "node"},
+		// the value of an option is not the script
+		{"/usr/local/bin/php", []string{"php", "-S", "0.0.0.0:80", "-t", "/var/www"}, "php"},
+		{"/usr/local/bin/php", []string{"php", "-S", "0.0.0.0:80", "-t", "/var/www", "router.php"}, "php router.php"},
+		{"/usr/bin/perl", []string{"perl", "-I", "/lib", "x.pl"}, "perl x.pl"},
+		{"/usr/bin/perl", []string{"perl", "-i", ".bak", "x.pl"}, "perl x.pl"},
+		{"/usr/bin/python2", []string{"python2", "-Q", "new", "x.py"}, "python2 x.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-X", "dev", "w.py"}, "python3 w.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-W", "ignore", "w.py"}, "python3 w.py"},
+		{"/usr/local/bin/node", []string{"node", "-r", "dotenv", "s.js"}, "node s.js"},
+		{"/usr/local/bin/node", []string{"node", "--require", "dotenv", "s.js"}, "node s.js"},
+		// the subcommand run of deno and bun
+		{"/usr/local/bin/deno", []string{"deno", "run", "main.ts"}, "deno main.ts"},
+		{"/usr/local/bin/bun", []string{"bun", "run", "start"}, "bun start"},
+		// a name with a space or a control character is not added
+		{"/usr/bin/python3", []string{"python3", "my script.py"}, "python3"},
+		{"/usr/bin/python3", []string{"python3", "x\ty.py"}, "python3"},
+	} {
+		if got := besideLabel(tt.program, tt.argv); got != tt.want {
+			t.Errorf("besideLabel(%q, %q) = %q, want %q", tt.program, tt.argv, got, tt.want)
+		}
+	}
+}
+
+func TestLabelKnowsTheOtherShells(t *testing.T) {
+	for _, sh := range []string{"zsh", "ksh", "mksh"} {
+		if got := Label("/bin/"+sh, []string{sh, "-c", "x"}); got != sh+" -c" {
+			t.Errorf("Label of %s -c = %q", sh, got)
+		}
+		if got := Label("/bin/"+sh, []string{sh, "run.sh"}); got != sh+" (script file)" {
+			t.Errorf("Label of %s script = %q", sh, got)
+		}
 	}
 }

@@ -3751,3 +3751,42 @@ func TestFetchDoesNotWriteThroughALinkOutOfTheSysroot(t *testing.T) {
 		t.Errorf("a directory was made on this machine")
 	}
 }
+
+// the programs that ran beside the one chosen under a shell are carried to the report
+func TestObserveCarriesTheProgramsBesideTheOneChosenUnderAShell(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = `10 execve("/bin/sh", ["sh", "-c", "worker & app"], 0x7ffd /* 5 vars */) = 0
+10 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
+12 execve("/usr/bin/worker", ["worker"], 0x7ffd /* 4 vars */) = 0
+10 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 11
+11 execve("/usr/bin/app", ["app", "--serve"], 0x7ffd /* 4 vars */) = 0
+`
+	s.d.files["/usr/bin/worker"] = entry{data: "w", mode: 0755}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/app")
+	equal(t, "beside", res.Beside, []string{"worker"})
+	// two programs at the same distance: the program may be the reader of a pipeline
+	equal(t, "beside near", res.BesideNear, true)
+}
+
+// the shell ran a tail as its last command in its own process: the program is the wait, and what
+// ran under it is carried to the report
+func TestObserveCarriesWhatRanUnderAWaiterThatIsTheProgram(t *testing.T) {
+	s := newScene(t)
+	s.d.notRunning = true
+	s.d.traceTxt = `10 execve("/bin/sh", ["sh", "-c", "app & tail -f /dev/null"], 0x7ffd /* 5 vars */) = 0
+10 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
+12 execve("/usr/bin/app", ["app"], 0x7ffd /* 4 vars */) = 0
+10 execve("/usr/bin/tail", ["tail", "-f", "/dev/null"], 0x7ffd /* 4 vars */) = 0
+`
+	s.d.files["/usr/bin/tail"] = entry{data: "t", mode: 0755}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/tail")
+	equal(t, "before the waiter", res.BeforeWaiter, []string{"app"})
+}

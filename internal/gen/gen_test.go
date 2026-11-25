@@ -1701,6 +1701,40 @@ func TestPassedLauncherNames(t *testing.T) {
 	}
 }
 
+func TestProgramsBesideTheProgramAreNamed(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/gunicorn", []string{"gunicorn", "app"}, "")
+	in.Services["web"].Observed.Beside = []string{"celery", "celery", "tail"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "celery (x2), tail")
+	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "are not run by the package")
+	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "the branch the shell forked last, at equal distance")
+	in2, _ := launcherInput(t, "/usr/bin/gunicorn", []string{"gunicorn", "app"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "also ran beside the program")
+}
+
+func TestAWaiterAsTheProgramIsReported(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/tail", []string{"tail", "-f", "/dev/null"}, "")
+	in.Services["web"].Observed.BeforeWaiter = []string{"nginx", "php-fpm"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail")
+	want1(t, p, "web", plan.Unsupported, "program is a waiter", "nginx, php-fpm")
+	// the applet of busybox is named by argv[0], not by the file
+	in3, _ := launcherInput(t, "/bin/busybox", []string{"tail", "-f", "/dev/null"}, "")
+	in3.Services["web"].Observed.BeforeWaiter = []string{"nginx"}
+	want1(t, mustGen(t, in3), "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail,")
+	in2, _ := launcherInput(t, "/usr/bin/tail", []string{"tail", "-f", "/dev/null"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "program is a waiter")
+}
+
+func TestBesideSaysThatThePipelineReaderMayHaveBeenTaken(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/myfilter", []string{"myfilter"}, "")
+	o := in.Services["web"].Observed
+	o.Beside = []string{"java -jar app.jar"}
+	wantNoText(t, mustGen(t, in), "web", plan.Unsupported, "also ran beside the program", "reader of a pipeline")
+	o.BesideNear = true
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "also ran beside the program", "the program may be the reader of a pipeline")
+}
+
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {
 	labels := []string{`npm (script "start")`}
 	in, _ := launcherInput(t, "/entrypoint.sh", []string{"/entrypoint.sh"}, "")

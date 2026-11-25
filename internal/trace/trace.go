@@ -896,6 +896,21 @@ type Exec struct {
 	// last program it executed. That is not handled.
 	NotRun []string
 
+	// Beside are the labels (see Label) of the programs that ran under the shell that was passed over
+	// for the program, were not chosen and are not below it: "celery worker" of
+	// "celery worker & gunicorn app". The package does not run them.
+	Beside []string
+
+	// BesideNear says that one of the Beside programs ran at the same distance from the shell as the
+	// program: the program was chosen as the one forked last, and a pipeline ("a | b") is not told
+	// from "a & b", so it may be the reader of a pipeline.
+	BesideNear bool
+
+	// BeforeWaiter are the labels of the programs that ran under the process of the program when the
+	// program is a command that only waits or copies (tail -f, sleep, tee): the shell had started
+	// them and then executed the wait in its own process, as the last command of -c.
+	BeforeWaiter []string
+
 	// ChildLaunchers are the labels of the launchers that the program started as children: a script
 	// of the image that starts npm (a script is not told from a program by its name, so it stays the
 	// program).
@@ -973,6 +988,12 @@ func IsInit(p string) bool { return initName.MatchString(path.Base(p)) }
 // of another running one (pid reuse can make that circular), the oldest is taken. When none is
 // running, the one started last is taken. When nothing was started, found is false.
 //
+// A shell that has several running children (a server and what was started beside it:
+// "(while :; do sleep 60; done) & server", "worker & server") is passed over for the nearest of
+// them, by the rule explained at nearestProgram below: the nearest to the shell that is not a
+// shell, a supervisor or a command that only waits or copies, and of those at the same distance the
+// one in the branch the shell forked last. The others are in Exec.Beside.
+//
 // The command line and the environment of the running program are better read from
 // /proc/<pid>/cmdline and /proc/<pid>/environ by the caller, except that a program may rewrite its
 // command line (nginx does): Argv here is what execve was called with. The environment is not kept.
@@ -988,10 +1009,17 @@ func FinalExec(trace []byte) (Exec, bool) {
 	gone := map[string]bool{}
 	waiting := map[string]before{}
 	parent := map[string]string{}
+	// forkedAt is the line of the call that made each process (for a clone that strace cut in two,
+	// the resumed line: a process makes its calls one after the other, so the order of the forks of
+	// one parent is the order of these lines)
+	forkedAt := map[string]int{}
+	var beside []string
+	besideNear := false
 
 	for i, text := range strings.Split(string(trace), "\n") {
 		if m := forkLine.FindStringSubmatch(text); m != nil {
 			parent[m[3]] = m[1] + m[2]
+			forkedAt[m[3]] = i
 		} else if m := supersededLine.FindStringSubmatch(text); m != nil {
 			// "N +++ superseded by execve in pid T +++": the thread T called execve and the process goes
 			// on as N, so what T had is N's now
@@ -1067,6 +1095,9 @@ func FinalExec(trace []byte) (Exec, bool) {
 	if len(all) == 0 {
 		return Exec{Line: -1}, false
 	}
+	// map order is not an order: the processes are taken in the order of their pids as text
+	sort.Strings(all)
+	sort.Strings(running)
 	newest := func(pool []string) string {
 		best := pool[0]
 		for _, process := range pool[1:] {
@@ -1106,8 +1137,127 @@ func FinalExec(trace []byte) (Exec, bool) {
 	}
 	// A shell that runs the program as a child (the shell form of CMD, "sh -c java -jar x") is not
 	// the program: when it has exactly one running child that started a program, that child is.
-	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
+	// commands that only wait, and commands that only copy what they are given (the reader of a
+	// pipeline, a log writer): never the program of an image
+	waiters := map[string]bool{"sleep": true, "tail": true, "watch": true}
+	copiers := map[string]bool{"tee": true, "cat": true, "logger": true, "rotatelogs": true, "cronolog": true, "svlogd": true, "multilog": true,
+		"grep": true, "egrep": true, "sed": true, "awk": true, "gawk": true, "mawk": true, "cut": true, "tr": true, "ts": true, "jq": true, "gzip": true, "sort": true, "uniq": true}
+	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true, "zsh": true, "ksh": true, "mksh": true}
 	var recorded, pending []string
+	// nearestProgram picks, among the processes that run under the shell, the one nearest to it that
+	// is not itself a shell, a supervisor, ps, busybox, or a command that only waits (sleep, tail,
+	// watch) or only copies what it is given (tee, cat, logger, rotatelogs, cronolog, svlogd,
+	// multilog: the reader of a pipeline "server | tee log"), and gives the others that run under
+	// the shell and are not below the one it picked (they are not run by the package, and the report
+	// says so). What is below the one picked is its own (a name resolver of a runtime, plugins it
+	// installs). What is below a supervisor is the supervisor's own too: when the supervisor is all
+	// there is (a supervisor beside a tail), the supervisor is the program, as it is for a shell
+	// that has only it.
+	//
+	// The distance counts the processes that executed a program between the shell and the process,
+	// so a subshell that only forked (the loop of "(while :; do sleep 60; done) & server") is the
+	// shell. At the same distance the process whose fork is the later one wins, comparing the lines
+	// of the forks on the way down from the shell, so a setup step beside the server, which comes
+	// first on the command line, loses. Which of two processes calls execve first is a race of the
+	// start and decides nothing. This is the rule of mainProgram of the survey fork of ops, which
+	// reads a snapshot of "docker top"; here it reads the trace. A pipeline cannot be told from "a &
+	// b" by the calls that are traced (the pipe and dup2 calls are not), so the readers of a
+	// pipeline are kept out by name, and the others are not.
+	nearestProgram := func(shell string) (string, []string, bool) {
+		type candidate struct {
+			pid        string
+			depth      int
+			path       []int
+			chain      []string
+			isShell    bool
+			notProgram bool
+			supervisor bool
+			under      bool
+		}
+		var found []candidate
+		for _, pid := range running {
+			if pid == shell {
+				continue
+			}
+			c := candidate{pid: pid}
+			below, x := false, pid
+			for hops := 0; hops < 64 && !below; hops++ {
+				up := starter(x)
+				if up == "" {
+					break
+				}
+				c.depth++
+				below = up == shell
+				c.chain = append(c.chain, up)
+				x = up
+			}
+			if !below {
+				continue
+			}
+			// the lines of the forks on the way down from the shell, processes that only forked included
+			for x, hops := pid, 0; x != "" && x != shell && hops < 64; x, hops = parent[x], hops+1 {
+				c.path = append([]int{forkedAt[x]}, c.path...)
+			}
+			e := last[pid]
+			name := path.Base(e.Path)
+			interp, _ := interpreterOf(e.Path, e.Argv)
+			c.isShell = shells[interp]
+			c.supervisor = Supervisor(e.Path, e.Argv) != ""
+			c.notProgram = c.isShell || waiters[name] || copiers[name] || name == "busybox" || name == "ps"
+			for _, up := range c.chain {
+				if up != shell && Supervisor(last[up].Path, last[up].Argv) != "" {
+					c.under = true
+				}
+			}
+			found = append(found, c)
+		}
+		// a is later than b: where the forks on the way down differ, the later fork. Two processes at
+		// the same distance have different forks on the way (one would be below the other
+		// otherwise), and the line of the execve, which is a race of the start, is never used.
+		later := func(a, b candidate) bool {
+			for k := 0; k < len(a.path) && k < len(b.path); k++ {
+				if a.path[k] != b.path[k] {
+					return a.path[k] > b.path[k]
+				}
+			}
+			return false
+		}
+		best := -1
+		for tier := 0; tier < 2 && best < 0; tier++ {
+			for k, c := range found {
+				if c.under {
+					continue
+				}
+				if tier == 0 && (c.notProgram || c.supervisor) || tier == 1 && (!c.supervisor || c.isShell) {
+					continue
+				}
+				if best < 0 || c.depth < found[best].depth || (c.depth == found[best].depth && later(c, found[best])) {
+					best = k
+				}
+			}
+		}
+		if best < 0 {
+			return "", nil, false
+		}
+		chosen := found[best].pid
+		// another program at the same distance: the chosen one is the one forked last, which is also
+		// what the reader of a pipeline is
+		near := false
+		for k, c := range found {
+			if k != best && !c.notProgram && !c.under && c.depth == found[best].depth {
+				near = true
+			}
+		}
+		var others []string
+		for k, c := range found {
+			if k == best || c.isShell || c.under || slices.Contains(c.chain, chosen) {
+				continue
+			}
+			others = append(others, c.pid)
+		}
+		sort.Slice(others, func(i, j int) bool { return last[others[i]].Line < last[others[j]].Line })
+		return chosen, others, near
+	}
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
@@ -1119,6 +1269,19 @@ func FinalExec(trace []byte) (Exec, bool) {
 			for _, other := range running {
 				if other != process && starter(other) == process {
 					children = append(children, other)
+				}
+			}
+			if len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {
+				// Several things run under a shell: a server and what was started beside it (a loop
+				// that sleeps, a second server). The program is the one nearest the shell.
+				if program, others, near := nearestProgram(process); program != "" {
+					children = []string{program}
+					if near {
+						besideNear = true
+					}
+					for _, o := range others {
+						beside = append(beside, besideLabel(last[o].Path, last[o].Argv))
+					}
 				}
 			}
 			if len(children) != 1 {
@@ -1154,6 +1317,35 @@ func FinalExec(trace []byte) (Exec, bool) {
 	}
 	finalPid := descend(newest(roots))
 	final := last[finalPid]
+	final.Beside = beside
+	final.BesideNear = besideNear
+	if name := path.Base(final.Path); waiters[name] || copiers[name] {
+		// The program is a command that only waits or copies: the shell executed it in its own process
+		// as the last command of -c, after it had started the rest. What ran before it is not the
+		// program the rule can see, and the package would run the wait.
+		var under []string
+		for _, pid := range running {
+			if pid == finalPid {
+				continue
+			}
+			x, below := pid, false
+			for hops := 0; hops < 64 && !below; hops++ {
+				up := starter(x)
+				if up == "" {
+					break
+				}
+				below = up == finalPid
+				x = up
+			}
+			if below {
+				under = append(under, pid)
+			}
+		}
+		sort.Slice(under, func(i, j int) bool { return last[under[i]].Line < last[under[j]].Line })
+		for _, pid := range under {
+			final.BeforeWaiter = append(final.BeforeWaiter, besideLabel(last[pid].Path, last[pid].Argv))
+		}
+	}
 	onChain := map[string]bool{finalPid: true}
 	for _, process := range recorded {
 		onChain[process] = true
