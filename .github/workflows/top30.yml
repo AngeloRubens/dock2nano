@@ -20,17 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "--command 'wildfly=/opt/java/openjdk/bin/java -D[Standalone] @/opt/jboss/wildfly/bin/jdk.serialFilter -Xms64m -Xmx512m -Djava.net.preferIPv4Stack=true -Djboss.modules.system.pkgs=org.jboss.byteman -Djava.awt.headless=true --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.ldap=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.url.ldap=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.url.ldaps=ALL-UNNAMED --add-exports=jdk.naming.dns/com.sun.jndi.dns=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.security=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/sun.reflect.annotation=ALL-UNNAMED --add-opens=java.management/javax.management=ALL-UNNAMED --add-opens=java.naming/javax.naming=ALL-UNNAMED -Dorg.jboss.boot.log.file=/opt/jboss/wildfly/standalone/log/server.log -Dlogging.configuration=file:/opt/jboss/wildfly/standalone/configuration/logging.properties -jar /opt/jboss/wildfly/jboss-modules.jar -mp /opt/jboss/wildfly/modules org.jboss.as.standalone -Djboss.home.dir=/opt/jboss/wildfly -Djboss.server.base.dir=/opt/jboss/wildfly/standalone -b 0.0.0.0'", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-allof-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-allof-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-allof-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-gcc0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-gcc0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-gcc0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-tc0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-tc0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-tc0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: btcpay-allof, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: openliberty-ka, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: openliberty-kb, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: openliberty-kc, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: petclinic-t, repo: spring-petclinic/spring-petclinic-kotlin, sha: 9823b3aa97988854668e608750db88502775caa7, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "no", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: helidon-t, repo: helidon-io/helidon-examples, sha: 1ea90c465d86828922ae0ad04a06bbf8b43ef5d6, dockerfile: examples/quickstarts/helidon-quickstart-se/Dockerfile, context: "examples/quickstarts/helidon-quickstart-se", port: "8080", probe: http, kvm: "no", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/greet", jq: ""}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -105,6 +99,7 @@ jobs:
           XMKDIRS: ${{ matrix.mkdirs }}
           XCOPY: ${{ matrix.copy }}
           XPATH: ${{ matrix.path }}
+          XJQ: ${{ matrix.jq }}
           KVM: ${{ matrix.kvm }}
         run: |
           set -u
@@ -190,6 +185,11 @@ jobs:
               for d in $XCOPY; do mkdir -p "$P/sysroot$(dirname "$d")" && docker cp "cp-$NAME:$d" "$P/sysroot$(dirname "$d")/" && echo "ROW copied $d from the image into the sysroot (measurement): $(du -sh "$P/sysroot$d" | cut -f1)"; done
             done
             docker rm -f "cp-$NAME" > /dev/null
+          fi
+          if [ -n "${XJQ:-}" ]; then
+            for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
+              jq "$XJQ" "$mf" > "$mf.new" && mv "$mf.new" "$mf" && echo "ROW applied to $mf (measurement): $XJQ" && jq -c .ManifestPassthrough "$mf"
+            done
           fi
           if [ -n "${XENV:-}" ]; then
             for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
