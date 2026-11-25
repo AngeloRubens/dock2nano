@@ -1008,12 +1008,83 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "a"}, Line: 0}, true},
-		{"a shell with two running children stays", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
+		// changed with the nearest-program rule: before, a shell with two running children stayed the program
+		{"a shell with two running children at the same depth: the one started last", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
-`, Exec{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "a & b"}, Line: 0}, true},
+`, Exec{Pid: "8", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 4}, true},
+		{"a sleeping loop in a subshell beside the server", `1     execve("/bin/sh", ["sh", "-c", "(while :; do sleep 60; done) & java -jar x"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/bin/sleep", ["sleep", "60"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/opt/java/bin/java", ["java", "-jar", "x"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "9", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "x"}, Line: 5}, true},
+		{"the server nearer to the shell than a program that was started later below a subshell", `1     execve("/bin/sh", ["sh", "-c", "java -jar x & (cron)"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/opt/java/bin/java", ["java", "-jar", "x"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/bin/sh", ["sh", "-c", "cron"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/sbin/cron", ["cron"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "x"}, Line: 2}, true},
+		{"a setup step that started last and ended is not the program", `1     execve("/bin/sh", ["sh", "-c", "a & b & setup"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/setup", ["setup"], 0x7ffd1 /* 1 vars */) = 0
+9     +++ exited with 0 +++
+`, Exec{Pid: "8", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 4}, true},
+		{"what the chosen program started stays its own", `1     execve("/bin/sh", ["sh", "-c", "sleep 100 & server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sleep", ["sleep", "100"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/resolver", ["resolver"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 4}, true},
+		{"nested shells count as steps: the nearest program wins", `1     execve("/bin/sh", ["sh", "-c", "(sh -c deep) & sleep 100"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "deep"], 0x7ffd1 /* 1 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/deep", ["deep"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/bin/sleep", ["sleep", "100"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "9", Path: "/bin/sleep", Argv: []string{"sleep", "100"}, Line: 6}, true},
+		{"nested shells at the same depth: the later one", `1     execve("/bin/sh", ["sh", "-c", "x"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "a"], 0x7ffd1 /* 1 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/bin/sh", ["sh", "-c", "b"], 0x7ffd1 /* 1 vars */) = 0
+9     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
+10    execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "10", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 8}, true},
+		{"a supervisor or ps beside the server is not the program", `1     execve("/bin/sh", ["sh", "-c", "server & nodemon & ps"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/local/bin/nodemon", ["nodemon"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/bin/ps", ["ps"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2}, true},
+		{"two shells and nothing else: the shell stays", `1     execve("/bin/sh", ["sh", "-c", "(a) & (b)"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sh", ["sh", "-c", "a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/bin/sh", ["sh", "-c", "b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/bin/sh", Argv: []string{"sh", "-c", "(a) & (b)"}, Line: 0}, true},
+		{"an init with two running children stays (only one child is passed over)", `1     execve("/sbin/tini", ["/sbin/tini", "--", "a"], 0x7ffd1 /* 3 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/sbin/tini", Argv: []string{"/sbin/tini", "--", "a"}, Line: 0}, true},
 		{"a shell whose child ended stays", `1     execve("/bin/sh", ["sh", "-c", "date; sleep 1000"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/bin/date", ["date"], 0x7ffd1 /* 1 vars */) = 0

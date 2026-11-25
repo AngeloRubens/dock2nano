@@ -1108,6 +1108,44 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// the program: when it has exactly one running child that started a program, that child is.
 	shells := map[string]bool{"sh": true, "bash": true, "dash": true, "ash": true}
 	var recorded, pending []string
+	// nearestProgram picks, among the processes that run under the shell, the one nearest to it that
+	// is not itself a shell, a supervisor or ps, and of those at the same distance the one started
+	// last: what is below it is its own (a name resolver of a runtime, plugins it installs), and a
+	// setup step beside it was started first and has ended by the time the server is up. The
+	// distance counts the processes that executed a program between the two, so a subshell that
+	// only forked (the loop of "(while :; do sleep 60; done) & server") is the shell, and a shell
+	// that runs a command counts as a step. "" when there is none. This is the rule of mainProgram
+	// of the survey fork of ops, which reads a snapshot of "docker top"; here it reads the trace.
+	nearestProgram := func(shell string) string {
+		best, bestDepth := "", 0
+		for _, candidate := range running {
+			if candidate == shell {
+				continue
+			}
+			depth, below, x := 0, false, candidate
+			for hops := 0; hops < 64 && !below; hops++ {
+				up := starter(x)
+				if up == "" {
+					break
+				}
+				depth++
+				below = up == shell
+				x = up
+			}
+			if !below {
+				continue
+			}
+			e := last[candidate]
+			name := path.Base(e.Path)
+			if interp, _ := interpreterOf(e.Path, e.Argv); shells[interp] || interp == "busybox" || name == "busybox" || name == "ps" || Supervisor(e.Path, e.Argv) != "" {
+				continue
+			}
+			if best == "" || depth < bestDepth || (depth == bestDepth && e.Line > last[best].Line) {
+				best, bestDepth = candidate, depth
+			}
+		}
+		return best
+	}
 	descend := func(process string) string {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
@@ -1119,6 +1157,13 @@ func FinalExec(trace []byte) (Exec, bool) {
 			for _, other := range running {
 				if other != process && starter(other) == process {
 					children = append(children, other)
+				}
+			}
+			if len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {
+				// Several things run under a shell: a server and what was started beside it (a loop
+				// that sleeps, a second server). The program is the one nearest the shell.
+				if program := nearestProgram(process); program != "" {
+					children = []string{program}
 				}
 			}
 			if len(children) != 1 {
