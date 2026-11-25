@@ -276,13 +276,14 @@ func TestLinkHostFileDoesNotMakeALinkThatLeadsOutOfTheSysroot(t *testing.T) {
 		t.Errorf("the link was made")
 	}
 	// and a link that stays inside is made
-	if err := os.MkdirAll(filepath.Join(root, "lib"), 0755); err != nil {
+	// (not at the top of the sysroot: a link there is not made, see the test of ErrTopLevelLink)
+	if err := os.MkdirAll(filepath.Join(root, "usr/lib"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkHostFile(root, "lib", "/lib64"); err != nil {
+	if err := LinkHostFile(root, "lib", "/usr/lib64"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Readlink(filepath.Join(root, "lib64")); err != nil {
+	if _, err := os.Readlink(filepath.Join(root, "usr/lib64")); err != nil {
 		t.Errorf("a link inside the sysroot was not made: %v", err)
 	}
 }
