@@ -1528,6 +1528,26 @@ func TestSupervisorIsNamedAndNotPassedOver(t *testing.T) {
 	want1(t, mustGen(t, in3), "web", plan.Unsupported, "supervisor", "need a service each")
 }
 
+func TestAnS6ToolGetsTheSofterAdvice(t *testing.T) {
+	for _, name := range []string{"s6-supervise", "s6-log", "runsv"} {
+		in, _ := launcherInput(t, "/command/"+name, []string{name, "web"}, "")
+		p := mustGen(t, in)
+		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is taken for a tool of the s6 or runit suite, by its name")
+		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "starts every service")
+	}
+	for _, name := range []string{"s6-svscan", "runsvdir", "supervisord"} {
+		in, _ := launcherInput(t, "/usr/bin/"+name, []string{name}, "")
+		p := mustGen(t, in)
+		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is a process supervisor: it starts every service")
+		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "s6 or runit suite")
+	}
+	// a supervisor of the node kind has its own message
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "supervisor", "nodemon is a supervisor that starts your program")
+	wantNoText(t, p, "web", plan.Unsupported, "supervisor", "process supervision suite")
+}
+
 func TestProcessSupervisorHasItsOwnAdvice(t *testing.T) {
 	in, _ := launcherInput(t, "/usr/bin/s6-svscan", []string{"/usr/bin/s6-svscan", "/etc/s6"}, "")
 	p := mustGen(t, in)
