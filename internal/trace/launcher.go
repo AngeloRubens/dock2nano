@@ -271,7 +271,15 @@ var supervisors = map[string]bool{
 }
 
 // ProcessSupervisors are the supervisors that start every service of the image, not one program.
-var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsvdir": true, "supervisord": true}
+var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsv": true, "runsvdir": true, "supervisord": true}
+
+// IsProcessSupervisor says whether a file name is one of the process supervisors: the ones listed,
+// and every tool of s6 (s6-svscan, s6-supervise, s6-svc, ...), which images that are built on it
+// bring in dozens and which are all named alike. The rule is the one of isSupervisor in the survey
+// fork of ops (cmd/extract_from_dockerfile.go).
+func IsProcessSupervisor(name string) bool {
+	return ProcessSupervisors[name] || strings.HasPrefix(name, "s6-")
+}
 
 // IsLauncherName says whether name is one of the package manager launchers (npm, npx, yarn, yarnpkg,
 // pnpm, pnpx) or corepack, which starts one.
@@ -314,7 +322,7 @@ scriptArg:
 		}
 	}
 	for _, n := range names {
-		if b := path.Base(n); ProcessSupervisors[b] {
+		if b := path.Base(n); IsProcessSupervisor(b) {
 			return b
 		}
 	}
