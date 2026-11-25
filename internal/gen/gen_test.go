@@ -1718,6 +1718,10 @@ func TestAWaiterAsTheProgramIsReported(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail")
 	want1(t, p, "web", plan.Unsupported, "program is a waiter", "nginx, php-fpm")
+	// the applet of busybox is named by argv[0], not by the file
+	in3, _ := launcherInput(t, "/bin/busybox", []string{"tail", "-f", "/dev/null"}, "")
+	in3.Services["web"].Observed.BeforeWaiter = []string{"nginx"}
+	want1(t, mustGen(t, in3), "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail,")
 	in2, _ := launcherInput(t, "/usr/bin/tail", []string{"tail", "-f", "/dev/null"}, "")
 	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "program is a waiter")
 }
