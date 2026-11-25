@@ -1,12 +1,11 @@
 import sys
 T='internal/trace/trace.go'; O='internal/observe/observe.go'; G='internal/gen/gen.go'; L='internal/trace/launcher.go'
 R={
- 'nearest-rule-off':[(T,r'if program, others := nearestProgram(process); program != "" {','if program, others := nearestProgram(process); false && program != "" {')],
+ 'nearest-rule-off':[(T,'if program, others, near := nearestProgram(process); program != "" {','if program, others, near := nearestProgram(process); false && program != "" {')],
  'nearest-fork-order-decides':[(T,r'if a.path[k] != b.path[k] {','if false {')],
  'nearest-later-fork-wins':[(T,r'return a.path[k] > b.path[k]','return a.path[k] < b.path[k]')],
  'nearest-nearer-wins':[(T,r'c.depth < found[best].depth ||','c.depth > found[best].depth ||')],
  'nearest-shells-are-not-the-program':[(T,r'c.notProgram = c.isShell || ','c.notProgram = ')],
- 'nearest-shell-by-file-name':[(T,r'c.isShell = shells[interp] || shells[name]','c.isShell = shells[interp]')],
  'nearest-busybox-is-not-the-program':[(T,r' || name == "busybox"','')],
  'nearest-ps-is-not-the-program':[(T,r' || name == "ps"','')],
  'nearest-waiters-are-not-the-program':[(T,'waiters[name] || ','(false && waiters[name]) || ')],
@@ -18,7 +17,7 @@ R={
  'nearest-rotatelogs-in-the-list':[(T,r'"rotatelogs": true, ','')],
  'nearest-cronolog-in-the-list':[(T,r'"cronolog": true, ','')],
  'nearest-svlogd-in-the-list':[(T,r'"svlogd": true, ','')],
- 'nearest-multilog-in-the-list':[(T,r', "multilog": true}','}')],
+ 'nearest-multilog-in-the-list':[(T,'"multilog": true,\n','')],
  'nearest-zsh-is-a-shell':[(T,r', "zsh": true','')],
  'nearest-ksh-is-a-shell':[(T,r', "ksh": true','')],
  'nearest-mksh-is-a-shell':[(T,r', "mksh": true','')],
@@ -54,9 +53,9 @@ R={
  'copier-uniq':[(T,r', "uniq": true}','}')],
  'waiter-item-data':[(T,r'if name := path.Base(final.Path); waiters[name] || copiers[name] {','if name := path.Base(final.Path); false && (waiters[name] || copiers[name]) {')],
  'before-waiter-in-line-order':[(T,r'sort.Slice(under, func(i, j int) bool { return last[under[i]].Line < last[under[j]].Line })','')],
- 'beside-near':[(T,r'if k != best && !c.notProgram && !c.under && c.depth == found[best].depth {','if false {')],
+ 'beside-near':[(T,'if k != best && !c.notProgram && !c.under && c.depth == found[best].depth {','if false && k != best && !c.notProgram && !c.under && c.depth == found[best].depth {')],
  'beside-near-leaves-out-waiters':[(T,r'if k != best && !c.notProgram && !c.under && c.depth == found[best].depth {','if k != best && !c.under && c.depth == found[best].depth {')],
- 'beside-near-handed-on':[(T,r'final.BesideNear = besideNear','')],
+ 'beside-near-handed-on':[(T,'final.BesideNear = besideNear','_ = besideNear')],
  'beside-near-carried-by-observe':[(O,r'		BesideNear:         final.BesideNear,','')],
  'beside-near-said':[(G,r'	if !near {','	if false {')],
  'waiter-item-carried-by-observe':[(O,r'		BeforeWaiter:       final.BeforeWaiter,','')],
@@ -75,10 +74,11 @@ R={
  'label-skips-I':[(L,r' || a == "-I"','')],
  'label-skips-i':[(L,r' || a == "-i"','')],
  'label-deno-bun-run':[(L,r'case (name == "deno" || name == "bun") && a == "run":','case false:')],
- 'label-only-file-names':[(L,r'if value == "" || strings.IndexFunc(value, func(r rune) bool { return r == ' ' || !unicode.IsPrint(r) }) >= 0 {','if value == "" {')],
+ 'label-only-file-names':[(L,"if value == \"\" || strings.IndexFunc(value, func(r rune) bool { return r == ' ' || !unicode.IsPrint(r) }) >= 0 {","if value == \"\" {")],
  'interpreters-zsh-ksh-mksh':[(L,'	"zsh": true, "ksh": true, "mksh": true,\n}','}')],
  'shell-command-zsh-ksh-mksh':[(L,r'case "sh", "bash", "dash", "ash", "zsh", "ksh", "mksh":','case "sh", "bash", "dash", "ash":')],
- 'supervisor-script-only-for-interpreters':[(L,r'for i := 1; runsScripts && i < len(argv); i++ {','for i := 1; i < len(argv); i++ {')],
+ 'supervisor-script-only-for-interpreters':[(L,'for i := 1; runsScripts && i < len(argv); i++ {','for i := 1; (runsScripts || true) && i < len(argv); i++ {')],
+ 'nearest-exited-are-not-candidates':[(T,'for _, pid := range running {\n			if pid == shell {','for _, pid := range all {\n			if pid == shell {')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:
