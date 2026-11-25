@@ -2486,6 +2486,13 @@ func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("db"))), "db", plan.Note, "machine")
 }
 
+func TestTmpOfThePackageIsNoted(t *testing.T) {
+	in := newInput(&fake{}, svc("web"))
+	in.Services["web"].Observed.TmpMade = true
+	want1(t, mustGen(t, in), "web", plan.Note, "tmp", "an empty /tmp: nanos has none")
+	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "tmp")
+}
+
 func TestMachineNoteSaysTheNodeFileOnlyWhenTheListHasIt(t *testing.T) {
 	in := newInput(&fake{}, svc("db"))
 	in.Services["db"].Observed.MachineFiles = []string{"/dev/shm", "/proc/self/stat"}

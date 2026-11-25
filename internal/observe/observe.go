@@ -172,6 +172,8 @@ type Result struct {
 	// LocalNames says that the package was given an /etc/hosts that names localhost: the one of the
 	// container is not carried.
 	LocalNames bool
+	// TmpMade says that the package was given an empty /tmp: nanos has none.
+	TmpMade bool
 	// MachineFiles lists the files of /proc and /sys that the program opened to learn what machine
 	// it runs on (and /proc/self/stat for node, opened or not) and that the package carries as
 	// files of ours (the processors), since nanos does not answer them.
@@ -959,7 +961,13 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		r.warnOnce(fmt.Sprintf(NoteMachineFiles+" for the package: %v", err))
 	}
 
+	tmpMade, err := carryTmp(sysroot)
+	if err != nil {
+		r.warnOnce(fmt.Sprintf("could not make /tmp for the package: %v", err))
+	}
+
 	return &Result{
+		TmpMade:            tmpMade,
 		MachineFiles:       machine,
 		LocalNames:         r.localNames,
 		Sysroot:            sysroot,
