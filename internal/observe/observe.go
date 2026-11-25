@@ -1672,13 +1672,12 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 		return err
 	}
 	place := func(link, name string) error {
-		// A link at the top of the sysroot (/lib -> usr/lib, /lib64 -> usr/lib64 of the merged /usr of
-		// Debian, Ubuntu and RHEL images) is not made: ops adds the entries of the top of a package
-		// with os.ReadDir, takes a link to a directory for a file there and stops with
-		// "cannot read file .../sysroot/lib: is a directory" (lepton/image.go, addFilesFromPackage).
-		// The directory stays as it is, with the files that were opened under its name.
-		if text, ok := relative[name]; ok && path.Dir(path.Clean(name)) != "/" {
-			return skipped(trace.LinkHostFile(sysroot, text, name))
+		if text, ok := relative[name]; ok {
+			err := trace.LinkHostFile(sysroot, text, name)
+			if !errors.Is(err, trace.ErrTopLevelLink) {
+				return skipped(err)
+			}
+			// a link at the top of the image (/lib, /lib64) is carried as a copy, as an absolute one is
 		}
 		return skipped(trace.CopyHostFile(sysroot, link, name))
 	}

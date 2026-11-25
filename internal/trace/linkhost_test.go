@@ -428,3 +428,44 @@ func TestScrubDoesNotTouchANameThatStartsLikeTheSysroot(t *testing.T) {
 		t.Errorf("scrubErr = %q holds a path", got)
 	}
 }
+
+// A link at the top of the sysroot (/lib -> usr/lib) is not made: ops reads an entry of the top of a
+// package that is a link to a directory as a file and stops ("cannot read file ... is a directory").
+// Nothing is moved or made, and the caller carries a copy.
+func TestLinkHostFileDoesNotMakeALinkAtTheTopOfTheSysroot(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "lib/x86_64-linux-gnu/libc.so.6"), "libc")
+	write(t, filepath.Join(root, "usr/lib/x86_64-linux-gnu/libm.so.6"), "libm")
+	write(t, filepath.Join(root, "usr/lib64/ld.so"), "ld")
+
+	// the directory is there already, with what was opened under its name
+	if err := LinkHostFile(root, "usr/lib", "/lib"); !errors.Is(err, ErrTopLevelLink) {
+		t.Fatalf("a link at /lib = %v, want ErrTopLevelLink", err)
+	}
+	if info, err := os.Lstat(filepath.Join(root, "lib")); err != nil || !info.IsDir() {
+		t.Errorf("/lib is %v, %v; want the directory it was", info, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "lib/x86_64-linux-gnu/libc.so.6")); err != nil || string(data) != "libc" {
+		t.Errorf("the file under /lib is %q, %v; it was moved", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "usr/lib/x86_64-linux-gnu/libc.so.6")); err == nil {
+		t.Error("the files of /lib were moved into usr/lib")
+	}
+
+	// nothing there: no link is made either
+	if err := LinkHostFile(root, "usr/lib64", "/lib64"); !errors.Is(err, ErrTopLevelLink) {
+		t.Fatalf("a link at /lib64 = %v, want ErrTopLevelLink", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "lib64")); err == nil {
+		t.Error("/lib64 was made")
+	}
+
+	// a link below the top is made as before
+	write(t, filepath.Join(root, "usr/share/x/f"), "f")
+	if err := LinkHostFile(root, "../usr/share/x", "/opt/x"); err != nil {
+		t.Fatalf("a link below the top: %v", err)
+	}
+	if got, err := os.Readlink(filepath.Join(root, "opt/x")); err != nil || got != "../usr/share/x" {
+		t.Errorf("readlink = %q, %v", got, err)
+	}
+}

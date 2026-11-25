@@ -1446,6 +1446,15 @@ func ConfigurationFiles(sysroot string) []string {
 	return found
 }
 
+// ErrTopLevelLink is returned by LinkHostFile for a link that would be made at the top of the
+// sysroot (/lib -> usr/lib, /lib64 -> usr/lib64: the merged /usr of Debian, Ubuntu and RHEL images),
+// after the checks that tell a link that leads out of the package. ops adds the entries of the top of
+// a package with os.ReadDir, takes a link to a directory for a file there and stops with "cannot read
+// file .../sysroot/lib: is a directory" (lepton/image.go, addFilesFromPackage; wildfly, aspnetapp and
+// btcpay, runs 45623763472 and 45638309540). Nothing was moved or made: the caller carries a copy
+// (CopyHostFile) as it does for a link with an absolute text.
+var ErrTopLevelLink = errors.New("a link at the top of the package is not made")
+
 // LinkSkipped is returned by LinkHostFile and CopyHostFile when they leave what is in the sysroot as
 // it is on purpose: the link or the copy would lead out of the sysroot, or into itself, or the
 // directory that files opened through the link left cannot be merged into the one the link leads to
@@ -1539,6 +1548,7 @@ func scrubErr(sysroot string, err error) string {
 // cases where the directory is kept the error is a *LinkSkipped, and nothing has been moved.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
+	topLevel := filepath.Dir(destination) == filepath.Clean(sysroot)
 	if info, err := os.Lstat(destination); err == nil {
 		if !info.IsDir() {
 			return nil
@@ -1563,6 +1573,9 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		}
 		if !within(root, target) {
 			return &LinkSkipped{name, "the link leads outside the package (" + text + ")"}
+		}
+		if topLevel {
+			return ErrTopLevelLink
 		}
 		if target == realDir || within(realDir, target) || within(target, realDir) {
 			return &LinkSkipped{name, "the link leads into itself or to a directory that holds it (" + text + ")"}
@@ -1602,6 +1615,9 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		// as it really is (dir is resolved), so the join below is where a path through the link ends.
 		if dir, err := resolveNearest(filepath.Dir(destination)); err != nil || !InsideSysroot(sysroot, filepath.Join(dir, text)) {
 			return &LinkSkipped{name, "the link would lead out of the package (" + text + "), which is a path of this machine there; the link was not made"}
+		}
+		if topLevel {
+			return ErrTopLevelLink
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
