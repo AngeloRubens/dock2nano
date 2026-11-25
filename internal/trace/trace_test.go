@@ -1031,7 +1031,7 @@ func TestFinalExec(t *testing.T) {
 10    clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 12
 12    execve("/bin/sleep", ["sleep", "60"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "11", Path: "/usr/local/bin/python3", Argv: []string{"python3", "-m", "http.server"}, Line: 3, Beside: []string{"sleep"}}, true},
-		{"tail beside the server is not the program", `1     execve("/bin/sh", ["sh", "-c", "server & tail -f /dev/null"], 0x7ffd1 /* 1 vars */) = 0
+		{"tail beside the server is not the program (models a fork for the last command; a shell does not make it, see the rows without a clone)", `1     execve("/bin/sh", ["sh", "-c", "server & tail -f /dev/null"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
@@ -1074,7 +1074,7 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/bin/tee", ["tee", "-a", "/logs/app.log"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "7", Path: "/opt/java/bin/java", Argv: []string{"java", "-jar", "app.jar"}, Line: 2, Beside: []string{"tee"}}, true},
-		{"a supervisor and a tail: the supervisor is the program, what it started is its own", `1     execve("/bin/sh", ["sh", "-c", "supervisord -n & tail -f /var/log/x"], 0x7ffd1 /* 1 vars */) = 0
+		{"a supervisor and a tail: the supervisor is the program, what it started is its own (models a fork for the tail; see the rows without a clone)", `1     execve("/bin/sh", ["sh", "-c", "supervisord -n & tail -f /var/log/x"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/supervisord", ["supervisord", "-n"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
@@ -1092,6 +1092,61 @@ func TestFinalExec(t *testing.T) {
 8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2, Beside: []string{"supervisord"}}, true},
+		// busybox ash, dash and bash run the LAST command of -c in the pid of the shell: there is no clone, the
+		// program the rule sees is the wait, and the rule does not apply (it needs two running children). The
+		// report names what ran under it.
+		{"the last command of -c is a tail, in the pid of the shell (limit: the wait is the program)", `1     execve("/bin/sh", ["sh", "-c", "server & tail -f /dev/null"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+1     execve("/usr/bin/tail", ["tail", "-f", "/dev/null"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/usr/bin/tail", Argv: []string{"tail", "-f", "/dev/null"}, Line: 3, BeforeWaiter: []string{"server"}}, true},
+		{"the last command of -c is sleep infinity, in the pid of the shell (limit)", `1     execve("/bin/sh", ["sh", "-c", "nginx & sleep infinity"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
+1     execve("/bin/sleep", ["sleep", "infinity"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/bin/sleep", Argv: []string{"sleep", "infinity"}, Line: 3, BeforeWaiter: []string{"nginx"}}, true},
+		{"supervisord and the last command a tail, in the pid of the shell (limit)", `1     execve("/bin/sh", ["sh", "-c", "supervisord -c x & tail -f log"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/supervisord", ["supervisord", "-c", "x"], 0x7ffd1 /* 1 vars */) = 0
+7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
+1     execve("/usr/bin/tail", ["tail", "-f", "log"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "1", Path: "/usr/bin/tail", Argv: []string{"tail", "-f", "log"}, Line: 5, BeforeWaiter: []string{"supervisord", "nginx"}}, true},
+		{"a wait that is not the last command is not the program (sleep infinity & server)", `1     execve("/bin/sh", ["sh", "-c", "sleep infinity & server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sleep", ["sleep", "infinity"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 4, Beside: []string{"sleep"}}, true},
+		{"the reader of a pipeline that is not in the list is the program, and the report says it may be (limit)", `1     execve("/bin/sh", ["sh", "-c", "java -jar app.jar | myfilter"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/opt/java/bin/java", ["java", "-jar", "app.jar"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/myfilter", ["myfilter"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "8", Path: "/usr/bin/myfilter", Argv: []string{"myfilter"}, Line: 4, Beside: []string{"java -jar app.jar"}, BesideNear: true}, true},
+		{"commands that the inner shell ran and that ended are not in NotRun (limit)", `1     execve("/bin/sh", ["sh", "-c", "sleep inf & bash -c 'git status; server'"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sleep", ["sleep", "inf"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/bin/bash", ["bash", "-c", "git status; server"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/git", ["git", "status"], 0x7ffd1 /* 1 vars */) = 0
+9     +++ exited with 0 +++
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
+10    execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "10", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 9, Beside: []string{"sleep"}}, true},
+		{"what is beside is listed in the order of the lines, not of the pids", `1     execve("/bin/sh", ["sh", "-c", "a & b & c"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
+10    execve("/usr/bin/c", ["c"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "10", Path: "/usr/bin/c", Argv: []string{"c"}, Line: 6, Beside: []string{"a", "b"}, BesideNear: true}, true},
+		{"one child of zsh is passed over like one child of sh", `1     execve("/usr/bin/zsh", ["zsh", "-c", "server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2}, true},
 		{"another shell as the last branch is not the program", `1     execve("/bin/sh", ["sh", "-c", "a & zsh -c b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
@@ -1311,7 +1366,7 @@ func TestWhereIsSkipsPathEntriesThatClimbOut(t *testing.T) {
 // a command that only waits or copies, forked after the server, is not taken for the program (the
 // server is forked first and the other one last, so it would win by the order of the forks)
 func TestNearestProgramLeavesOutWaitersAndCopiers(t *testing.T) {
-	for _, name := range []string{"sleep", "tail", "watch", "tee", "cat", "logger", "rotatelogs", "cronolog", "svlogd", "multilog"} {
+	for _, name := range []string{"sleep", "tail", "watch", "tee", "cat", "logger", "rotatelogs", "cronolog", "svlogd", "multilog", "grep", "egrep", "sed", "awk", "gawk", "mawk", "cut", "tr", "ts", "jq", "gzip", "sort", "uniq"} {
 		t.Run(name, func(t *testing.T) {
 			trace := fmt.Sprintf(`1     execve("/bin/sh", ["sh", "-c", "server & %s"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
