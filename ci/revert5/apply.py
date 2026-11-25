@@ -1,10 +1,10 @@
 import sys
 T='internal/trace/trace.go'
 R={
- 'nearest-rule-off':[(T,'if program := nearestProgram(process); program != "" {','if program := ""; program != "" {')],
+ 'nearest-rule-off':[(T,'if program := nearestProgram(process); program != "" {','if program := nearestProgram(process); false && program != "" {')],
  'nearest-latest-wins-at-same-depth':[(T,'(depth == bestDepth && e.Line > last[best].Line)','(depth == bestDepth && e.Line < last[best].Line)')],
  'nearest-nearest-wins':[(T,'best == "" || depth < bestDepth ||','best == "" || depth > bestDepth ||')],
- 'nearest-shells-are-not-the-program':[(T,'shells[interp] || interp == "busybox" || name == "busybox" ||','')],
+ 'nearest-shells-are-not-the-program':[(T,'shells[interp] ||','(false && shells[interp]) ||')],
  'nearest-ps-is-not-the-program':[(T,'name == "ps" ||','')],
  'nearest-supervisors-are-not-the-program':[(T,' || Supervisor(e.Path, e.Argv) != "" {',' {')],
  'nearest-only-for-a-shell':[(T,'len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {','len(children) > 1 && (shells[path.Base(last[process].Path)] || isInit) {')],
