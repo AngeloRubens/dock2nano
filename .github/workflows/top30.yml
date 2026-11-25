@@ -20,7 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: php-fpm-err, repo: local, sha: ci/php/fpm-err, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "8", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
+          - {name: php-fpm-dbg, repo: local, sha: ci/php/fpm-err, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "3", cargs: "", mkdirs: "tmp", copy: "", path: "/", jq: ".ManifestPassthrough.debugsyscalls=\"t\""}
+          - {name: php-alp-dbg, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "3", cargs: "", mkdirs: "tmp", copy: "", path: "/", jq: ".ManifestPassthrough.debugsyscalls=\"t\""}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -95,6 +96,7 @@ jobs:
           XMKDIRS: ${{ matrix.mkdirs }}
           XCOPY: ${{ matrix.copy }}
           XPATH: ${{ matrix.path }}
+          XJQ: ${{ matrix.jq }}
           KVM: ${{ matrix.kvm }}
         run: |
           set -u
@@ -180,6 +182,11 @@ jobs:
               for d in $XCOPY; do mkdir -p "$P/sysroot$(dirname "$d")" && docker cp "cp-$NAME:$d" "$P/sysroot$(dirname "$d")/" && echo "ROW copied $d from the image into the sysroot (measurement): $(du -sh "$P/sysroot$d" | cut -f1)"; done
             done
             docker rm -f "cp-$NAME" > /dev/null
+          fi
+          if [ -n "${XJQ:-}" ]; then
+            for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
+              jq "$XJQ" "$mf" > "$mf.new" && mv "$mf.new" "$mf" && echo "ROW applied to $mf (measurement): $XJQ" && jq -c .ManifestPassthrough "$mf"
+            done
           fi
           if [ -n "${XENV:-}" ]; then
             for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
