@@ -1548,7 +1548,7 @@ func scrubErr(sysroot string, err error) string {
 // cases where the directory is kept the error is a *LinkSkipped, and nothing has been moved.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
-	topLevel := filepath.Dir(destination) == filepath.Clean(sysroot)
+	_ = filepath.Clean(sysroot)
 	if info, err := os.Lstat(destination); err == nil {
 		if !info.IsDir() {
 			return nil
@@ -1573,9 +1573,6 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		}
 		if !within(root, target) {
 			return &LinkSkipped{name, "the link leads outside the package (" + text + ")"}
-		}
-		if topLevel {
-			return ErrTopLevelLink
 		}
 		if target == realDir || within(realDir, target) || within(target, realDir) {
 			return &LinkSkipped{name, "the link leads into itself or to a directory that holds it (" + text + ")"}
@@ -1615,9 +1612,6 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		// as it really is (dir is resolved), so the join below is where a path through the link ends.
 		if dir, err := resolveNearest(filepath.Dir(destination)); err != nil || !InsideSysroot(sysroot, filepath.Join(dir, text)) {
 			return &LinkSkipped{name, "the link would lead out of the package (" + text + "), which is a path of this machine there; the link was not made"}
-		}
-		if topLevel {
-			return ErrTopLevelLink
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
