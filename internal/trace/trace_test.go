@@ -1043,7 +1043,7 @@ func TestFinalExec(t *testing.T) {
 8     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "8", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 3, Beside: []string{"a"}}, true},
-		{"the branch of a clone cut in two is told by the line where the call began", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
+		{"the branch of a clone cut in two keeps the order of the forks", `1     execve("/bin/sh", ["sh", "-c", "a & b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD <unfinished ...>
 8     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
 1     <... clone resumed>) = 8
@@ -1065,12 +1065,20 @@ func TestFinalExec(t *testing.T) {
 8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/bin/gunicorn", ["gunicorn", "app"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "7", Path: "/usr/bin/redis-server", Argv: []string{"redis-server"}, Line: 2, Beside: []string{"gunicorn"}}, true},
-		{"busybox run through an applet is not the program", `1     execve("/bin/sh", ["sh", "-c", "busybox httpd -f & x"], 0x7ffd1 /* 1 vars */) = 0
+		{"busybox run through an applet is not the program", `1     execve("/bin/sh", ["sh", "-c", "x & busybox httpd -f"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
-7     execve("/bin/busybox", ["busybox", "httpd", "-f"], 0x7ffd1 /* 1 vars */) = 0
+7     execve("/usr/bin/x", ["x"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
-8     execve("/usr/bin/x", ["x"], 0x7ffd1 /* 1 vars */) = 0
-`, Exec{Pid: "8", Path: "/usr/bin/x", Argv: []string{"x"}, Line: 4, Beside: []string{"busybox"}}, true},
+8     execve("/bin/busybox", ["busybox", "httpd", "-f"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/bin/x", Argv: []string{"x"}, Line: 2, Beside: []string{"busybox"}}, true},
+		{"a wait at a smaller distance than the server is not the program", `1     execve("/bin/sh", ["sh", "-c", "sleep 5 & ./run.sh"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/bin/sleep", ["sleep", "5"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/bin/sh", ["sh", "./run.sh"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/gunicorn", ["gunicorn", "app"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "9", Path: "/usr/bin/gunicorn", Argv: []string{"gunicorn", "app"}, Line: 6, Beside: []string{"sleep"}}, true},
 		{"a server started through a forked subshell is as near as one started directly", `1     execve("/bin/sh", ["sh", "-c", "worker & (java -jar x &)"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
 9     execve("/usr/bin/worker", ["worker"], 0x7ffd1 /* 1 vars */) = 0

@@ -993,25 +993,16 @@ func FinalExec(trace []byte) (Exec, bool) {
 	gone := map[string]bool{}
 	waiting := map[string]before{}
 	parent := map[string]string{}
-	// forkedAt is the line where the call that made each process started: for a clone that strace
-	// cut in two, the line of its first part, which is where the call was made (the resumed line
-	// comes after whatever the child did meanwhile)
+	// forkedAt is the line of the call that made each process (for a clone that strace cut in two,
+	// the resumed line: a process makes its calls one after the other, so the order of the forks of
+	// one parent is the order of these lines)
 	forkedAt := map[string]int{}
-	callStart := map[string]int{}
 	var beside []string
 
 	for i, text := range strings.Split(string(trace), "\n") {
-		if cs := cloneStart.FindStringSubmatch(text); cs != nil {
-			callStart[cs[1]+cs[2]] = i
-		}
 		if m := forkLine.FindStringSubmatch(text); m != nil {
 			parent[m[3]] = m[1] + m[2]
 			forkedAt[m[3]] = i
-			if strings.Contains(text, "<... ") {
-				if start, ok := callStart[m[1]+m[2]]; ok {
-					forkedAt[m[3]] = start
-				}
-			}
 		} else if m := supersededLine.FindStringSubmatch(text); m != nil {
 			// "N +++ superseded by execve in pid T +++": the thread T called execve and the process goes
 			// on as N, so what T had is N's now
