@@ -173,14 +173,6 @@ const tmpDirectory = "/tmp"
 // removed again is not in the package.
 func carryTmp(sysroot string) (bool, error) {
 	dir := filepath.Join(sysroot, tmpDirectory)
-	if _, err := os.Lstat(dir); err == nil {
-		return false, nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return false, err
-	}
-	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
-		return false, err
-	}
-	return true, nil
+	_ = dir
+	return false, nil
 }
