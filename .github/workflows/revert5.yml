@@ -1,0 +1,27 @@
+name: revert5
+on:
+  push:
+    branches: ['check/top30-nearest-revert']
+permissions:
+  contents: read
+jobs:
+  revert:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ["nearest-rule-off", "nearest-latest-wins-at-same-depth", "nearest-nearest-wins", "nearest-shells-are-not-the-program", "nearest-ps-is-not-the-program", "nearest-supervisors-are-not-the-program", "nearest-only-for-a-shell", "nearest-subshell-is-the-shell", "nearest-exited-are-not-candidates"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: apply the revert of one change
+        run: python3 ci/revert5/apply.py "${{ matrix.name }}"
+      - name: build
+        run: go build ./... && go vet ./...
+      - name: tests of the changed modules, with the change removed
+        run: |
+          go test ./internal/... ./cmd/... 2>&1 | tee /tmp/t.log || true
+          echo "REVERT ${{ matrix.name }}: failed tests:"; grep -E "^\s*--- FAIL" /tmp/t.log | sort -u
+          if grep -q "^FAIL" /tmp/t.log; then echo "REVERT ${{ matrix.name }} RED"; exit 1; else echo "REVERT ${{ matrix.name }} GREEN (no test noticed)"; fi
