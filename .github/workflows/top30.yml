@@ -13,17 +13,18 @@ permissions:
 jobs:
   row:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       OPS_HOME: /home/runner
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: php-cli, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: ""}
-          - {name: php-cli-alpine, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: ""}
-          - {name: php-apache, repo: local, sha: ci/php/apache, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "--command 'php-apache=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", mkdirs: ""}
-          - {name: php-fpm, repo: local, sha: ci/php/fpm, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: "tmp"}
+          - {name: php-cli, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "12", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: php-cli-alpine, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "12", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: php-apache-log, repo: local, sha: ci/php/apache-log, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "12", cargs: "--command 'php-apache-log=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", mkdirs: "", copy: "", path: "/"}
+          - {name: php-fpm-log, repo: local, sha: ci/php/fpm-log, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "12", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
+          - {name: php-fpm-file, repo: local, sha: ci/php/fpm-file, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "12", cargs: "", mkdirs: "tmp", copy: "", path: "/"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -96,6 +97,8 @@ jobs:
           TRIES: ${{ matrix.tries }}
           XCARGS: ${{ matrix.cargs }}
           XMKDIRS: ${{ matrix.mkdirs }}
+          XCOPY: ${{ matrix.copy }}
+          XPATH: ${{ matrix.path }}
           KVM: ${{ matrix.kvm }}
         run: |
           set -u
@@ -144,9 +147,12 @@ jobs:
           # 2b. evidence: the image as docker runs it, and the raw strace of the observation
           docker inspect --format '{{json .Config}}' "top30-$NAME" > "$R/image-config.json" 2>&1 || true
           echo "ROW image config: $(cut -c1-700 "$R/image-config.json")"
-          timeout 25 docker run --rm --name "run-$NAME" "top30-$NAME" > "$R/docker-run.log" 2>&1 || true
-          echo "ROW docker run of the image as it is (25 s): $(wc -l < "$R/docker-run.log") lines; first 12 and last 8:"
+          docker run -d --name "run-$NAME" "top30-$NAME" > /dev/null 2>&1 || true
+          sleep "${DRUN:-30}"
+          docker logs "run-$NAME" > "$R/docker-run.log" 2>&1 || true
+          echo "ROW docker run of the image as it is (${DRUN:-30} s): $(wc -l < "$R/docker-run.log") lines; first 12 and last 8:"
           head -12 "$R/docker-run.log" | cut -c1-250; echo ...; tail -8 "$R/docker-run.log" | cut -c1-250
+          echo "ROW docker top of the container:"; docker top "run-$NAME" -eo pid,ppid,args 2>&1 | cut -c1-1800 | head -25
           docker rm -f "run-$NAME" >/dev/null 2>&1 || true
           mkdir -p "$R/trace"; export DOCK2NANO_KEEP_TRACE="$R/trace"
 
@@ -172,6 +178,13 @@ jobs:
               for d in $XMKDIRS; do mkdir -p "$P/sysroot/$d" && echo "ROW made directory $P/sysroot/$d (measurement)"; done
             done
           fi
+          if [ -n "${XCOPY:-}" ]; then
+            docker create --name "cp-$NAME" "top30-$NAME" > /dev/null
+            for P in "$OPS_HOME"/.ops/local_packages/amd64/${NAME}_*; do
+              for d in $XCOPY; do mkdir -p "$P/sysroot$(dirname "$d")" && docker cp "cp-$NAME:$d" "$P/sysroot$(dirname "$d")/" && echo "ROW copied $d from the image into the sysroot (measurement): $(du -sh "$P/sysroot$d" | cut -f1)"; done
+            done
+            docker rm -f "cp-$NAME" > /dev/null
+          fi
           if [ -n "${XENV:-}" ]; then
             for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
               echo "ROW injected env into $mf: $XENV"
@@ -195,11 +208,12 @@ jobs:
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
             # the instance and its console, before the down of the next try removes them
-            sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
-            sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
+            timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            echo "ROW attempt=$attempt listening-lines=$(grep -c "Now listening\|Server startup\|started in" "$R/console-attempt-$attempt.txt") crash-lines=$(grep -c "signal 11\|General protection\|Page fault" "$R/console-attempt-$attempt.txt")"
             echo "ROW attempt=$attempt console of $NAME: $(wc -l < "$R/console-attempt-$attempt.txt") lines; first lines:"
             head -6 "$R/console-attempt-$attempt.txt" | cut -c1-200
-            if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
+            if [ "$attempt" -lt 3 ]; then timeout 90 sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
           done
           if [ "$up_ok" != 1 ]; then
             echo "ROW first error of ops compose up: $(grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" "$R/up.log" | grep -i -m1 "error\|fail\|fatal\|timeout\|panic" | cut -c1-300)"
@@ -214,8 +228,8 @@ jobs:
 
           # 6. the strict probe: 2xx or 3xx, or an open TCP port, is the only green
           sleep 60
-          sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
-          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" | tail -1 | awk '{print $2}')
           echo "ROW qemu command lines (accel flags):"; ps -eo args | grep "[q]emu-system" | grep -o -E "(-machine [^ ]*|-cpu [^ ]*|--enable-kvm|-accel [^ ]*|-m [^ ]*|-smp [^ ]*)" | sort | uniq -c
           echo "ROW address=${ip:-none}"
@@ -224,7 +238,7 @@ jobs:
           for i in $(seq 1 ${TRIES:-24}); do
             if [ "$KIND" = http ]; then
               rm -f "$R/body.txt"
-              code=$(curl -s -m 5 -H "Host: $ip:$PORT" -o "$R/body.txt" -w '%{http_code}' "http://$ip:$PORT/" || true)
+              code=$(curl -s -m 5 -H "Host: $ip:$PORT" -o "$R/body.txt" -w '%{http_code}' "http://$ip:$PORT${XPATH:-/}" || true)
               codes="$codes $code"
               if [ "$code" != 000 ]; then cp "$R/body.txt" "$R/body.last.txt" 2>/dev/null || true; fi
               case "$code" in 2*|3*) break;; esac
@@ -265,15 +279,15 @@ jobs:
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" 2>/dev/null | tail -1 | awk '{print $2}')
           if [ -n "$ip" ]; then
             sudo apt-get install -y -qq nmap >/dev/null 2>&1 || true
-            echo "ROW port scan of $ip (1-10000)"; sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
+            echo "ROW port scan of $ip (1-10000)"; timeout 120 sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
           fi
       - name: instance list and console (before the down step removes the instance)
         if: always()
         run: |
           N=${{ matrix.name }}
           mkdir -p "/tmp/out/$N"
-          sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
-          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
           echo "=== ROW ops instance list (end of the row), exit of the list is in the artifact"
           sed 's/\x1b\[[0-9;]*m//g' "/tmp/out/$N/instances-final.txt" | cut -c1-200
           echo "=== ROW ops instance logs $N (end of the row): $(wc -l < "/tmp/out/$N/console-final.txt") lines"
@@ -281,7 +295,7 @@ jobs:
       - name: down
         if: always()
         run: |
-          cd /tmp/out/${{ matrix.name }}/compose 2>/dev/null && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
+          cd /tmp/out/${{ matrix.name }}/compose 2>/dev/null && timeout 90 sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4
