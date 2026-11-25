@@ -172,6 +172,10 @@ type Result struct {
 	// LocalNames says that the package was given an /etc/hosts that names localhost: the one of the
 	// container is not carried.
 	LocalNames bool
+	// Hostname is the name the package gives itself (/etc/hostname, and /etc/hosts maps it to the
+	// loopback address): the hostname the container had while it was observed, when it is a valid
+	// one. Empty when there was none.
+	Hostname string
 	// MachineFiles lists the files of /proc and /sys that the program opened to learn what machine
 	// it runs on (and /proc/self/stat for node, opened or not) and that the package carries as
 	// files of ours (the processors), since nanos does not answer them.
@@ -300,6 +304,8 @@ type run struct {
 	cleanup []error
 	// localNames: the package got an /etc/hosts of its own.
 	localNames bool
+	// hostname: the hostname the package was given.
+	hostname string
 	once       map[string]bool
 
 	// created are the paths the program created while it ran.
@@ -944,7 +950,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		return nil, fmt.Errorf("observe: %s did not open %s: say it with --file", image, program)
 	}
 
-	r.writeLocalNames(sysroot)
+	r.writeLocalNames(sysroot, containerHostname(env))
 	machine, err := writeMachineFiles(sysroot, cfg.Architecture, program, touched)
 	if err != nil {
 		r.warnOnce(fmt.Sprintf(NoteMachineFiles+" for the package: %v", err))
@@ -953,6 +959,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 	return &Result{
 		MachineFiles:       machine,
 		LocalNames:         r.localNames,
+		Hostname:           r.hostname,
 		Sysroot:            sysroot,
 		Program:            program,
 		Argv:               cmdline,
@@ -1007,11 +1014,31 @@ func parseStatusIDs(text string) (uid, gid int, ok bool) {
 	return uid, gid, true
 }
 
+// hostnameOK is what a hostname may be: letters, digits, dots and hyphens, not starting with one of the last two.
+var hostnameOK = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$`)
+
+// containerHostname is the HOSTNAME of the observed environment (the name docker gave the container,
+// its short id, unless it was set), or "" when there is none or it is not a valid hostname.
+func containerHostname(env []string) string {
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "HOSTNAME="); ok && hostnameOK.MatchString(v) {
+			return v
+		}
+	}
+	return ""
+}
+
 // writeLocalNames gives the package an /etc/hosts that names localhost, unless the sysroot has one.
 // The /etc/hosts of the container is not carried (docker writes it with the name and the address
 // of that container), and without any, a program that looks up "localhost" asks the resolver and
 // does not get an answer: caddy and etcd stop at "lookup localhost: no such host".
-func (r *run) writeLocalNames(sysroot string) {
+//
+// With a hostname, the package also gets /etc/hostname, which nanos reads at boot to answer
+// uname (nodename) and gethostname (nanovms/nanos src/unix/syscall.c: without the file the name is
+// derived from the address, as 192-168-33-5, or is "Nanos"), and /etc/hosts names it on the
+// loopback line, so that a program that asks who it is (the JVM of Open Liberty, for the fully
+// qualified name of the host) gets an answer that resolves.
+func (r *run) writeLocalNames(sysroot, hostname string) {
 	path := filepath.Join(sysroot, "etc", "hosts")
 	if _, err := os.Lstat(path); err == nil {
 		return
@@ -1020,12 +1047,23 @@ func (r *run) writeLocalNames(sysroot string) {
 		r.warnOnce(fmt.Sprintf(NoteHosts+" for the package: %v", err))
 		return
 	}
-	const hosts = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+	hosts := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+	if hostname != "" {
+		hosts = "127.0.0.1\tlocalhost " + hostname + "\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+		if _, err := os.Lstat(filepath.Join(sysroot, "etc", "hostname")); err != nil {
+			if err := os.WriteFile(filepath.Join(sysroot, "etc", "hostname"), []byte(hostname+"\n"), 0o644); err != nil {
+				r.warnOnce(fmt.Sprintf(NoteHosts+"name for the package: %v", err))
+				hosts = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+				hostname = ""
+			}
+		}
+	}
 	if err := os.WriteFile(path, []byte(hosts), 0o644); err != nil {
 		r.warnOnce(fmt.Sprintf(NoteHosts+" for the package: %v", err))
 		return
 	}
 	r.localNames = true
+	r.hostname = hostname
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home

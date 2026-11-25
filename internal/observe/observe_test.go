@@ -518,7 +518,7 @@ func TestObserveSuccess(t *testing.T) {
 		"/lib/libc.so.6", "/bin/sh",
 	})
 	equal(t, "sysroot files", tree(t, res.Sysroot), []string{
-		"app/rel.txt", "bin/sh", "etc/app.conf", "etc/hosts", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
+		"app/rel.txt", "bin/sh", "etc/app.conf", "etc/hostname", "etc/hosts", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
 	})
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
@@ -1786,14 +1786,16 @@ func TestObserveNetworkFilesOfTheRuntimeAreNotCarried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"etc/resolv.conf", "etc/hostname"} {
-		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err == nil {
-			t.Errorf("%s is in the sysroot", f)
-		}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "etc/resolv.conf")); err == nil {
+		t.Errorf("etc/resolv.conf is in the sysroot")
 	}
-	// the hosts file of the container is not carried: the package has one of its own
-	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts")); err != nil || strings.Contains(string(b), "abc") || !strings.Contains(string(b), "localhost") {
+	// the hosts and hostname files of the container are not carried (the scene's /etc/hosts has the
+	// address of the container): the package has its own, with the hostname the container had (abc)
+	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts")); err != nil || strings.Contains(string(b), "172.18") || !strings.Contains(string(b), "127.0.0.1\tlocalhost abc\n") {
 		t.Errorf("etc/hosts = %q, %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hostname")); err != nil || string(b) != "abc\n" {
+		t.Errorf("etc/hostname = %q, %v", b, err)
 	}
 	equal(t, "configuration files", res.ConfigurationFiles, []string{"/etc/app.conf"})
 	if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "resolv.conf") }) {
@@ -3749,5 +3751,52 @@ func TestFetchDoesNotWriteThroughALinkOutOfTheSysroot(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(host, "dir")); err == nil {
 		t.Errorf("a directory was made on this machine")
+	}
+}
+
+// nanos reads /etc/hostname for the name of the host, and a program that asks who it is (the JVM of
+// Open Liberty) needs that name to resolve: the package names the hostname of the container on the
+// loopback line and in /etc/hostname
+func TestObserveGivesThePackageTheHostnameOfTheContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name, hostname string
+		want           string
+	}{
+		{"a docker id", "3f2a9c1b7d4e", "3f2a9c1b7d4e"},
+		{"a name with dots and hyphens", "web-1.example", "web-1.example"},
+		{"not a hostname (an underscore)", "web_1", ""},
+		{"nothing", "", ""},
+		{"a name that starts with a hyphen", "-web", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScene(t)
+			env := "A=1\x00PATH=/usr/bin\x00"
+			if tc.hostname != "" {
+				env += "HOSTNAME=" + tc.hostname + "\x00"
+			}
+			s.d.exec["cat /proc/11/environ"] = env
+			res, err := s.observe(t, context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			equal(t, "Hostname", res.Hostname, tc.want)
+			b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantHosts := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+			if tc.want != "" {
+				wantHosts = "127.0.0.1\tlocalhost " + tc.want + "\n::1\tlocalhost ip6-localhost ip6-loopback\n"
+			}
+			equal(t, "etc/hosts", string(b), wantHosts)
+			name, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hostname"))
+			if tc.want == "" {
+				if err == nil {
+					t.Errorf("etc/hostname = %q, want none", name)
+				}
+				return
+			}
+			equal(t, "etc/hostname", string(name), tc.want+"\n")
+		})
 	}
 }

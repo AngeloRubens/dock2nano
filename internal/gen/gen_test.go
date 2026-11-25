@@ -2416,6 +2416,8 @@ func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
 	in.Services["web"].Observed.LocalNames = true
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Note, "hosts", "names localhost")
+	in.Services["web"].Observed.Hostname = "3f2a9c1b7d4e"
+	want1(t, mustGen(t, in), "web", plan.Note, "hosts", "names localhost and 3f2a9c1b7d4e (the hostname the container had while it was observed), and an /etc/hostname")
 	in2 := newInput(&fake{}, svc("web"))
 	wantNone(t, mustGen(t, in2), "web", plan.Note, "hosts")
 }
