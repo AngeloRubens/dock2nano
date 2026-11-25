@@ -344,7 +344,9 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		dropped = fmt.Sprintf(" The %d %s seen when your image was observed do not apply to this build.", obs.Children, plural(obs.Children, "child process", "child processes"))
 	}
 	obs.Children, obs.ChildCalls = 0, nil
+	beside := obs.Beside
 	obs.PassedOver, obs.NotRun, obs.ChildLaunchers, obs.Beside = nil, nil, nil, nil
+	obs.BesideNear, obs.BeforeWaiter = false, nil
 	obs.StoppedEarly = false
 	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
 	obs.Vanished = 0
@@ -355,6 +357,9 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 		u.item(plan.Approximated, "hub package", fmt.Sprintf("this program must use the build of the hub whole (%s). The package is %s, with its own files, program and arguments; the files observed from your image are not in it.%s Versions: %s", u.Why, u.source(), dropped, u.versions())),
 		u.item(plan.Unsupported, "hub files", "the configuration, extensions and data of your image are not carried: the package holds the files of the hub build, so your configuration files do not apply to it"),
 		u.item(plan.Note, "hub result", "not run by this conversion; see the runs in the hub entrypoint item"),
+	}
+	if len(beside) > 0 {
+		items = append(items, u.item(plan.Unsupported, "also ran beside", "these programs ran beside the program of your image, under the same shell, and are not in the package of the hub (it holds the one program of the hub build): "+listed(distinctCounted(beside))))
 	}
 	if len(droppedArgs) > 0 && !slices.Equal(droppedArgs, argsAfterName(m.Args)) {
 		items = append(items, u.item(plan.Unsupported, "hub arguments", "the arguments of the program of your image and compose file are not used, the package starts with its own ("+strings.Join(m.Args, " ")+"); "+fmt.Sprintf("%d %s dropped, not printed: they can hold a secret", len(droppedArgs), plural(len(droppedArgs), "argument was", "arguments were"))))
