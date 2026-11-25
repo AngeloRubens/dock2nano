@@ -13,30 +13,24 @@ permissions:
 jobs:
   row:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       OPS_HOME: /home/runner
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: aspnet-base-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-base-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-base-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-wx0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-wx0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-wx0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-pgo0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-pgo0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-pgo0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: aspnet-wx0-fw, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "20", cargs: "", mkdirs: "", copy: "/usr/share/dotnet/shared/Microsoft.AspNetCore.App", path: "/"}
-          - {name: btcpay-wx0, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: eshop-wx0, repo: dotnet-architecture/eShopOnWeb, sha: 4da8212117e87d808d4bbc7da6286fd2147ce606, dockerfile: src/Web/Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: nop-wx0, repo: nopSolutions/nopCommerce, sha: 0344b61747963e57e9f70c818f517a0d59a8b528, dockerfile: Dockerfile, context: ".", port: "80", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: hapi-fhir, repo: hapifhir/hapi-fhir-jpaserver-starter, sha: 8db622874c2d1e3d26fe636978e00d77b75c0d2b, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: petclinic-kt, repo: spring-petclinic/spring-petclinic-kotlin, sha: 9823b3aa97988854668e608750db88502775caa7, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/"}
-          - {name: helidon-se, repo: helidon-io/helidon-examples, sha: 1ea90c465d86828922ae0ad04a06bbf8b43ef5d6, dockerfile: examples/quickstarts/helidon-quickstart-se/Dockerfile, context: "examples/quickstarts/helidon-quickstart-se", port: "8080", probe: http, kvm: "yes", env: "", tries: "20", cargs: "", mkdirs: "", copy: "", path: "/greet"}
+          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "--command 'wildfly=/opt/java/openjdk/bin/java -D[Standalone] @/opt/jboss/wildfly/bin/jdk.serialFilter -Xms64m -Xmx512m -Djava.net.preferIPv4Stack=true -Djboss.modules.system.pkgs=org.jboss.byteman -Djava.awt.headless=true --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.ldap=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.url.ldap=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.url.ldaps=ALL-UNNAMED --add-exports=jdk.naming.dns/com.sun.jndi.dns=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.security=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/sun.reflect.annotation=ALL-UNNAMED --add-opens=java.management/javax.management=ALL-UNNAMED --add-opens=java.naming/javax.naming=ALL-UNNAMED -Dorg.jboss.boot.log.file=/opt/jboss/wildfly/standalone/log/server.log -Dlogging.configuration=file:/opt/jboss/wildfly/standalone/configuration/logging.properties -jar /opt/jboss/wildfly/jboss-modules.jar -mp /opt/jboss/wildfly/modules org.jboss.as.standalone -Djboss.home.dir=/opt/jboss/wildfly -Djboss.server.base.dir=/opt/jboss/wildfly/standalone -b 0.0.0.0'", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-allof-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-allof-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-allof-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-gcc0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-gcc0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-gcc0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_gcConcurrent=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-tc0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-tc0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-tc0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredCompilation=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: btcpay-allof, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -220,12 +214,12 @@ jobs:
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
             # the instance and its console, before the down of the next try removes them
-            sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
-            sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
+            timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
             echo "ROW attempt=$attempt listening-lines=$(grep -c "Now listening\|Server startup\|started in" "$R/console-attempt-$attempt.txt") crash-lines=$(grep -c "signal 11\|General protection\|Page fault" "$R/console-attempt-$attempt.txt")"
             echo "ROW attempt=$attempt console of $NAME: $(wc -l < "$R/console-attempt-$attempt.txt") lines; first lines:"
             head -6 "$R/console-attempt-$attempt.txt" | cut -c1-200
-            if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
+            if [ "$attempt" -lt 3 ]; then timeout 90 sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
           done
           if [ "$up_ok" != 1 ]; then
             echo "ROW first error of ops compose up: $(grep -v "^no ip found\|^couldn't find mac\|^mac is an empty" "$R/up.log" | grep -i -m1 "error\|fail\|fatal\|timeout\|panic" | cut -c1-300)"
@@ -240,8 +234,8 @@ jobs:
 
           # 6. the strict probe: 2xx or 3xx, or an open TCP port, is the only green
           sleep 60
-          sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
-          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" | tail -1 | awk '{print $2}')
           echo "ROW qemu command lines (accel flags):"; ps -eo args | grep "[q]emu-system" | grep -o -E "(-machine [^ ]*|-cpu [^ ]*|--enable-kvm|-accel [^ ]*|-m [^ ]*|-smp [^ ]*)" | sort | uniq -c
           echo "ROW address=${ip:-none}"
@@ -291,15 +285,15 @@ jobs:
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" 2>/dev/null | tail -1 | awk '{print $2}')
           if [ -n "$ip" ]; then
             sudo apt-get install -y -qq nmap >/dev/null 2>&1 || true
-            echo "ROW port scan of $ip (1-10000)"; sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
+            echo "ROW port scan of $ip (1-10000)"; timeout 120 sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
           fi
       - name: instance list and console (before the down step removes the instance)
         if: always()
         run: |
           N=${{ matrix.name }}
           mkdir -p "/tmp/out/$N"
-          sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
-          sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance list > "/tmp/out/$N/instances-final.txt" 2>&1 || true
+          timeout 90 sudo env OPS_HOME="$OPS_HOME" ops instance logs "$N" > "/tmp/out/$N/console-final.txt" 2>&1 || true
           echo "=== ROW ops instance list (end of the row), exit of the list is in the artifact"
           sed 's/\x1b\[[0-9;]*m//g' "/tmp/out/$N/instances-final.txt" | cut -c1-200
           echo "=== ROW ops instance logs $N (end of the row): $(wc -l < "/tmp/out/$N/console-final.txt") lines"
@@ -307,7 +301,7 @@ jobs:
       - name: down
         if: always()
         run: |
-          cd /tmp/out/${{ matrix.name }}/compose 2>/dev/null && sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
+          cd /tmp/out/${{ matrix.name }}/compose 2>/dev/null && timeout 90 sudo env OPS_HOME="$OPS_HOME" ops compose down 2>&1 | tail -3 || true
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4
