@@ -79,6 +79,7 @@ R={
  'shell-command-zsh-ksh-mksh':[(L,r'case "sh", "bash", "dash", "ash", "zsh", "ksh", "mksh":','case "sh", "bash", "dash", "ash":')],
  'supervisor-script-only-for-interpreters':[(L,'for i := 1; runsScripts && i < len(argv); i++ {','for i := 1; (runsScripts || true) && i < len(argv); i++ {')],
  'nearest-exited-are-not-candidates':[(T,'for _, pid := range running {\n			if pid == shell {','for _, pid := range all {\n			if pid == shell {')],
+ 'waiter-named-by-argv0':[(G,'return path.Base(obs.Argv[0])','return path.Base(obs.Program)')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:
