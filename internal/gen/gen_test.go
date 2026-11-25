@@ -1707,6 +1707,7 @@ func TestProgramsBesideTheProgramAreNamed(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "celery (x2), tail")
 	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "are not run by the package")
+	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "the branch the shell forked last, at equal distance")
 	in2, _ := launcherInput(t, "/usr/bin/gunicorn", []string{"gunicorn", "app"}, "")
 	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "also ran beside the program")
 }

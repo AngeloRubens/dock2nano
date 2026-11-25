@@ -1299,3 +1299,44 @@ func TestWhereIsSkipsPathEntriesThatClimbOut(t *testing.T) {
 		t.Errorf("WhereIs = %q, want /bin/inside", got)
 	}
 }
+
+// a command that only waits or copies, forked after the server, is not taken for the program (the
+// server is forked first and the other one last, so it would win by the order of the forks)
+func TestNearestProgramLeavesOutWaitersAndCopiers(t *testing.T) {
+	for _, name := range []string{"sleep", "tail", "watch", "tee", "cat", "logger", "rotatelogs", "cronolog", "svlogd", "multilog"} {
+		t.Run(name, func(t *testing.T) {
+			trace := fmt.Sprintf(`1     execve("/bin/sh", ["sh", "-c", "server & %s"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/%s", ["%s"], 0x7ffd1 /* 1 vars */) = 0
+`, name, name, name)
+			got, found := FinalExec([]byte(trace))
+			want := Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2, Beside: []string{name}}
+			if !found || !reflect.DeepEqual(got, want) {
+				t.Errorf("FinalExec = %+v, %v; want %+v", got, found, want)
+			}
+		})
+	}
+}
+
+// another shell as the last branch is a shell, not the program
+func TestNearestProgramKnowsTheOtherShells(t *testing.T) {
+	for _, name := range []string{"zsh", "ksh", "mksh", "dash", "ash", "bash"} {
+		t.Run(name, func(t *testing.T) {
+			trace := fmt.Sprintf(`1     execve("/bin/sh", ["sh", "-c", "a & %s -c b"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/%s", ["%s", "-c", "b"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
+`, name, name, name)
+			got, found := FinalExec([]byte(trace))
+			want := Exec{Pid: "7", Path: "/usr/bin/a", Argv: []string{"a"}, Line: 2, Beside: []string{"b"}}
+			if !found || !reflect.DeepEqual(got, want) {
+				t.Errorf("FinalExec = %+v, %v; want %+v", got, found, want)
+			}
+		})
+	}
+}
