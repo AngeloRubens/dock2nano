@@ -116,7 +116,7 @@ jobs:
           docker inspect --format '{{json .Config}}' "top30-$NAME" > "$R/image-config.json" 2>&1 || true
           echo "ROW image config: $(cut -c1-600 "$R/image-config.json")"
           docker create --name "ev-$NAME" "top30-$NAME" > /dev/null 2>&1 && docker export "ev-$NAME" | tar -t 2>/dev/null | gzip > "$R/image-files.txt.gz"; docker rm -f "ev-$NAME" >/dev/null 2>&1 || true
-          timeout 25 docker run --rm --name "run-$NAME" "top30-$NAME" > "$R/docker-run.log" 2>&1 || true
+          timeout -k 3 25 docker run --rm --name "run-$NAME" "top30-$NAME" > "$R/docker-run.log" 2>&1 || true
           echo "ROW docker run of the image as it is (25 s): $(wc -l < "$R/docker-run.log") lines; first 15 and last 10:"
           head -15 "$R/docker-run.log" | cut -c1-250; echo ...; tail -10 "$R/docker-run.log" | cut -c1-250
           docker rm -f "run-$NAME" >/dev/null 2>&1 || true
