@@ -1532,14 +1532,14 @@ func TestAnS6ToolGetsTheSofterAdvice(t *testing.T) {
 	for _, name := range []string{"s6-supervise", "s6-log", "runsv"} {
 		in, _ := launcherInput(t, "/command/"+name, []string{name, "web"}, "")
 		p := mustGen(t, in)
-		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is a tool of a process supervision suite")
+		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is taken for a tool of the s6 or runit suite, by its name")
 		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "starts every service")
 	}
 	for _, name := range []string{"s6-svscan", "runsvdir", "supervisord"} {
 		in, _ := launcherInput(t, "/usr/bin/"+name, []string{name}, "")
 		p := mustGen(t, in)
 		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is a process supervisor: it starts every service")
-		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "supervision suite")
+		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "s6 or runit suite")
 	}
 	// a supervisor of the node kind has its own message
 	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "")
@@ -1730,6 +1730,29 @@ func TestProgramsBesideTheProgramAreNamed(t *testing.T) {
 	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "the branch the shell forked last, at equal distance")
 	in2, _ := launcherInput(t, "/usr/bin/gunicorn", []string{"gunicorn", "app"}, "")
 	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "also ran beside the program")
+}
+
+func TestAWaiterAsTheProgramIsReported(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/tail", []string{"tail", "-f", "/dev/null"}, "")
+	in.Services["web"].Observed.BeforeWaiter = []string{"nginx", "php-fpm"}
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail")
+	want1(t, p, "web", plan.Unsupported, "program is a waiter", "nginx, php-fpm")
+	// the applet of busybox is named by argv[0], not by the file
+	in3, _ := launcherInput(t, "/bin/busybox", []string{"tail", "-f", "/dev/null"}, "")
+	in3.Services["web"].Observed.BeforeWaiter = []string{"nginx"}
+	want1(t, mustGen(t, in3), "web", plan.Unsupported, "program is a waiter", "the program the observation found is tail,")
+	in2, _ := launcherInput(t, "/usr/bin/tail", []string{"tail", "-f", "/dev/null"}, "")
+	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "program is a waiter")
+}
+
+func TestBesideSaysThatThePipelineReaderMayHaveBeenTaken(t *testing.T) {
+	in, _ := launcherInput(t, "/usr/bin/myfilter", []string{"myfilter"}, "")
+	o := in.Services["web"].Observed
+	o.Beside = []string{"java -jar app.jar"}
+	wantNoText(t, mustGen(t, in), "web", plan.Unsupported, "also ran beside the program", "reader of a pipeline")
+	o.BesideNear = true
+	want1(t, mustGen(t, in), "web", plan.Unsupported, "also ran beside the program", "the program may be the reader of a pipeline")
 }
 
 func TestChildLauncherWordingTellsWhoStartedIt(t *testing.T) {

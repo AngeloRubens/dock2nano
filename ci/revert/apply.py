@@ -8,6 +8,7 @@ R={
  'script-is-told-by-exact-names':[(L,'if b := path.Base(n); ProcessSupervisors[b] {','if b := path.Base(n); IsProcessSupervisor(b) {')],
  'soft-advice':[(G,'case trace.IsProcessSupervisor(name):','case false:')],
  'strong-advice-only-for-the-top':[(G,'case trace.StartsEveryService(name):','case trace.IsProcessSupervisor(name):')],
+ 'soft-advice-wording':[(G,' is taken for a tool of the s6 or runit suite, by its name:',' is a tool of a process supervision suite:')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:

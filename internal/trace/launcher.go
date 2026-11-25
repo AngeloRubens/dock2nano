@@ -90,6 +90,7 @@ func launcherFile(p string) string {
 // busybox of an image of alpine, which is told by argv[0].
 var interpreters = map[string]bool{
 	"node": true, "nodejs": true, "sh": true, "bash": true, "dash": true, "ash": true,
+	"zsh": true, "ksh": true, "mksh": true,
 }
 
 // nodeNoScript are the options of node that run code given on the command line, not a file.
@@ -236,7 +237,7 @@ func IsCompound(text string) bool {
 // package.json script it was asked to run, as in npm (script "start"); any other program is the
 // base name of argv[0] (or of the path when there is none).
 func Label(program string, argv []string) string {
-	if interp, _ := interpreterOf(program, argv); interp == "sh" || interp == "bash" || interp == "dash" || interp == "ash" {
+	if interp, _ := interpreterOf(program, argv); interp == "sh" || interp == "bash" || interp == "dash" || interp == "ash" || interp == "zsh" || interp == "ksh" || interp == "mksh" {
 		if _, ok := ShellCommand(program, argv); ok {
 			return interp + " -c"
 		}
@@ -312,8 +313,14 @@ func Supervisor(program string, argv []string) string {
 	// the script an interpreter runs: the first argument that is not an option or the value of one
 	// (python3 -u -W ignore /usr/bin/supervisord)
 	// (python -c code: the code is not an absolute path, so it ends the search without a name)
+	// only a program that runs scripts has one: the arguments of any other program are its own
+	// (tail -f /var/log/runsv, myserver /etc/supervisord)
+	runsScripts := interpreterName.MatchString(path.Base(program)) || (len(argv) > 0 && interpreterName.MatchString(path.Base(argv[0])))
+	if interp, _ := interpreterOf(program, argv); interp != "" {
+		runsScripts = true
+	}
 scriptArg:
-	for i := 1; i < len(argv); i++ {
+	for i := 1; runsScripts && i < len(argv); i++ {
 		a := argv[i]
 		switch {
 		case a == "-m":
@@ -406,7 +413,7 @@ func commandText(args []string) (string, bool) {
 func ShellCommand(program string, argv []string) (string, bool) {
 	interp, args := interpreterOf(program, argv)
 	switch interp {
-	case "sh", "bash", "dash", "ash":
+	case "sh", "bash", "dash", "ash", "zsh", "ksh", "mksh":
 		return commandText(args)
 	}
 	return "", false
@@ -532,8 +539,10 @@ loop:
 var interpreterName = regexp.MustCompile(`^(?:python[0-9.]*|pypy[0-9]*|ruby|perl|php[0-9.]*|node|nodejs|bun|deno)$`)
 
 // besideLabel is Label with the script an interpreter runs, the module of python -m, or the jar of
-// java -jar added: "python" or "java" alone does not say which program ran. The names of the files
-// only, never their directories or the other arguments.
+// java -jar added: "python" or "java" alone does not say which program ran. Only a name that is a
+// file name is added (no space or control character, as for Label), never a directory or another
+// argument; nothing is added after an option that gives the code (-c, -e, -E, -p, --eval, --print),
+// since the next argument is code and may hold a secret.
 func besideLabel(program string, argv []string) string {
 	label := Label(program, argv)
 	name := path.Base(program)
@@ -544,24 +553,33 @@ func besideLabel(program string, argv []string) string {
 	if len(argv) > 1 {
 		args = argv[1:]
 	}
+	add := func(prefix, value string) string {
+		if value == "" || strings.IndexFunc(value, func(r rune) bool { return r == ' ' || !unicode.IsPrint(r) }) >= 0 {
+			return label
+		}
+		return label + prefix + value
+	}
 	switch {
 	case name == "java":
 		for i := 0; i+1 < len(args); i++ {
 			if args[i] == "-jar" {
-				return label + " -jar " + path.Base(args[i+1])
+				return add(" -jar ", path.Base(args[i+1]))
 			}
 		}
 	case interpreterName.MatchString(name):
 		for i := 0; i < len(args); i++ {
 			a := args[i]
 			switch {
+			case a == "--eval" || a == "--print" || (len(a) >= 2 && a[0] == '-' && a[1] != '-' && strings.ContainsRune("ceEp", rune(a[len(a)-1]))):
+				return label
 			case a == "-m" && i+1 < len(args):
-				return label + " -m " + args[i+1]
-			case a == "-W" || a == "-X" || a == "-Q" || a == "-r" || a == "--require":
+				return add(" -m ", args[i+1])
+			case a == "-W" || a == "-X" || a == "-Q" || a == "-r" || a == "--require" || a == "-S" || a == "-t" || a == "-I" || a == "-i":
 				i++
+			case (name == "deno" || name == "bun") && a == "run":
 			case strings.HasPrefix(a, "-"):
 			default:
-				return label + " " + path.Base(a)
+				return add(" ", path.Base(a))
 			}
 		}
 	}

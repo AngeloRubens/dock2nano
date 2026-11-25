@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: ["s6-prefix-for-the-program", "runsv", "gen-uses-the-prefix", "supervisor-uses-the-prefix", "script-is-told-by-exact-names", "soft-advice", "strong-advice-only-for-the-top"]
+        name: ["s6-prefix-for-the-program", "runsv", "gen-uses-the-prefix", "supervisor-uses-the-prefix", "script-is-told-by-exact-names", "soft-advice", "strong-advice-only-for-the-top", "soft-advice-wording"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

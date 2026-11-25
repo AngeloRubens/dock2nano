@@ -275,13 +275,14 @@ func TestApplyHubRecipeReadsTheEnvironmentOfTheImageToo(t *testing.T) {
 func TestApplyHubWholeNamesWhatRanBesideTheProgram(t *testing.T) {
 	obs := hubWholeObs()
 	obs.Beside = []string{"celery", "celery", "python -m worker"}
+	obs.BesideNear, obs.BeforeWaiter = true, []string{"x"}
 	items := ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), obs)
 	b := hubFind(items, "also ran beside")
 	if len(b) != 1 || b[0].Kind != plan.Unsupported || !strings.Contains(b[0].Message, "celery (x2), python -m worker") {
 		t.Errorf("%+v", b)
 	}
-	if obs.Beside != nil {
-		t.Errorf("the observation keeps %q", obs.Beside)
+	if obs.Beside != nil || obs.BesideNear || obs.BeforeWaiter != nil {
+		t.Errorf("the observation keeps %q, %v, %q", obs.Beside, obs.BesideNear, obs.BeforeWaiter)
 	}
 	if got := hubFind(ApplyHubWhole(hubWholeUse(hub.Exact, "16.2", "16.2"), hubWholeObs()), "also ran beside"); len(got) != 0 {
 		t.Errorf("an item without anything beside: %+v", got)
