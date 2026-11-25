@@ -22,7 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: loopsrv, repo: local, sha: none, port: "8000", probe: http, local: "yes"}
+          - {name: loopsrv, repo: local, sha: none, port: "8000", probe: http, local: "nearest"}
+          - {name: tailsrv, repo: local, sha: none, port: "8000", probe: http, local: "nearest-tail"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -79,7 +80,7 @@ jobs:
           # 1. the source at the pinned commit, unmodified. The directory is named after the row, so the
           # default name of the conversion (the name of the context directory) is the row name.
           rm -rf "/tmp/w/$NAME" && mkdir -p "/tmp/w/$NAME" && cd "/tmp/w/$NAME"
-          if [ "${LOCAL:-}" = yes ]; then cp -r "$GITHUB_WORKSPACE/ci/nearest/." . && echo "ROW source=local ci/nearest"; srcok=yes; else
+          if [ -n "${LOCAL:-}" ]; then cp -r "$GITHUB_WORKSPACE/ci/$LOCAL/." . && echo "ROW source=local ci/$LOCAL"; srcok=yes; else
           git init -q && git remote add origin "https://github.com/$REPO.git"
           if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
             if [ "${FULL:-}" = yes ]; then git fetch -q --filter=blob:none --unshallow --tags origin && echo "ROW full history and tags fetched: $(git describe --tags --always)"; fi
