@@ -1144,8 +1144,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 	// shell. At the same distance the process whose fork is the later one wins, comparing the lines
 	// of the forks on the way down from the shell, so a setup step beside the server, which comes
 	// first on the command line, loses. Which of two processes calls execve first is a race of the
-	// start and decides nothing; only two processes with the very same fork (none) fall back to
-	// the line of their execve. This is the rule of mainProgram of the survey fork of ops, which
+	// start and decides nothing. This is the rule of mainProgram of the survey fork of ops, which
 	// reads a snapshot of "docker top"; here it reads the trace. A pipeline cannot be told from "a &
 	// b" by the calls that are traced (the pipe and dup2 calls are not), so the readers of a
 	// pipeline are kept out by name, and the others are not.
@@ -1197,14 +1196,16 @@ func FinalExec(trace []byte) (Exec, bool) {
 			}
 			found = append(found, c)
 		}
-		// a is later than b: where the forks differ, the later fork; the same forks, the later execve
+		// a is later than b: where the forks on the way down differ, the later fork. Two processes at
+		// the same distance have different forks on the way (one would be below the other
+		// otherwise), and the line of the execve, which is a race of the start, is never used.
 		later := func(a, b candidate) bool {
 			for k := 0; k < len(a.path) && k < len(b.path); k++ {
 				if a.path[k] != b.path[k] {
 					return a.path[k] > b.path[k]
 				}
 			}
-			return last[a.pid].Line > last[b.pid].Line
+			return false
 		}
 		best := -1
 		for tier := 0; tier < 2 && best < 0; tier++ {
