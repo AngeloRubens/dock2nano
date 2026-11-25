@@ -1106,10 +1106,10 @@ func TestFinalExec(t *testing.T) {
 1     execve("/bin/sleep", ["sleep", "infinity"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "1", Path: "/bin/sleep", Argv: []string{"sleep", "infinity"}, Line: 3, BeforeWaiter: []string{"nginx"}}, true},
 		{"supervisord and the last command a tail, in the pid of the shell (limit)", `1     execve("/bin/sh", ["sh", "-c", "supervisord -c x & tail -f log"], 0x7ffd1 /* 1 vars */) = 0
-1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
-7     execve("/usr/bin/supervisord", ["supervisord", "-c", "x"], 0x7ffd1 /* 1 vars */) = 0
-7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
-9     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/bin/supervisord", ["supervisord", "-c", "x"], 0x7ffd1 /* 1 vars */) = 0
+9     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
 1     execve("/usr/bin/tail", ["tail", "-f", "log"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "1", Path: "/usr/bin/tail", Argv: []string{"tail", "-f", "log"}, Line: 5, BeforeWaiter: []string{"supervisord", "nginx"}}, true},
 		{"a wait that is not the last command is not the program (sleep infinity & server)", `1     execve("/bin/sh", ["sh", "-c", "sleep infinity & server"], 0x7ffd1 /* 1 vars */) = 0
