@@ -3,7 +3,7 @@ T='internal/trace/trace.go'; O='internal/observe/observe.go'; G='internal/gen/ge
 R={
  'hostname-from-env':[(O,r'ok && hostnameOK.MatchString(v) {','ok && false && hostnameOK.MatchString(v) {')],
  'hostname-must-be-valid':[(O,r'ok && hostnameOK.MatchString(v) {','ok {')],
- 'hosts-line-names-the-hostname':[(O,r'"127.0.0.1\tlocalhost " + hostname + "\n::1','"127.0.0.1\tlocalhost" + "\n::1')],
+ 'hosts-line-names-the-hostname':[(O,r'localhost " + hostname + "\n::1',r'localhost " + "" + "\n::1')],
  'hostname-file':[(O,r'if err := os.WriteFile(filepath.Join(sysroot, "etc", "hostname"), []byte(hostname+"\n"), 0o644); err != nil {','if err := error(nil); err != nil {')],
  'report-names-the-hostname':[(G,r'if obs.Hostname != "" {','if false {')],
 }
