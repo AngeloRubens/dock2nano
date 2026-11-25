@@ -20,10 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: php-cli, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
-          - {name: php-cli-alpine, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
-          - {name: php-apache, repo: local, sha: ci/php/apache, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
-          - {name: php-fpm, repo: local, sha: ci/php/fpm, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24"}
+          - {name: php-cli, repo: local, sha: ci/php/cli, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: ""}
+          - {name: php-cli-alpine, repo: local, sha: ci/php/cli-alpine, port: "8080", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: ""}
+          - {name: php-apache, repo: local, sha: ci/php/apache, port: "80", probe: http, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "--command 'php-apache=env APACHE_RUN_USER=www-data APACHE_RUN_GROUP=www-data APACHE_PID_FILE=/var/run/apache2/apache2.pid APACHE_RUN_DIR=/var/run/apache2 APACHE_LOCK_DIR=/var/lock/apache2 APACHE_LOG_DIR=/var/log/apache2 apache2 -DONE_PROCESS -DFOREGROUND'", mkdirs: ""}
+          - {name: php-fpm, repo: local, sha: ci/php/fpm, port: "9000", probe: tcp, dockerfile: Dockerfile, context: ".", kvm: "no", env: "", tries: "24", cargs: "", mkdirs: "tmp"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -44,6 +44,20 @@ jobs:
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
             sleep 2
+            # ops compose does not set Accel in its RunConfig (cmd/compose.go), so qemu runs without accel=kvm and with -cpu max.
+            # Measurement only: a wrapper in front of qemu-system-x86_64 adds accel=kvm and -cpu host. It changes nothing else.
+            sudo tee /usr/local/bin/qemu-system-x86_64 >/dev/null <<'WRAP'
+          #!/bin/bash
+          args=(); prev=""
+          for a in "$@"; do
+            if [ "$prev" = -machine ] && [ "$a" = q35 ]; then a="q35,accel=kvm"; fi
+            if [ "$prev" = -cpu ] && [ "$a" = max ]; then a="host"; fi
+            args+=("$a"); prev="$a"
+          done
+          echo "$(date +%T) qemu ${args[*]}" >> /tmp/qemu-wrapper.log
+          exec /usr/bin/qemu-system-x86_64 "${args[@]}"
+          WRAP
+            sudo chmod 755 /usr/local/bin/qemu-system-x86_64
           fi
           echo "ROW kvm after: $(ls -l /dev/kvm 2>&1)"
           echo "ROW kvm access for root: $(sudo test -r /dev/kvm -a -w /dev/kvm && echo rw || echo no)"
@@ -80,6 +94,8 @@ jobs:
           FULL: ${{ matrix.full }}
           XENV: ${{ matrix.env }}
           TRIES: ${{ matrix.tries }}
+          XCARGS: ${{ matrix.cargs }}
+          XMKDIRS: ${{ matrix.mkdirs }}
           KVM: ${{ matrix.kvm }}
         run: |
           set -u
@@ -136,7 +152,8 @@ jobs:
 
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
-          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
+          CARGS_ARR=(); if [ -n "${XCARGS:-}" ]; then eval "CARGS_ARR=($XCARGS)"; echo "ROW extra arguments of convert: $XCARGS"; fi
+          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull "${CARGS_ARR[@]}" > "$R/report.txt" 2>&1
           cexit=$?
           cat "$R/report.txt" | cut -c1-300
           echo "ROW convert_exit=$cexit"
@@ -150,6 +167,11 @@ jobs:
           echo "ROW compose.yaml:"; cut -c1-200 "$R/compose/compose.yaml"
 
           # measurement only: variables put into the manifest of the package (the tool does not do this)
+          if [ -n "${XMKDIRS:-}" ]; then
+            for P in "$OPS_HOME"/.ops/local_packages/amd64/${NAME}_*; do
+              for d in $XMKDIRS; do mkdir -p "$P/sysroot/$d" && echo "ROW made directory $P/sysroot/$d (measurement)"; done
+            done
+          fi
           if [ -n "${XENV:-}" ]; then
             for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
               echo "ROW injected env into $mf: $XENV"
@@ -168,7 +190,7 @@ jobs:
           up_ok=0
           for attempt in 1 2 3; do
             upn=$attempt
-            if eval "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
+            if timeout 420 bash -c "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
             echo "ROW compose_up=failed attempt=$attempt"
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
