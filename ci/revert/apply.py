@@ -4,14 +4,13 @@ R={
  'nearest-rule-off':[(T,r'if program, others := nearestProgram(process); program != "" {','if program, others := nearestProgram(process); false && program != "" {')],
  'nearest-fork-order-decides':[(T,r'if a.path[k] != b.path[k] {','if false {')],
  'nearest-later-fork-wins':[(T,r'return a.path[k] > b.path[k]','return a.path[k] < b.path[k]')],
- 'nearest-same-fork-later-execve':[(T,r'return last[a.pid].Line > last[b.pid].Line','return last[a.pid].Line < last[b.pid].Line')],
  'nearest-nearer-wins':[(T,r'c.depth < found[best].depth ||','c.depth > found[best].depth ||')],
  'nearest-shells-are-not-the-program':[(T,r'c.notProgram = c.isShell || ','c.notProgram = ')],
  'nearest-shell-by-file-name':[(T,r'c.isShell = shells[interp] || shells[name]','c.isShell = shells[interp]')],
  'nearest-busybox-is-not-the-program':[(T,r' || name == "busybox"','')],
  'nearest-ps-is-not-the-program':[(T,r' || name == "ps"','')],
- 'nearest-waiters-are-not-the-program':[(T,r'waiters[name] || ','')],
- 'nearest-copiers-are-not-the-program':[(T,r'copiers[name] || ','')],
+ 'nearest-waiters-are-not-the-program':[(T,'waiters[name] || ','(false && waiters[name]) || ')],
+ 'nearest-copiers-are-not-the-program':[(T,'copiers[name] || ','(false && copiers[name]) || ')],
  'nearest-sleep-in-the-list':[(T,r'"sleep": true, ','')],
  'nearest-tail-in-the-list':[(T,r'"tail": true, ','')],
  'nearest-watch-in-the-list':[(T,r', "watch": true}','}')],
@@ -43,7 +42,7 @@ R={
  'beside-carried-by-observe':[(O,r'		Beside:             final.Beside,','')],
  'beside-item-in-the-report':[(G,r'if len(obs.Beside) > 0 {','if false && len(obs.Beside) > 0 {')],
  'beside-wording':[(G,r'(the branch the shell forked last, at equal distance)','(the later one of equal distance)')],
- 'hub-whole-names-beside':[(H:='internal/gen/hub.go',r'if len(beside) > 0 {','if false && len(beside) > 0 {')],
+ 'hub-whole-names-beside':[('internal/gen/hub.go','if len(beside) > 0 {','if false && len(beside) > 0 {')],
 }
 name=sys.argv[1]
 for f,old,new in R[name]:

@@ -1084,6 +1084,14 @@ func TestFinalExec(t *testing.T) {
 7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
 10    execve("/usr/sbin/php-fpm", ["php-fpm"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "7", Path: "/usr/bin/supervisord", Argv: []string{"supervisord", "-n"}, Line: 2, Beside: []string{"tail"}}, true},
+		{"what is under a supervisor beside the program is the supervisor's own, and not named", `1     execve("/bin/sh", ["sh", "-c", "server & supervisord -n"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
+7     execve("/usr/bin/server", ["server"], 0x7ffd1 /* 1 vars */) = 0
+1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
+8     execve("/usr/bin/supervisord", ["supervisord", "-n"], 0x7ffd1 /* 1 vars */) = 0
+8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
+9     execve("/usr/sbin/nginx", ["nginx"], 0x7ffd1 /* 1 vars */) = 0
+`, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2, Beside: []string{"supervisord"}}, true},
 		{"another shell as the last branch is not the program", `1     execve("/bin/sh", ["sh", "-c", "a & zsh -c b"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
