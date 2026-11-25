@@ -3176,13 +3176,16 @@ func TestWriteLocalNamesKeepsAFileThatIsThere(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &run{once: map[string]bool{}}
-	r.writeLocalNames(dir)
+	r.writeLocalNames(dir, "web")
 	b, _ := os.ReadFile(filepath.Join(dir, "etc", "hosts"))
 	if string(b) != "10.0.0.1 db\n" {
 		t.Errorf("/etc/hosts = %q", b)
 	}
 	if r.localNames {
 		t.Error("localNames is set for a file that was there")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "etc", "hostname")); err == nil || r.hostname != "" {
+		t.Error("a hostname was written next to a hosts file that was there")
 	}
 }
 
