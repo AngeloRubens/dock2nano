@@ -1,5 +1,5 @@
 name: top30
-# Rows of the JVM and .NET extension of docs/top30.md (section Java and .NET): a repository at a pinned sha,
+# Rows of docs/top30.md (the 30 Dockerfiles, and the section Java and .NET): a repository at a pinned sha,
 # a Dockerfile path inside it and a build context, converted unmodified: docker builds the image, dock2nano
 # converts the Dockerfile (--dockerfile, --context, --name) to a nanos package and a compose.yaml, ops compose
 # up starts it, and the strict probe asks the port (2xx or 3xx, or an open TCP port is green). Every row prints
@@ -20,18 +20,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: openliberty, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http}
-          - {name: tomcat, repo: docker-library/tomcat, sha: 66f36aac84471fdf6bcbb42628b895c8d7e82704, dockerfile: 11.0/jdk21/temurin-noble/Dockerfile, context: "11.0/jdk21/temurin-noble", port: "8080", probe: http}
-          - {name: spring-guide, repo: spring-guides/gs-spring-boot-docker, sha: f6e96e447d8e1e36086ffb8cb3564c19e26674a4, dockerfile: complete/Dockerfile, context: "complete", port: "8080", probe: http}
-          - {name: halo, repo: halo-dev/halo, sha: d29609ae2846c3c9c98990f4902e65bea6c63f75, dockerfile: Dockerfile, context: ".", port: "8090", probe: http}
-          - {name: quarkus-gs, repo: quarkusio/quarkus-quickstarts, sha: b3e90af5f60b94a1acb14736be97e34127f079ec, dockerfile: getting-started/src/main/docker/Dockerfile.jvm, context: "getting-started", port: "8080", probe: http}
-          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http}
-          - {name: keycloak, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http}
-          - {name: jenkins, repo: jenkinsci/docker, sha: 155bf2878d9880c32fe9534269811d306186ec09, dockerfile: debian/Dockerfile, context: "debian", port: "8080", probe: http}
-          - {name: sonarqube, repo: SonarSource/docker-sonarqube, sha: d6830792f2f6837132c4e67a7dc249c9aba6dabe, dockerfile: community-build/Dockerfile, context: "community-build", port: "9000", probe: http}
-          - {name: aspnetapp, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http}
-          - {name: orchardcore, repo: OrchardCMS/OrchardCore, sha: d4071e015b9df9a53e1a0355eea825bccff07a45, dockerfile: Dockerfile, context: ".", port: "80", probe: http}
-          - {name: btcpay, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http}
+          - {name: aspnet-base-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-base-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-base-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-wx0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-wx0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-wx0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-pgo0-a, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-pgo0-b, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-pgo0-c, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_TieredPGO=0", tries: "3", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: aspnet-wx0-fw, repo: dotnet/dotnet-docker, sha: 4749d72bef7dacbd590d9a657b41b3dfedfcf66d, dockerfile: samples/AspNetCoreRazorApp/Dockerfile, context: "samples/AspNetCoreRazorApp", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "20", cargs: "", mkdirs: "", copy: "/usr/share/dotnet/shared/Microsoft.AspNetCore.App", path: "/"}
+          - {name: btcpay-wx0, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: eshop-wx0, repo: dotnet-architecture/eShopOnWeb, sha: 4da8212117e87d808d4bbc7da6286fd2147ce606, dockerfile: src/Web/Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: nop-wx0, repo: nopSolutions/nopCommerce, sha: 0344b61747963e57e9f70c818f517a0d59a8b528, dockerfile: Dockerfile, context: ".", port: "80", probe: http, kvm: "yes", env: "DOTNET_EnableWriteXorExecute=0", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: wildfly, repo: jboss-dockerfiles/wildfly, sha: 2c70dcb01c8d1fc1db4448480fd5b9d2e8c75548, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "40", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: hapi-fhir, repo: hapifhir/hapi-fhir-jpaserver-starter, sha: 8db622874c2d1e3d26fe636978e00d77b75c0d2b, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: petclinic-kt, repo: spring-petclinic/spring-petclinic-kotlin, sha: 9823b3aa97988854668e608750db88502775caa7, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/"}
+          - {name: helidon-se, repo: helidon-io/helidon-examples, sha: 1ea90c465d86828922ae0ad04a06bbf8b43ef5d6, dockerfile: examples/quickstarts/helidon-quickstart-se/Dockerfile, context: "examples/quickstarts/helidon-quickstart-se", port: "8080", probe: http, kvm: "yes", env: "", tries: "20", cargs: "", mkdirs: "", copy: "", path: "/greet"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,6 +46,34 @@ jobs:
         run: docker version
       - name: the tool
         run: for i in 1 2 3; do go build -o "$RUNNER_TEMP/d2n" . && break; sleep 20; done; test -x "$RUNNER_TEMP/d2n"
+      - name: kvm (state of /dev/kvm, the udev rule only for the rows with kvm yes)
+        env:
+          KVM: ${{ matrix.kvm }}
+        run: |
+          echo "ROW kvm requested=$KVM nproc=$(nproc) cpu flags vmx/svm lines=$(grep -c -E 'vmx|svm' /proc/cpuinfo || true) user=$(id -un)"
+          echo "ROW kvm before: $(ls -l /dev/kvm 2>&1)"
+          if [ "$KVM" = yes ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            sleep 2
+            # ops compose does not set Accel in its RunConfig (cmd/compose.go), so qemu runs without accel=kvm and with -cpu max.
+            # Measurement only: a wrapper in front of qemu-system-x86_64 adds accel=kvm and -cpu host. It changes nothing else.
+            sudo tee /usr/local/bin/qemu-system-x86_64 >/dev/null <<'WRAP'
+          #!/bin/bash
+          args=(); prev=""
+          for a in "$@"; do
+            if [ "$prev" = -machine ] && [ "$a" = q35 ]; then a="q35,accel=kvm"; fi
+            if [ "$prev" = -cpu ] && [ "$a" = max ]; then a="host"; fi
+            args+=("$a"); prev="$a"
+          done
+          echo "$(date +%T) qemu ${args[*]}" >> /tmp/qemu-wrapper.log
+          exec /usr/bin/qemu-system-x86_64 "${args[@]}"
+          WRAP
+            sudo chmod 755 /usr/local/bin/qemu-system-x86_64
+          fi
+          echo "ROW kvm after: $(ls -l /dev/kvm 2>&1)"
+          echo "ROW kvm access for root: $(sudo test -r /dev/kvm -a -w /dev/kvm && echo rw || echo no)"
       - name: qemu
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils iproute2 dnsutils dnsmasq >/dev/null
       - name: ops from source (nanovms/ops master 2177c549, with the arp fix of PR 1805 and PRs 1815-1818)
@@ -71,6 +104,14 @@ jobs:
           CTX: ${{ matrix.context }}
           PORT: ${{ matrix.port }}
           KIND: ${{ matrix.probe }}
+          FULL: ${{ matrix.full }}
+          XENV: ${{ matrix.env }}
+          TRIES: ${{ matrix.tries }}
+          XCARGS: ${{ matrix.cargs }}
+          XMKDIRS: ${{ matrix.mkdirs }}
+          XCOPY: ${{ matrix.copy }}
+          XPATH: ${{ matrix.path }}
+          KVM: ${{ matrix.kvm }}
         run: |
           set -u
           R=/tmp/out/$NAME
@@ -89,7 +130,8 @@ jobs:
           W=/tmp/w/$NAME
           rm -rf "$W" && mkdir -p "$W" && cd "$W"
           git init -q && git remote add origin "https://github.com/$REPO.git"
-          if git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; then
+          if { [ "$REPO" = local ] && cp -r "$GITHUB_WORKSPACE/$SHA/." "$W/"; } || { git fetch -q --depth 1 origin "$SHA" && git checkout -q FETCH_HEAD; }; then
+            if [ "${FULL:-}" = yes ]; then git fetch -q --filter=blob:none --unshallow --tags origin && echo "ROW full history and tags fetched: $(git describe --tags --always)"; fi
             srcok=yes; echo "ROW source=ok $(git log --oneline -1 | cut -c1-100)"
           else
             echo "ROW source=fail: git fetch or checkout of $SHA"; exit 1
@@ -114,9 +156,22 @@ jobs:
             echo "ROW convert run after the failed docker build: the row stops here"; exit 1
           fi
 
+          # 2b. evidence: the image as docker runs it, and the raw strace of the observation
+          docker inspect --format '{{json .Config}}' "top30-$NAME" > "$R/image-config.json" 2>&1 || true
+          echo "ROW image config: $(cut -c1-700 "$R/image-config.json")"
+          docker run -d --name "run-$NAME" "top30-$NAME" > /dev/null 2>&1 || true
+          sleep "${DRUN:-30}"
+          docker logs "run-$NAME" > "$R/docker-run.log" 2>&1 || true
+          echo "ROW docker run of the image as it is (${DRUN:-30} s): $(wc -l < "$R/docker-run.log") lines; first 12 and last 8:"
+          head -12 "$R/docker-run.log" | cut -c1-250; echo ...; tail -8 "$R/docker-run.log" | cut -c1-250
+          echo "ROW docker top of the container:"; docker top "run-$NAME" -eo pid,ppid,args 2>&1 | cut -c1-1800 | head -25
+          docker rm -f "run-$NAME" >/dev/null 2>&1 || true
+          mkdir -p "$R/trace"; export DOCK2NANO_KEEP_TRACE="$R/trace"
+
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
-          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull > "$R/report.txt" 2>&1
+          CARGS_ARR=(); if [ -n "${XCARGS:-}" ]; then eval "CARGS_ARR=($XCARGS)"; echo "ROW extra arguments of convert: $XCARGS"; fi
+          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull "${CARGS_ARR[@]}" > "$R/report.txt" 2>&1
           cexit=$?
           cat "$R/report.txt" | cut -c1-300
           echo "ROW convert_exit=$cexit"
@@ -129,6 +184,26 @@ jobs:
           fi
           echo "ROW compose.yaml:"; cut -c1-200 "$R/compose/compose.yaml"
 
+          # measurement only: variables put into the manifest of the package (the tool does not do this)
+          if [ -n "${XMKDIRS:-}" ]; then
+            for P in "$OPS_HOME"/.ops/local_packages/amd64/${NAME}_*; do
+              for d in $XMKDIRS; do mkdir -p "$P/sysroot/$d" && echo "ROW made directory $P/sysroot/$d (measurement)"; done
+            done
+          fi
+          if [ -n "${XCOPY:-}" ]; then
+            docker create --name "cp-$NAME" "top30-$NAME" > /dev/null
+            for P in "$OPS_HOME"/.ops/local_packages/amd64/${NAME}_*; do
+              for d in $XCOPY; do mkdir -p "$P/sysroot$(dirname "$d")" && docker cp "cp-$NAME:$d" "$P/sysroot$(dirname "$d")/" && echo "ROW copied $d from the image into the sysroot (measurement): $(du -sh "$P/sysroot$d" | cut -f1)"; done
+            done
+            docker rm -f "cp-$NAME" > /dev/null
+          fi
+          if [ -n "${XENV:-}" ]; then
+            for mf in $(find "$OPS_HOME/.ops/local_packages" -name package.manifest | grep -v "/ops-dns" | sort -u); do
+              echo "ROW injected env into $mf: $XENV"
+              for kv in $XENV; do jq --arg k "${kv%%=*}" --arg v "${kv#*=}" '.Env[$k]=$v' "$mf" > "$mf.new" && mv "$mf.new" "$mf"; done
+              jq -c .Env "$mf" | cut -c1-600
+            done
+          fi
           # 4. the commands that the "Next steps" of the report print, run exactly as printed.
           # the ops pkg line is "(once, if you do not have it yet)"; the up line is "sudo env ... ops compose up -f ..."
           pkgcmd=$(grep -m1 "ops pkg get" "$R/report.txt" | sed -e 's/^ *//' -e 's/ *(once.*$//')
@@ -140,13 +215,14 @@ jobs:
           up_ok=0
           for attempt in 1 2 3; do
             upn=$attempt
-            if eval "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
+            if timeout 420 bash -c "$upcmd" > "$R/up.log" 2>&1; then up_ok=1; echo "ROW compose_up=ok attempt=$attempt"; break; fi
             echo "ROW compose_up=failed attempt=$attempt"
             grep -v "^no ip found\|^couldn't find mac\|^mac is an empty\|Manifest:\|&{root" "$R/up.log" | cut -c1-200 | tail -6
             cp "$R/up.log" "$R/up-attempt-$attempt.log"
             # the instance and its console, before the down of the next try removes them
             sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances-attempt-$attempt.txt" 2>&1 || true
             sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console-attempt-$attempt.txt" 2>&1 || true
+            echo "ROW attempt=$attempt listening-lines=$(grep -c "Now listening\|Server startup\|started in" "$R/console-attempt-$attempt.txt") crash-lines=$(grep -c "signal 11\|General protection\|Page fault" "$R/console-attempt-$attempt.txt")"
             echo "ROW attempt=$attempt console of $NAME: $(wc -l < "$R/console-attempt-$attempt.txt") lines; first lines:"
             head -6 "$R/console-attempt-$attempt.txt" | cut -c1-200
             if [ "$attempt" -lt 3 ]; then sudo env OPS_HOME="$OPS_HOME" ops compose down > /dev/null 2>&1 || true; sleep 5; fi
@@ -167,20 +243,21 @@ jobs:
           sudo env OPS_HOME="$OPS_HOME" ops instance list > "$R/instances.txt" 2>&1 || true
           sudo env OPS_HOME="$OPS_HOME" ops instance logs "$NAME" > "$R/console.txt" 2>&1 || true
           ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" | tail -1 | awk '{print $2}')
+          echo "ROW qemu command lines (accel flags):"; ps -eo args | grep "[q]emu-system" | grep -o -E "(-machine [^ ]*|-cpu [^ ]*|--enable-kvm|-accel [^ ]*|-m [^ ]*|-smp [^ ]*)" | sort | uniq -c
           echo "ROW address=${ip:-none}"
           if [ -z "$ip" ]; then probe=no-address; echo "ROW probe=no-address"; exit 1; fi
           codes=""; code=""
-          for i in $(seq 1 24); do
+          for i in $(seq 1 ${TRIES:-24}); do
             if [ "$KIND" = http ]; then
               rm -f "$R/body.txt"
-              code=$(curl -s -m 5 -H "Host: $ip:$PORT" -o "$R/body.txt" -w '%{http_code}' "http://$ip:$PORT/" || true)
+              code=$(curl -s -m 5 -H "Host: $ip:$PORT" -o "$R/body.txt" -w '%{http_code}' "http://$ip:$PORT${XPATH:-/}" || true)
               codes="$codes $code"
               if [ "$code" != 000 ]; then cp "$R/body.txt" "$R/body.last.txt" 2>/dev/null || true; fi
               case "$code" in 2*|3*) break;; esac
             else
               if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/$PORT" 2>/dev/null; then code=open; break; else code=closed; fi
             fi
-            [ "$i" = 24 ] || sleep 10
+            [ "$i" = "${TRIES:-24}" ] || sleep 10
           done
           lastcode=""
           for c in $codes; do case "$c" in 000|"") ;; *) lastcode=$c;; esac; done
@@ -196,6 +273,26 @@ jobs:
           echo "=== console of $NAME, last 25 lines"; tail -25 "$R/console.txt" | cut -c1-250
           [ "$probe" = success ] && exit 0
           exit 1
+      - name: evidence (package, manifest, port scan)
+        if: always()
+        run: |
+          N=${{ matrix.name }}
+          R=/tmp/out/$N
+          P=$(ls -d "$OPS_HOME"/.ops/local_packages/amd64/${N}_* 2>/dev/null | head -1)
+          echo "ROW package dir: $P"
+          if [ -n "$P" ]; then
+            ls -la "$P" | head -20
+            echo "ROW sysroot top level:"; ls -la "$P/sysroot" 2>&1 | head -40
+            find "$P" -maxdepth 1 -type f -name '*.manifest' -exec cp {} "$R/" \; 2>/dev/null || true
+            sudo find "$P" \( -type f -o -type l \) | sed "s|^$P||" | sort | gzip > "$R/package-files.txt.gz"
+            echo "ROW package files: $(zcat "$R/package-files.txt.gz" | wc -l)"
+            echo "ROW manifest:"; cat "$P"/package.manifest 2>/dev/null | cut -c1-400 | head -60 || true
+          fi
+          ip=$(grep -o 'assigned 192\.168\.33\.[0-9]*' "$R/console.txt" 2>/dev/null | tail -1 | awk '{print $2}')
+          if [ -n "$ip" ]; then
+            sudo apt-get install -y -qq nmap >/dev/null 2>&1 || true
+            echo "ROW port scan of $ip (1-10000)"; sudo nmap -Pn -p 1-10000 --min-rate 1500 "$ip" 2>&1 | tail -12 | tee "$R/nmap.txt"
+          fi
       - name: instance list and console (before the down step removes the instance)
         if: always()
         run: |
