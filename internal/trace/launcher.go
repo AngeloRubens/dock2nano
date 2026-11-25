@@ -270,7 +270,9 @@ var supervisors = map[string]bool{
 	"forever": true, "concurrently": true, "npm-run-all": true, "run-p": true, "run-s": true,
 }
 
-// ProcessSupervisors are the supervisors that start every service of the image, not one program.
+// ProcessSupervisors are the names, apart from the s6- prefix, of the programs of a process
+// supervision suite: the ones that start every service of the image (s6-svscan, runsvdir,
+// supervisord, see StartsEveryService) and runsv, which looks after one service.
 var ProcessSupervisors = map[string]bool{"s6-svscan": true, "runsv": true, "runsvdir": true, "supervisord": true}
 
 // StartsEveryService says whether a supervisor is one that starts every service of the image (the
@@ -523,4 +525,45 @@ loop:
 		}
 	}
 	return "", elsewhere, false
+}
+
+// interpreterName matches the file names of the interpreters whose first argument that is not an
+// option is the script (python3.12, ruby, perl, php, node).
+var interpreterName = regexp.MustCompile(`^(?:python[0-9.]*|pypy[0-9]*|ruby|perl|php[0-9.]*|node|nodejs|bun|deno)$`)
+
+// besideLabel is Label with the script an interpreter runs, the module of python -m, or the jar of
+// java -jar added: "python" or "java" alone does not say which program ran. The names of the files
+// only, never their directories or the other arguments.
+func besideLabel(program string, argv []string) string {
+	label := Label(program, argv)
+	name := path.Base(program)
+	if len(argv) > 0 && argv[0] != "" {
+		name = path.Base(argv[0])
+	}
+	args := []string{}
+	if len(argv) > 1 {
+		args = argv[1:]
+	}
+	switch {
+	case name == "java":
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "-jar" {
+				return label + " -jar " + path.Base(args[i+1])
+			}
+		}
+	case interpreterName.MatchString(name):
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			switch {
+			case a == "-m" && i+1 < len(args):
+				return label + " -m " + args[i+1]
+			case a == "-W" || a == "-X" || a == "-Q" || a == "-r" || a == "--require":
+				i++
+			case strings.HasPrefix(a, "-"):
+			default:
+				return label + " " + path.Base(a)
+			}
+		}
+	}
+	return label
 }

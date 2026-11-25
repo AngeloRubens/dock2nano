@@ -1141,7 +1141,7 @@ func (g *generator) passedOverNote(s *compose.Service, obs *observe.Result) {
 		}
 	}
 	if len(obs.Beside) > 0 {
-		g.add(s.Name, plan.Unsupported, "also ran beside the program", fmt.Sprintf("the image starts the program under a shell that ran more than one program, and the observation took the one nearest to the shell (the later one of equal distance) for the program. These ran beside it and are not run by the package: %s. If one of them is the program, say it with command: or --command; a worker and a server are two services. %s", listed(distinctCounted(obs.Beside)), where))
+		g.add(s.Name, plan.Unsupported, "also ran beside the program", fmt.Sprintf("the image starts the program under a shell that ran more than one program, and the observation took the one nearest to the shell (the branch the shell forked last, at equal distance) for the program. These ran beside it and are not run by the package: %s. If one of them is the program, say it with command: or --command; a worker and a server are two services. %s", listed(distinctCounted(obs.Beside)), where))
 	}
 	if len(obs.NotRun) > 0 {
 		g.add(s.Name, plan.Unsupported, "commands not run", fmt.Sprintf("these commands ran before the program or beside it, and ended: %s. A command whose output only set a variable ($(...), as hostname -i or id -u) needs nothing: its value is in the observed environment. A command with another effect is not run by the package: run it at build time, or as a separate one-shot service. %s", listed(distinctCounted(obs.NotRun)), where))
@@ -1216,10 +1216,10 @@ func (g *generator) supervisorNote(s *compose.Service, obs *observe.Result) bool
 		return false
 	}
 	msg := name + " is a supervisor that starts your program as a child process; nanos has no fork, so it cannot run on nanos as it is. Run the program it supervises directly (for nodemon: node <file>)"
-	if trace.StartsEveryService(name) {
+	switch {
+	case trace.StartsEveryService(name):
 		msg = name + " is a process supervisor: it starts every service of the image (a web server, an ssh server, a cron) as child processes, and nanos has no fork, so it cannot run on nanos. Run the one server you need as the only process: give it as command: (and entrypoint: when the entrypoint of the image does not run its arguments) in the compose file, or with --command SERVICE=CMD. A program that itself starts workers (php-fpm, nginx) needs its own single-process option; see docs/limits.md, Process supervisors"
-	}
-	if trace.IsProcessSupervisor(name) && !trace.StartsEveryService(name) {
+	case trace.IsProcessSupervisor(name):
 		msg = name + " is a tool of a process supervision suite (s6, runit): it looks after one service, or helps the ones that do, and nanos has no fork, so the suite cannot run on nanos. The program to run is the service it supervises, as the only process: give it as command: (and entrypoint: when the entrypoint of the image does not run its arguments) in the compose file, or with --command SERVICE=CMD; see docs/limits.md, Process supervisors"
 	}
 	if name == "concurrently" || name == "npm-run-all" || name == "run-p" || name == "run-s" {

@@ -1535,8 +1535,17 @@ func TestAnS6ToolGetsTheSofterAdvice(t *testing.T) {
 		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is a tool of a process supervision suite")
 		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "starts every service")
 	}
-	in, _ := launcherInput(t, "/usr/bin/s6-svscan", []string{"s6-svscan", "/etc/s6"}, "")
-	want1(t, mustGen(t, in), "web", plan.Unsupported, "supervisor", "s6-svscan is a process supervisor: it starts every service")
+	for _, name := range []string{"s6-svscan", "runsvdir", "supervisord"} {
+		in, _ := launcherInput(t, "/usr/bin/"+name, []string{name}, "")
+		p := mustGen(t, in)
+		want1(t, p, "web", plan.Unsupported, "supervisor", name+" is a process supervisor: it starts every service")
+		wantNoText(t, p, "web", plan.Unsupported, "supervisor", "supervision suite")
+	}
+	// a supervisor of the node kind has its own message
+	in, _ := launcherInput(t, "/usr/local/bin/node", []string{"node", "/usr/src/app/node_modules/.bin/nodemon", "server.js"}, "")
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Unsupported, "supervisor", "nodemon is a supervisor that starts your program")
+	wantNoText(t, p, "web", plan.Unsupported, "supervisor", "process supervision suite")
 }
 
 func TestProcessSupervisorHasItsOwnAdvice(t *testing.T) {
@@ -1718,6 +1727,7 @@ func TestProgramsBesideTheProgramAreNamed(t *testing.T) {
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "celery (x2), tail")
 	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "are not run by the package")
+	want1(t, p, "web", plan.Unsupported, "also ran beside the program", "the branch the shell forked last, at equal distance")
 	in2, _ := launcherInput(t, "/usr/bin/gunicorn", []string{"gunicorn", "app"}, "")
 	wantNone(t, mustGen(t, in2), "web", plan.Unsupported, "also ran beside the program")
 }
