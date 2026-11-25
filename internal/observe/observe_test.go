@@ -1561,6 +1561,24 @@ func TestObserveBindMountedFileAndDirectoryAreCarried(t *testing.T) {
 	equal(t, "warnings", res.Warnings, []string(nil))
 }
 
+// An image without cat and readlink (distroless) cannot be asked for /proc/PID/exe. The program is
+// then the end of the links met on the way: java of such an image is /usr/bin/java ->
+// /etc/alternatives/java -> /usr/lib/jvm/x/bin/java, and the JVM finds libjli.so beside the last
+// (hapi-fhir, run 45641448524: "error while loading shared libraries: libjli.so").
+func TestObserveProgramThatIsALinkIsTheFileItLeadsToWhenProcCannotBeRead(t *testing.T) {
+	s := newScene(t)
+	s.d.files["/usr/bin/app"] = entry{link: "/etc/alternatives/app"}
+	s.d.files["/etc/alternatives/app"] = entry{link: "../../usr/lib/app/bin/app"}
+	s.d.files["/usr/lib/app/bin/app"] = entry{data: "real", mode: 0755}
+	delete(s.d.exec, "readlink /proc/11/exe")
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/lib/app/bin/app")
+	equal(t, "argv", res.Argv, []string{"app", "--serve"})
+}
+
 func TestObserveProgramWithoutASlashIsFoundOnThePath(t *testing.T) {
 	s := newScene(t)
 	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"app", ["app", "--serve"]`, 1)
