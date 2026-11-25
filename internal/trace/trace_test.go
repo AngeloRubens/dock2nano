@@ -1037,9 +1037,9 @@ func TestFinalExec(t *testing.T) {
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/usr/bin/tail", ["tail", "-f", "/dev/null"], 0x7ffd1 /* 1 vars */) = 0
 `, Exec{Pid: "7", Path: "/usr/bin/server", Argv: []string{"server"}, Line: 2}, true},
-		{"a server started through a forked subshell is as near as one started directly", `1     execve("/bin/sh", ["sh", "-c", "sleep 100 & (java -jar x &)"], 0x7ffd1 /* 1 vars */) = 0
+		{"a server started through a forked subshell is as near as one started directly", `1     execve("/bin/sh", ["sh", "-c", "worker & (java -jar x &)"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 9
-9     execve("/bin/sleep", ["sleep", "100"], 0x7ffd1 /* 1 vars */) = 0
+9     execve("/usr/bin/worker", ["worker"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 8
 8     execve("/opt/java/bin/java", ["java", "-jar", "x"], 0x7ffd1 /* 1 vars */) = 0
