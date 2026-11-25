@@ -1187,7 +1187,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 			e := last[pid]
 			name := path.Base(e.Path)
 			interp, _ := interpreterOf(e.Path, e.Argv)
-			c.isShell = shells[interp]
+			c.isShell = shells[interp] || shells[name]
 			c.supervisor = Supervisor(e.Path, e.Argv) != ""
 			c.notProgram = c.isShell || waiters[name] || copiers[name] || name == "busybox" || name == "ps"
 			for _, up := range c.chain {

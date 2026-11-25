@@ -498,3 +498,23 @@ func TestFinalExecPassesOverALauncher(t *testing.T) {
 		})
 	}
 }
+
+func TestBesideLabel(t *testing.T) {
+	for _, tt := range []struct {
+		program string
+		argv    []string
+		want    string
+	}{
+		{"/usr/local/bin/python3.12", []string{"python3", "app.py"}, "python3 app.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-u", "-W", "ignore", "/srv/app/worker.py", "--secret", "x"}, "python3 worker.py"},
+		{"/usr/local/bin/python3.12", []string{"python3", "-m", "celery", "worker"}, "python3 -m celery"},
+		{"/opt/java/bin/java", []string{"java", "-Xmx1g", "-jar", "/opt/app.jar", "--port=1"}, "java -jar app.jar"},
+		{"/usr/local/bin/node", []string{"node", "--require", "dotenv", "server.js"}, "node server.js"},
+		{"/usr/bin/nginx", []string{"nginx", "-g", "daemon off;"}, "nginx"},
+		{"/usr/bin/python3", []string{"python3"}, "python3"},
+	} {
+		if got := besideLabel(tt.program, tt.argv); got != tt.want {
+			t.Errorf("besideLabel(%q, %q) = %q, want %q", tt.program, tt.argv, got, tt.want)
+		}
+	}
+}

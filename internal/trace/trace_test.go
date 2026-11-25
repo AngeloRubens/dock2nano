@@ -1067,7 +1067,7 @@ func TestFinalExec(t *testing.T) {
 8     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 10
 10    execve("/usr/bin/b", ["b"], 0x7ffd1 /* 1 vars */) = 0
 9     execve("/usr/bin/a", ["a"], 0x7ffd1 /* 1 vars */) = 0
-`, Exec{Pid: "10", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 8, Beside: []string{"sleep", "a"}}, true},
+`, Exec{Pid: "10", Path: "/usr/bin/b", Argv: []string{"b"}, Line: 7, Beside: []string{"sleep", "a"}}, true},
 		{"a pipeline: the reader is not the program", `1     execve("/bin/sh", ["sh", "-c", "java -jar app.jar 2>&1 | tee -a /logs/app.log"], 0x7ffd1 /* 1 vars */) = 0
 1     clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 7
 7     execve("/opt/java/bin/java", ["java", "-jar", "app.jar"], 0x7ffd1 /* 1 vars */) = 0
