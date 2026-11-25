@@ -1137,7 +1137,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 			}
 			e := last[candidate]
 			name := path.Base(e.Path)
-			if interp, _ := interpreterOf(e.Path, e.Argv); shells[interp] || interp == "busybox" || name == "busybox" || name == "ps" || Supervisor(e.Path, e.Argv) != "" {
+			if interp, _ := interpreterOf(e.Path, e.Argv); shells[interp] || interp == "busybox" || name == "busybox" || name == "ps" || name == "sleep" || name == "tail" || Supervisor(e.Path, e.Argv) != "" {
 				continue
 			}
 			if best == "" || depth < bestDepth || (depth == bestDepth && e.Line > last[best].Line) {
