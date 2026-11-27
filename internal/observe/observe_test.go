@@ -3664,6 +3664,33 @@ func TestObserveALinkAtTheTopOfTheImageIsNotMade(t *testing.T) {
 	}
 }
 
+// the package of any program gets an empty /tmp when the image files did not carry one: nanos has none
+// (php -S, php-fpm and apache with mod_php stop at the lock file of OPcache without it)
+func TestObserveGivesThePackageAnEmptyTmp(t *testing.T) {
+	s := newScene(t)
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TmpMade {
+		t.Error("TmpMade is false")
+	}
+	if st, err := os.Stat(filepath.Join(res.Sysroot, "tmp")); err != nil || !st.IsDir() {
+		t.Errorf("tmp: %v, %v", st, err)
+	}
+	// a /tmp that the program used is the one of the image
+	s2 := newScene(t)
+	s2.d.traceTxt += `11 openat(AT_FDCWD, "/tmp/x.sock", O_RDONLY) = 8` + "\n"
+	s2.d.files["/tmp/x.sock"] = entry{data: "x"}
+	res2, err := s2.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.TmpMade {
+		t.Error("TmpMade is true for a package that carries /tmp from the image")
+	}
+}
+
 // rr (shlink) starts in /etc/shlink and goes to the folder of its config: the package has to start
 // it where it started, or it resolves its relative config path from the wrong place.
 func TestObserveWorkingDirectoryIsWhereTheProgramStartedNotWhereItEnded(t *testing.T) {

@@ -349,6 +349,7 @@ func ApplyHubWhole(u HubUse, obs *observe.Result) []plan.Item {
 	obs.BesideNear, obs.BeforeWaiter = false, nil
 	obs.StoppedEarly = false
 	obs.ConfigurationFiles, obs.CreatedAtRuntime, obs.MachineFiles = nil, nil, nil
+	obs.TmpMade = false
 	obs.Vanished = 0
 	obs.LocalNames = false
 	obs.Warnings = dropFileWarnings(obs.Warnings)

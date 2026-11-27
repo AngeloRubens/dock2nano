@@ -160,3 +160,27 @@ func selfStat() string {
 	words[23] = "4096"
 	return strings.Join(words, " ") + "\n"
 }
+
+// tmpDirectory is the directory programs make temporary files in. nanos has none: a program that
+// makes a file there stops with ENOENT. PHP does it at the start: OPcache makes its lock file with
+// mkstemp in /tmp, and "php -S", php-fpm and apache with mod_php end with "Fatal Error Unable to
+// create lock file: No such file or directory (2)" (php:8.3-cli, php:8.3-fpm and php:8.3-apache,
+// runs 45645933543 and 45647512189); with an empty /tmp in the package php -S and apache answer 200.
+const tmpDirectory = "/tmp"
+
+// carryTmp puts an empty /tmp (mode 1777) in sysroot when it has none, and says whether it did. The
+// observation does not see it needed: the container has a /tmp already, and a file made there and
+// removed again is not in the package.
+func carryTmp(sysroot string) (bool, error) {
+	dir := filepath.Join(sysroot, tmpDirectory)
+	if _, err := os.Lstat(dir); err == nil {
+		return false, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
+		return false, err
+	}
+	return true, nil
+}

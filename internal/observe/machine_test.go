@@ -172,3 +172,32 @@ func TestSelfStatKeepsAFileOfTheSysrootAndSkipsArm64AndKnowsNodejs(t *testing.T)
 		t.Errorf("wrote = %v for nodejs", wrote)
 	}
 }
+
+// nanos has no /tmp, and PHP (OPcache) makes its lock file there at the start: the package carries an
+// empty one, with the mode of /tmp
+func TestTmpDirectoryIsMadeWhenThePackageHasNone(t *testing.T) {
+	dir := t.TempDir()
+	made, err := carryTmp(dir)
+	if err != nil || !made {
+		t.Fatalf("carryTmp = %v, %v; want true", made, err)
+	}
+	st, err := os.Stat(filepath.Join(dir, "tmp"))
+	if err != nil || !st.IsDir() || st.Mode()&os.ModeSticky == 0 || st.Mode().Perm() != 0o777 {
+		t.Fatalf("tmp = %v %v", st, err)
+	}
+	// the second time it is there
+	if made, err := carryTmp(dir); err != nil || made {
+		t.Fatalf("second carryTmp = %v, %v; want false", made, err)
+	}
+}
+
+func TestTmpDirectoryOfTheImageIsKept(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "tmp"), 0o700)
+	if made, err := carryTmp(dir); err != nil || made {
+		t.Fatalf("carryTmp = %v, %v; want false", made, err)
+	}
+	if st, _ := os.Stat(filepath.Join(dir, "tmp")); st.Mode().Perm() != 0o700 {
+		t.Errorf("the mode of the directory of the image was changed to %v", st.Mode())
+	}
+}

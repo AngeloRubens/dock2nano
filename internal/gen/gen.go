@@ -845,6 +845,9 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
+	if obs.TmpMade {
+		g.add(s.Name, plan.Note, "tmp", "the package carries an empty /tmp: nanos has none, and a program that makes a temporary file there stops at the first try (PHP: OPcache makes its lock file there, and php -S, php-fpm and apache with mod_php end with \"Unable to create lock file: No such file or directory\" without it)")
+	}
 	if len(obs.MachineFiles) > 0 {
 		msg := "the package carries " + strings.Join(obs.MachineFiles, ", ") + " of /proc, /sys or /dev, which nanos does not provide, as files of ours: one processor in cpuinfo, 0-63 as the processors a machine could have, an empty directory for /dev/shm. /dev/shm is written on any architecture; cpuinfo, cpu/possible and the stat files on x86_64 only (on arm64 the kernel answers for cpuinfo itself)"
 		if slices.Contains(obs.MachineFiles, "/proc/self/stat") {
