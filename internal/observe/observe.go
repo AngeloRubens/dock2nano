@@ -953,7 +953,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		// that were met on the way to the program tell where it really is. java of such an image is
 		// /usr/bin/java -> /etc/alternatives/java -> /usr/lib/jvm/.../bin/java, and the JVM finds
 		// libjli.so at ../lib of the last, not of the first.
-		exe = r.endOfLinks(path.Clean(program))
+		exe = r.endOfLinks(program)
 	}
 	if exe != "" && exe != program {
 		if _, err := os.Stat(filepath.Join(sysroot, filepath.FromSlash(exe))); err == nil {
@@ -1796,8 +1796,8 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 // at 40 links, as the kernel does.
 func (r *run) endOfLinks(p string) string {
 	for i := 0; i < 40; i++ {
-		next := r.stepOfLinks(p)
-		if next == p {
+		next, ok := r.links[p]
+		if !ok {
 			return p
 		}
 		p = next
