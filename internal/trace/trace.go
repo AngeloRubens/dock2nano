@@ -1458,7 +1458,9 @@ var ErrTopLevelLink = errors.New("a link at the top of the package is not made")
 // LinkSkipped is returned by LinkHostFile and CopyHostFile when they leave what is in the sysroot as
 // it is on purpose: the link or the copy would lead out of the sysroot, or into itself, or the
 // directory that files opened through the link left cannot be merged into the one the link leads to
-// (a file where the other has a directory). The caller reports it; nothing is lost.
+// (a file where the other has a directory). The caller reports it; nothing is lost. A name at the top
+// of the sysroot is not one of these: LinkHostFile gives ErrTopLevelLink for it, and nothing was
+// moved.
 type LinkSkipped struct {
 	Name, Why string
 }
@@ -1545,7 +1547,10 @@ func scrubErr(sysroot string, err error) string {
 // into the directory the link leads to (where it is not there already) and the link takes its place.
 // Links that are in the sysroot already are followed to where they really lead, and nothing is
 // touched unless both directories are really below sysroot, and neither holds the other. In all the
-// cases where the directory is kept the error is a *LinkSkipped, and nothing has been moved.
+// cases where the directory is kept the error is a *LinkSkipped, and nothing has been moved, except
+// for a name at the top of the sysroot: there the checks above that lead to a *LinkSkipped come
+// first, and when they pass the error is ErrTopLevelLink (nothing has been moved either), whether
+// a directory is there or not.
 func LinkHostFile(sysroot string, text string, name string) error {
 	destination := filepath.Join(sysroot, name)
 	topLevel := filepath.Dir(destination) == filepath.Clean(sysroot)
@@ -1616,6 +1621,10 @@ func LinkHostFile(sysroot string, text string, name string) error {
 		if dir, err := resolveNearest(filepath.Dir(destination)); err != nil || !InsideSysroot(sysroot, filepath.Join(dir, text)) {
 			return &LinkSkipped{name, "the link would lead out of the package (" + text + "), which is a path of this machine there; the link was not made"}
 		}
+		// The check covers a link to a file as well as one to a directory, on purpose: the caller
+		// carries a copy of the file (ops follows a link at the top of a package, so the copy is what
+		// it would have read), and the one rule for every name at the top is easier to hold than a
+		// test of what the link leads to, which is not known when a directory is made later.
 		if topLevel {
 			return ErrTopLevelLink
 		}

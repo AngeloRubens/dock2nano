@@ -953,7 +953,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		// that were met on the way to the program tell where it really is. java of such an image is
 		// /usr/bin/java -> /etc/alternatives/java -> /usr/lib/jvm/.../bin/java, and the JVM finds
 		// libjli.so at ../lib of the last, not of the first.
-		exe = r.endOfLinks(program)
+		exe = r.endOfLinks(path.Clean(program))
 	}
 	if exe != "" && exe != program {
 		if _, err := os.Stat(filepath.Join(sysroot, filepath.FromSlash(exe))); err == nil {
@@ -972,7 +972,13 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 
 	tmpMade, err := carryTmp(sysroot)
 	if err != nil {
-		r.warnOnce(fmt.Sprintf("could not make /tmp for the package: %v", err))
+		// the reason without the path: it is a path of this machine
+		reason := err.Error()
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			reason = pe.Err.Error()
+		}
+		r.warnOnce(fmt.Sprintf("could not make /tmp for the package: %s", reason))
 	}
 
 	return &Result{
@@ -1784,15 +1790,31 @@ func (r *run) copyTouched(ctx context.Context, id string, sysroot string, paths 
 	return nil
 }
 
-// endOfLinks follows the links that copyTouched met from p, and gives the path where they end, or p
-// itself when p is not a link. It stops at 40 links, as the kernel does.
+// endOfLinks follows the links that copyTouched met from p (a clean path), on the name itself and on
+// each directory of it, and gives the path where they end, or p itself when none is a link. With
+// /usr/bin/java -> /opt/jdk/bin/java and /opt/jdk -> jdk-17 it gives /opt/jdk-17/bin/java. It stops
+// at 40 links, as the kernel does.
 func (r *run) endOfLinks(p string) string {
 	for i := 0; i < 40; i++ {
-		next, ok := r.links[p]
-		if !ok {
+		next := r.stepOfLinks(p)
+		if next == p {
 			return p
 		}
 		p = next
+	}
+	return p
+}
+
+// stepOfLinks replaces the first prefix of p (from the top) that is a link met by copyTouched with
+// what it leads to, and keeps the rest of p. It gives p when no prefix is a link.
+func (r *run) stepOfLinks(p string) string {
+	for i := 1; i <= len(p); i++ {
+		if i < len(p) && p[i] != '/' {
+			continue
+		}
+		if next, ok := r.links[p[:i]]; ok {
+			return path.Join(next, p[i:])
+		}
 	}
 	return p
 }

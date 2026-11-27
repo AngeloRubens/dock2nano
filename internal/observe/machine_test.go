@@ -193,11 +193,17 @@ func TestTmpDirectoryIsMadeWhenThePackageHasNone(t *testing.T) {
 
 func TestTmpDirectoryOfTheImageIsKept(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "tmp"), 0o700)
+	if err := os.MkdirAll(filepath.Join(dir, "tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if made, err := carryTmp(dir); err != nil || made {
 		t.Fatalf("carryTmp = %v, %v; want false", made, err)
 	}
-	if st, _ := os.Stat(filepath.Join(dir, "tmp")); st.Mode().Perm() != 0o700 {
+	st, err := os.Stat(filepath.Join(dir, "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
 		t.Errorf("the mode of the directory of the image was changed to %v", st.Mode())
 	}
 }

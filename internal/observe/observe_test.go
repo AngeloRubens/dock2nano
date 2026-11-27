@@ -3664,6 +3664,56 @@ func TestObserveALinkAtTheTopOfTheImageIsNotMade(t *testing.T) {
 	}
 }
 
+// /lib is a directory of the image that only a stat touches, and the files that are opened are under
+// /usr/lib: /lib is made as a directory, never as a link to usr/lib, and nothing is said about it.
+func TestObserveALibDirectoryTouchedOnlyByAStatIsNotALink(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt += `11 statx(AT_FDCWD, "/lib", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/usr/lib/x86_64-linux-gnu/libm.so.6", O_RDONLY) = 9` + "\n"
+	s.d.files["/lib"] = entry{dir: true}
+	s.d.files["/usr/lib/x86_64-linux-gnu/libm.so.6"] = entry{data: "m"}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filepath.Join(res.Sysroot, "lib"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		t.Errorf("/lib is %v, want a real directory", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "usr/lib/x86_64-linux-gnu/libm.so.6")); err != nil {
+		t.Error(err)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, NoteNotCarried) {
+			t.Errorf("a warning about what was not carried: %s", w)
+		}
+	}
+}
+
+// When /proc cannot be read, the program is the end of the links on the way, also those of a
+// directory of its path (/opt/jdk -> jdk-17), and a path that is not clean (/usr/bin//app) is read
+// as the clean one.
+func TestObserveProgramEndsAtTheLinksOfItsDirectoriesWhenProcCannotBeRead(t *testing.T) {
+	s := newScene(t)
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/bin//app", ["app", "--serve"]`, 1)
+	s.d.traceTxt += `11 openat(AT_FDCWD, "/opt/jdk/bin/app", O_RDONLY) = 8` + "\n" +
+		`11 statx(AT_FDCWD, "/opt/jdk", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_ALL, {}) = 0` + "\n" +
+		`11 openat(AT_FDCWD, "/opt/jdk-17/bin/app", O_RDONLY) = 9` + "\n"
+	s.d.files["/usr/bin/app"] = entry{link: "/opt/jdk/bin/app"}
+	s.d.files["/opt/jdk/bin/app"] = entry{data: "real", mode: 0755}
+	s.d.files["/opt/jdk"] = entry{link: "jdk-17"}
+	s.d.files["/opt/jdk-17/bin/app"] = entry{data: "real", mode: 0755}
+	delete(s.d.exec, "readlink /proc/11/exe")
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/opt/jdk-17/bin/app")
+}
+
 // the package of any program gets an empty /tmp when the image files did not carry one: nanos has none
 // (php -S, php-fpm and apache with mod_php stop at the lock file of OPcache without it)
 func TestObserveGivesThePackageAnEmptyTmp(t *testing.T) {

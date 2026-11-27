@@ -453,6 +453,7 @@ func hubWholeObs() *observe.Result {
 		ConfigurationFiles: []string{"/etc/postgresql/postgresql.conf"},
 		CreatedAtRuntime:   []string{"/var/lib/postgresql/data/PG_VERSION"},
 		MachineFiles:       []string{"/proc/cpuinfo"},
+		TmpMade:            true,
 		Vanished:           2,
 		LocalNames:         true,
 		Warnings:           []string{"kept"},
@@ -468,7 +469,7 @@ func TestApplyHubWholeTakesTheProgramAndTheArgumentsOfTheHub(t *testing.T) {
 	if !reflect.DeepEqual(obs.Env, []string{"POSTGRES_PASSWORD=secret", "LANG=en_US.UTF-8"}) {
 		t.Errorf("env: %v", obs.Env)
 	}
-	if obs.Children != 0 || obs.ChildCalls != nil || obs.StoppedEarly || obs.ConfigurationFiles != nil || obs.CreatedAtRuntime != nil || obs.MachineFiles != nil || obs.Vanished != 0 || obs.LocalNames {
+	if obs.Children != 0 || obs.ChildCalls != nil || obs.StoppedEarly || obs.ConfigurationFiles != nil || obs.CreatedAtRuntime != nil || obs.MachineFiles != nil || obs.TmpMade || obs.Vanished != 0 || obs.LocalNames {
 		t.Errorf("what was seen about the image was not cleared: %+v", obs)
 	}
 	if !reflect.DeepEqual(obs.Warnings, []string{"kept"}) {
