@@ -1,0 +1,378 @@
+package hub
+
+import (
+	"strings"
+	"testing"
+)
+
+// testRows is a table for the tests only. The table that ships in the binary
+// has only the postgres row.
+const testRows = `
+rows:
+  - images: [postgres, postgresql]
+    programs: [postgres]
+    packages:
+      - francescolavra/postgres
+      - eyberg/postgresql
+    reason: postgres starts a process per connection
+`
+
+func TestParseRequired(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Images[1] != "postgresql" || rows[0].Packages[0] != "francescolavra/postgres" || rows[0].Reason == "" {
+		t.Errorf("%+v", rows)
+	}
+}
+
+func TestParseRequiredRefusesWhatIsNotAProperRow(t *testing.T) {
+	bad := []string{
+		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [x/y]\n",
+		"rows:\n  - images: [a]\n    programs: [a]\n    reason: r\n",
+		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [nonamespace]\n    reason: r\n",
+		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [a/b/c]\n    reason: r\n",
+		"rows:\n  - images: [a]\n    programs: [a]\n    packages: [x/y]\n    reason: r\n    typo: 1\n",
+		"rows: [",
+		"rows:\n  - images: [Postgres]\n    programs: [a]\n    packages: [x/y]\n    reason: r\n",
+		"rows:\n  - images: [a]\n    programs: [/usr/bin/a]\n    packages: [x/y]\n    reason: r\n",
+	}
+	for _, text := range bad {
+		if _, err := ParseRequired([]byte(text)); err == nil {
+			t.Errorf("accepted: %q", text)
+		}
+	}
+}
+
+func TestParseRequiredEmpty(t *testing.T) {
+	for _, text := range []string{"", "rows: []\n", "# only a comment\nrows: []\n"} {
+		rows, err := ParseRequired([]byte(text))
+		if err != nil || len(rows) != 0 {
+			t.Errorf("%q: %v %v", text, rows, err)
+		}
+	}
+}
+
+// The table that ships in the binary has the postgres row, proven on the fork.
+func TestTheTableThatShipsHasThePostgresRow(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("the shipped table has %d rows: %+v", len(rows), rows)
+	}
+	if MatchRequired(rows, "postgres", "/usr/lib/postgresql/16/bin/postgres") == nil {
+		t.Error("image postgres, program postgres is not matched")
+	}
+	if MatchRequired(rows, "postgresql", "postgres") == nil {
+		t.Error("image postgresql, program postgres is not matched")
+	}
+	if MatchRequired(rows, "nginx", "/usr/sbin/nginx") != nil {
+		t.Error("an unrelated image and program matched")
+	}
+	if MatchRequired(rows, "postgres", "/bin/sh") != nil {
+		t.Error("an unrelated program matched")
+	}
+	if got := rows[0].Packages; len(got) != 2 || got[0] != "francescolavra/postgres" || got[1] != "eyberg/postgresql" {
+		t.Errorf("packages: %v", got)
+	}
+}
+
+func TestMatchRequired(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := MatchRequired(rows, "postgres", "/usr/lib/postgresql/16/bin/postgres"); r == nil {
+		t.Error("postgres is not matched")
+	}
+	if r := MatchRequired(rows, "Postgresql", "postgres"); r == nil {
+		t.Error("postgresql, in capitals, is not matched")
+	}
+	if r := MatchRequired(rows, "nginx", "/usr/sbin/postgres"); r != nil {
+		t.Error("another image matched")
+	}
+	if r := MatchRequired(rows, "postgres", "/bin/sh"); r != nil {
+		t.Error("another program matched")
+	}
+	if r := MatchRequired(nil, "postgres", "postgres"); r != nil {
+		t.Error("an empty table matched")
+	}
+}
+
+func TestRequiredCandidates(t *testing.T) {
+	rows, _ := ParseRequired([]byte(testRows))
+	pkgs := []Package{
+		pkg("francescolavra", "postgres", "16.0", "x86_64"),
+		pkg("francescolavra", "postgres", "16.2", "x86_64"),
+		pkg("eyberg", "postgresql", "11.3.0", "x86_64"),
+		pkg("eyberg", "postgrest", "10.1.1", "x86_64"),
+		pkg("someone", "postgres", "16.2", "x86_64"),
+		pkg("francescolavra", "postgres", "16.3", "arm64"),
+	}
+	got := rows[0].Candidates(pkgs, "amd64")
+	if len(got) != 3 {
+		t.Fatalf("%+v", got)
+	}
+	p, lvl := SelectFrom(got, "16.1")
+	if p.Version != "16.0" || lvl != Near {
+		// the newest release that is not newer than 16.1
+		t.Errorf("16.1: %v %v", p.Version, lvl)
+	}
+	p, lvl = SelectFrom(got, "16.0")
+	if p.Version != "16.0" || lvl != Exact {
+		t.Errorf("16.0: %v %v", p.Version, lvl)
+	}
+	p, lvl = SelectFrom(got, "11.3")
+	if p.Ref() != "eyberg/postgresql" || lvl != Near {
+		t.Errorf("11.3: %v %v", p.Ref(), lvl)
+	}
+	p, lvl = SelectFrom(got, "14.5")
+	if lvl != Far || p.Version != "16.2" {
+		t.Errorf("14.5: %v %v", p.Ref(), lvl)
+	}
+	p, lvl = SelectFrom(got, "17.1")
+	if lvl != Far || p.Version != "16.2" {
+		t.Errorf("17.1: %v %v", p.Version, lvl)
+	}
+}
+
+func TestParseRequiredReadsTheEntrypointNote(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows + "    entrypoint_note: the note of the row\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].EntrypointNote != "the note of the row" {
+		t.Errorf("%+v", rows[0])
+	}
+	rows, err = ParseRequired([]byte(testRows))
+	if err != nil || rows[0].EntrypointNote != "" {
+		t.Errorf("a row without the field has a note: %+v %v", rows, err)
+	}
+}
+
+func TestTheShippedPostgresRowHasTheEntrypointNote(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := rows[0].EntrypointNote
+	for _, want := range []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "CREATE DATABASE", "answered 200",
+		"{POSTGRES_DB,POSTGRES_USER:ident}", "{HUB_SUPERUSER}", "CREATE ROLE", "POSTGRES_PASSWORD_FILE", "POSTGRES_INITDB_ARGS", "/docker-entrypoint-initdb.d",
+		"44909583390", "44910340290", "13:30:17.893", "was not measured", "pre-existing shared memory block", "5432001"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("the note does not say %q: %q", want, n)
+		}
+	}
+	if strings.Contains(n, "seen in a run alone") || strings.Contains(n, "needs -d template1") || strings.Contains(n, "is not kept") || strings.Contains(n, "at every start") || strings.Contains(n, "If {POSTGRES_USER") {
+		t.Errorf("the note claims more than was seen: %q", n)
+	}
+	if strings.Contains(rows[0].Reason, "observation of the image") || strings.Contains(rows[0].Reason, "child processes") {
+		t.Errorf("the reason says what the row does not match on: %q", rows[0].Reason)
+	}
+	if got := rows[0].Superusers; got["francescolavra/postgres"] != "postgres" || got["eyberg/postgresql"] != "eyberg" || len(got) != 2 {
+		t.Errorf("superusers: %v", got)
+	}
+	if rn := rows[0].RestartNote; !strings.Contains(rn, "44910340290") || !strings.Contains(rn, "not measured") {
+		t.Errorf("restart note: %q", rn)
+	}
+	if !strings.Contains(n, "comes from the postmaster.pid left by the first boot") || !strings.Contains(n, "the file itself was not seen") || strings.Contains(n, "which leaves postmaster.pid") {
+		t.Errorf("the note says the postmaster.pid was seen: %q", n)
+	}
+	for ref, run := range map[string]string{"francescolavra/postgres": "44908630495", "eyberg/postgresql": "44910340290"} {
+		if !strings.Contains(rows[0].PackageFacts[ref], run) {
+			t.Errorf("the facts of %s do not cite run %s: %q", ref, run, rows[0].PackageFacts[ref])
+		}
+	}
+	if strings.Contains(rows[0].Reason, "shmget") {
+		t.Errorf("the reason says something not measured: %q", rows[0].Reason)
+	}
+}
+
+func TestParseRequiredReadsSuperusersAndRefusesAForeignPackage(t *testing.T) {
+	rows, err := ParseRequired([]byte(testRows + "    superusers:\n      eyberg/postgresql: root\n    restart_note: a note\n"))
+	if err != nil || rows[0].Superusers["eyberg/postgresql"] != "root" || rows[0].RestartNote != "a note" {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	if _, err := ParseRequired([]byte(testRows + "    superusers:\n      someone/else: root\n")); err == nil {
+		t.Error("a superuser of a package that is not in the row was accepted")
+	}
+	// the note needs a superuser for every package of the row, and a template that closes
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"-U {HUB_SUPERUSER}\"\n")); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted without superusers")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '[[if A]]x'\n")); err == nil {
+		t.Error("a section that is not closed was accepted")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    package_facts:\n      someone/else: x\n")); err == nil {
+		t.Error("facts of a package that is not in the row were accepted")
+	}
+}
+
+func TestParseRequiredRequiresTheFactsOfEveryPackageThatTheNoteNames(t *testing.T) {
+	rows := "    entrypoint_note: \"-U {HUB_SUPERUSER}\"\n"
+	if _, err := ParseRequired([]byte(testRows + rows)); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted without superusers")
+	}
+	// the condition names it too
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"[[if A!=HUB_SUPERUSER]]x[[end]]\"\n")); err == nil {
+		t.Error("a test that names HUB_SUPERUSER was accepted without superusers")
+	}
+	if _, err := ParseRequired([]byte(testRows + rows + "    superusers:\n      eyberg/postgresql: root\n")); err == nil {
+		t.Error("a note that names {HUB_SUPERUSER} was accepted with a superuser for some of the packages only")
+	}
+	if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: \"{HUB_FACTS}\"\n")); err == nil {
+		t.Error("a note that names {HUB_FACTS} was accepted without package_facts")
+	}
+	all := "    superusers:\n"
+	for _, p := range []string{"francescolavra/postgres", "eyberg/postgresql"} {
+		all += "      " + p + ": root\n"
+	}
+	if _, err := ParseRequired([]byte(testRows + rows + all)); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredChecksTheTemplateOfTheNote(t *testing.T) {
+	for _, bad := range []string{
+		"[[if A]]x",
+		"x[[end]]",
+		"[[if A]]x[[if B]]y[[end]][[end]]",
+		"[[if A!=]]x[[end]]",
+		"[[if A or B]]x[[end]]",
+		"[[iff A]]x[[end]]",
+		"{A:upper}",
+	} {
+		if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '" + bad + "'\n")); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	for _, ok := range []string{
+		"plain text",
+		"[[if A and not B]]x {A|d e}[[end]] [[unless A!=\"q\"]]y[[end]]",
+		"a { b } c",
+	} {
+		if _, err := ParseRequired([]byte(testRows + "    entrypoint_note: '" + ok + "'\n")); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+}
+
+const postUpRow = `
+rows:
+  - images: [postgres]
+    programs: [postgres]
+    packages: [a/b, c/d]
+    superusers:
+      a/b: postgres
+      c/d: eyberg
+    reason: r
+    entrypoint_note: e
+    post_up_script: |
+      #!/bin/sh
+      psql -U {HUB_SUPERUSER:sh}
+      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}
+      [[end]]
+`
+
+func TestParseRequiredReadsAndChecksThePostUpScript(t *testing.T) {
+	rows, err := ParseRequired([]byte(postUpRow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rows[0].PostUpScript, "#!/bin/sh\n") || !strings.Contains(rows[0].PostUpScript, "{POSTGRES_DB:lit}") {
+		t.Errorf("%q", rows[0].PostUpScript)
+	}
+	bad := [][2]string{
+		{"a section that is not closed", "#!/bin/sh\n[[if A]]x\n"},
+		{"a placeholder that is not one", "#!/bin/sh\necho {A:nope}\n"},
+		{"no #!/bin/sh line", "echo hi\n"},
+		{"a test that is not a test", "#!/bin/sh\n[[if A ~ B]]x[[end]]\n"},
+		{"a note of the package the row does not give", "#!/bin/sh\n[[if A]]{HUB_FACTS}[[end]]\n"},
+		{"sections inside a section", "#!/bin/sh\n[[if A]][[if B]]x[[end]][[end]]\n"},
+	}
+	for _, b := range bad {
+		why, script := b[0], b[1]
+		text := strings.Replace(postUpRow, "      #!/bin/sh\n      psql -U {HUB_SUPERUSER:sh}\n      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}\n      [[end]]\n", "      "+strings.ReplaceAll(strings.TrimRight(script, "\n"), "\n", "\n      ")+"\n", 1)
+		if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script") {
+			t.Errorf("%s: accepted or wrong error: %v", why, err)
+		}
+	}
+}
+
+func TestParseRequiredPostUpScriptNeedsTheSuperuserOfEveryPackageWhenItNamesIt(t *testing.T) {
+	text := strings.Replace(postUpRow, "      c/d: eyberg\n", "", 1)
+	if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "post_up_script uses {HUB_SUPERUSER}") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestTheTableThatShipsHasAPostUpScriptForPostgres(t *testing.T) {
+	rows, err := DefaultRequired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := rows[0].PostUpScript
+	for _, want := range []string{"#!/bin/sh\n", "set -eu", "{HUB_SUPERUSER:sh}", "{HUB_INSTANCE:sh}", "ensure 'database'", "ensure 'role'", "command -v psql", "-d template1 -w", "{{PGHOST:-}}"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the shipped script lacks %q", want)
+		}
+	}
+}
+
+func postUpRowWith(script string) string {
+	return strings.Replace(postUpRow, "      #!/bin/sh\n      psql -U {HUB_SUPERUSER:sh}\n      [[if POSTGRES_DB]]ensure 'database' {POSTGRES_DB:lit} {POSTGRES_DB:ident}\n      [[end]]\n", "      "+strings.ReplaceAll(strings.TrimRight(script, "\n"), "\n", "\n      ")+"\n", 1)
+}
+
+func TestParseRequiredChecksThePlaceholdersInsideAShellBlock(t *testing.T) {
+	_, err := ParseRequired([]byte(postUpRowWith("#!/bin/sh\nf() {\n  psql -U {HUB_SUPERUSER:shh}\n}\n")))
+	if err == nil || !strings.Contains(err.Error(), "post_up_script") || !strings.Contains(err.Error(), "HUB_SUPERUSER:shh") {
+		t.Errorf("%v", err)
+	}
+	// the same block with a good placeholder, and literal braces, is read
+	if _, err := ParseRequired([]byte(postUpRowWith("#!/bin/sh\nf() {\n  psql -U {HUB_SUPERUSER:sh} ${{PGHOST:-}}\n}\n"))); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredRefusesSecretsAndFallbacksInAScript(t *testing.T) {
+	for _, script := range []string{
+		"#!/bin/sh\necho {POSTGRES_PASSWORD}\n",
+		"#!/bin/sh\necho {DB_TOKEN:sh}\n",
+		"#!/bin/sh\necho {POSTGRES_DB,POSTGRES_PASSWORD:lit}\n",
+		"#!/bin/sh\nf() {\n  echo {POSTGRES_DB|shop}\n}\n",
+	} {
+		if _, err := ParseRequired([]byte(postUpRowWith(script))); err == nil || !strings.Contains(err.Error(), "post_up_script") {
+			t.Errorf("%q: %v", script, err)
+		}
+	}
+}
+
+func TestParseRequiredPostUpScriptNeedsAnEntrypointNote(t *testing.T) {
+	text := strings.Replace(postUpRow, "    entrypoint_note: e\n", "", 1)
+	if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "needs an entrypoint_note") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestParseRequiredErrorsOfNotesComeInAFixedOrder(t *testing.T) {
+	// both notes are wrong: the first one in the table is always the one named
+	text := strings.Replace(postUpRow, "    entrypoint_note: e\n", "    entrypoint_note: \"[[if A]]x\"\n", 1)
+	text = strings.Replace(text, "psql -U {HUB_SUPERUSER:sh}", "psql -U {HUB_SUPERUSER:zz}", 1)
+	for i := 0; i < 20; i++ {
+		if _, err := ParseRequired([]byte(text)); err == nil || !strings.Contains(err.Error(), "entrypoint_note") {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+}
+
+func TestValidateNoteAcceptsLiteralBraces(t *testing.T) {
+	if err := ValidateNote("a ${{X:-}} {{b}} {A}"); err != nil {
+		t.Error(err)
+	}
+	if err := ValidateNote("a {A:nope}"); err == nil {
+		t.Error("a bad placeholder was accepted")
+	}
+}

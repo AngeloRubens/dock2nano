@@ -8,8 +8,9 @@ che "ops compose" esegue. Ciò che non si converte viene stampato, mai scartato
 in silenzio. Si punta allo zero impatto, non lo si garantisce.
 
 ## Confini
-- Strumento esterno a ops: non si modifica il core di ops. Si chiama ops
-  (ops pkg from-docker --observe, ops compose) per ciò che ops già fa.
+- Strumento esterno a ops: non si modifica il core di ops. Lo strumento non
+  esegue ops: osserva le immagini tramite docker (internal/observe) e stampa
+  i comandi "ops pkg get" e "ops compose up" che l'utente lancia.
 - Linguaggio: Go. Il nome del tool vive in una sola costante.
 - Si chiama il binario "ops" (exec), senza importare i pacchetti Go di ops:
   nessuna dipendenza di ops entra in go.mod. Nella CI si installa ops prima.
@@ -60,7 +61,7 @@ in silenzio. Si punta allo zero impatto, non lo si garantisce.
 ## Stato di partenza
 - Il nome non e' definitivo: ToolName = "dock2nano" e' di lavoro. Il 2026-11-07
   si e' chiesto a Ian un suggerimento (commento su nanovms/ops#1802), risposta
-  in attesa. Il repo e' AngeloRubens/dock2nano (privato); se il nome cambia si
+  in attesa. Il repo e' AngeloRubens/dock2nano (pubblico); se il nome cambia si
   rinomina il repo e si cambia la costante.
 - Ian ha risposto sulla 1802 (2026-11-06): vuole uno strumento esterno, perche'
   creare un pacchetto e' un lavoro di cura, l'ecosistema ha idiomi diversi

@@ -1,0 +1,17 @@
+9     execve("/entry.sh", ["/entry.sh"], 0x7ffeda0e3300 /* 3 vars */) = 0
+9     getcwd("/", 4096)                 = 2
+9     open("/entry.sh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     execve("/usr/local/sbin/httpd", ["httpd", "-f", "-p", "8080", "-h", "/www"], 0x7fbcaad253c0 /* 5 vars */) = -1 ENOENT (No such file or directory)
+9     execve("/usr/local/bin/httpd", ["httpd", "-f", "-p", "8080", "-h", "/www"], 0x7fbcaad253c0 /* 5 vars */) = -1 ENOENT (No such file or directory)
+9     execve("/usr/sbin/httpd", ["httpd", "-f", "-p", "8080", "-h", "/www"], 0x7fbcaad253c0 /* 5 vars */) = 0
+9     getcwd("/", 192)                  = 2
+9     chdir("/www")                     = 0
+9     open("/etc/httpd.conf", O_RDONLY|O_LARGEFILE) = -1 ENOENT (No such file or directory)
+9     open("httpd.conf", O_RDONLY|O_LARGEFILE) = -1 ENOENT (No such file or directory)
+9     fork()                            = 23
+9     fork()                            = 24
+23    +++ exited with 0 +++
+24    stat("index.html", {st_mode=S_IFREG|0644, st_size=3, ...}) = 0
+24    open("index.html.gz", O_RDONLY|O_LARGEFILE) = -1 ENOENT (No such file or directory)
+24    open("index.html", O_RDONLY|O_LARGEFILE) = 3
+24    +++ exited with 0 +++

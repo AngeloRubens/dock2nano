@@ -1,0 +1,92 @@
+# Coverage of docker/awesome-compose
+
+Every sample of docker/awesome-compose that has a compose file with a published or exposed HTTP or TCP port is a row of the matrix of .github/workflows/compose-up.yml. Plain rows (no flags) measure what the tool does without help. Flags appear where the project notes record a command that was needed (django, fastapi), where a Host override is set (django-host), and in the later rows that carry --short-names or --with db. The probe is strict: green means the status is 2xx or 3xx, or the TCP port is open. A 4xx or 5xx answer prints "result: SVC reached, status N is not a success" and fails the job. The probe tries up to 24 times, 10 seconds apart, and prints, for http rows, the code of every try on the line after "answer:"; when a try got an HTTP status and the last try got no HTTP response (000), the report names the last status other than 000, so "reached, status N" can come from an earlier try. The body file is removed before each try; the body of the last try that got a status other than 000 is kept in a second file and is the one printed, so a 502 page is not lost to a later no-answer try. Run 45392317073 (branch check/fixes-loop, 1f9d9ea, rows flask, django-ip and nginx-aspnet-mysql) showed this loop: flask "answer: 200", "codes of the tries: 200" on the first try, success; django-ip (with the --command row) "answer: 400", all 24 tries 400, "reached, status 400 is not a success"; nginx-aspnet-mysql "answer: 000", all 24 tries 000, no answer. That run had the first version of the loop, without the second body file.
+
+## Results
+
+| Sample (job) | Flags | Probe | Result | Run id |
+| --- | --- | --- | --- | --- |
+| django-host | --command 'web=manage.py runserver 0.0.0.0:8000 --noreload' (Host: localhost:8000) | web:8000:http | red: reached, status 500 | 45372721961 |
+| django-ip | --command 'web=manage.py runserver 0.0.0.0:8000 --noreload' | web:8000:http | red: reached, status 400 (DisallowedHost) | 45372721961 |
+| flask | - | web:8000:http | green | 45372721961 |
+| fastapi | --command 'api=uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1' | api:8000:http | green | 45372721961 |
+| angular | - | web:4200:http | red: no answer (000) | 45372721961 |
+| apache-php | - | web:80:http | red: no answer (000) | 45372721961 |
+| aspnet-mssql | - | web:80:http | red: no address | 45372721961 |
+| elasticsearch-logstash-kibana | - | elasticsearch:9200:http logstash:9600:http kibana:5601:http | red: no address (names of services in config files noted) | 45372721961 |
+| gitea-postgres | - | gitea:3000:http db:5432:tcp | red: gitea no answer, db port open | 45372721961 |
+| minecraft | - | minecraft:25565:tcp | red: no address | 45372721961 |
+| nextcloud-postgres | - | nc:80:http | red: no answer | 45372721961 |
+| nextcloud-redis-mariadb | - | nc:80:http | red: no answer | 45372721961 |
+| nginx-aspnet-mysql | - | proxy:80:http | red: proxy no answer | 45372721961 |
+| nginx-flask-mysql | - | proxy:80:http backend:8000:http | red: no answer; observation of backend: ImportError url_quote from werkzeug.urls | 45372721961 |
+| nginx-golang-mysql | - | proxy:80:http | red: proxy no answer | 45372721961 |
+| nginx-golang-postgres | - | proxy:80:http | red: proxy no answer | 45372721961 |
+| nginx-wsgi-flask | - | nginx-proxy:80:http flask-app:8000:http | red: no address; docker build failed at pip install -r requirements.txt | 45372721961 |
+| pihole-cloudflared-DoH | - | pihole:80:http | red: no answer | 45372721961 |
+| postgresql-pgadmin | - | postgres:5432:tcp pgadmin:80:http | red: no address; the postgres container stopped with status 1 during the observation | 45372721961 |
+| prometheus-grafana | - | prometheus:9090:http grafana:3000:http | red: no answer, no address | 45372721961 |
+| react-express-mysql | - | frontend:3000:http backend:80:http | red: no address, backend no answer | 45372721961 |
+| react-java-mysql | - | frontend:3000:http | red: no address | 45372721961 |
+| react-nginx | - | frontend:80:http | green | 45372721961 |
+| react-rust-postgres | - | frontend:3000:http db:5432:tcp | red: no address; docker build of backend (target development) failed | 45372721961 |
+| sparkjava | - | sparkjava:8080:http | green | 45372721961 |
+| spring-postgres | - | backend:8080:http db:5432:tcp | red: backend no answer, db open | 45372721961 |
+| vuejs | - | web:8080:http | red: no address; docker build (target development) failed | 45372721961 |
+| nginx-golang | - | proxy:80:http backend:80:http | green | 45372721961 |
+| nginx-golang-plain | --short-names | proxy:80:http backend:80:http | green | 45372721961 |
+| sparkjava-mysql | - | backend:8080:http db:3306:tcp | red: backend no answer, db open | 45372721961 |
+| sparkjava-mysql-short | --short-names | backend:8080:http db:3306:tcp | green | 45372721961 |
+| sparkjava-mysql-plain | --short-names --with db | backend:8080:http db:3306:tcp | green | 45372721961 |
+| flask-redis | - | web:8000:http redis:6379:tcp | green | 45372721961 |
+| nginx-nodejs-redis | - | nginx:80:http web1:5000:http redis:6379:tcp | green | 45372721961 |
+| react-express-mongodb | - | frontend:3000:http backend:3000:http mongo:27017:tcp | red: frontend and backend no answer, mongo open | 45372721961 |
+| nginx-flask-mongo | - | web:80:http backend:9091:http mongo:27017:tcp | green | 45372721961 |
+| nginx-flask-mongo-plain | --short-names | web:80:http backend:9091:http mongo:27017:tcp | green | 45372721961 |
+
+## Skipped samples
+
+| Sample | Reason |
+| --- | --- |
+| official-documentation-samples | no compose file at the top of the directory (subdirectories django, rails, wordpress hold the samples); the wordpress and django ones duplicate rows above |
+| plex | network_mode host: the guest has no host network, and the service needs the media paths of the host |
+| portainer | mounts the Docker socket of the host (/var/run/docker.sock): it manages a Docker daemon that a unikernel does not have |
+| traefik-golang | traefik reads the Docker socket (--providers.docker) to find backends and routes by container labels: nothing to probe without it |
+| wireguard | needs NET_ADMIN, kernel modules and a UDP port: not an HTTP or TCP probe |
+| wasmedge-kafka-mysql | images run on a WasmEdge runtime (wasm platform), not a Linux program |
+| wasmedge-mysql-nginx | the backend image is a wasm module run by WasmEdge, not a Linux program |
+
+## Probed in part
+
+- pihole-cloudflared-DoH: only the web port 80 of pihole is probed; the DNS ports (53 tcp and udp, 67 udp) and the cloudflared service are not probed. The compose file needs the variables TIMEZONE and PIHOLE_PW, which are not set in CI, and a fixed address in a network.
+- elasticsearch-logstash-kibana, postgresql-pgadmin, aspnet-mssql: database ports are probed only where listed in the Probe column.
+- Services of a row that are not in its probe list start with the rest but are not asked.
+
+Reading of run 45372721961 (2026-11-24, ops 1183538 plus f3ee91e of the fork, nightly nanos; runs before this change used ops 1183538 plus f3ee91e, later runs use ops 2177c54 without the fork commit): 12 of 37 jobs green, 25 red. The causes in the table are the first visible symptom in the log, not a diagnosis: the rows that say "no answer" or "no address" were not yet investigated one by one, and each needs its own look before a fix is claimed. The probe asks "/" with Host ip:port, so a service that rejects that Host (django-ip) counts as red under the strict probe.
+
+Run 45372721961 ran at 56f19bf, where the probe stopped at the first 4xx or 5xx, so django-host (500) and django-ip (400) were measured with a single try.
+
+Second round, 2026-11-24 (causes read from the logs of run 45372721961 and measured on the fork CI; run 45383667105 is branch check/short-names, commit 62c33e8):
+
+| sample | change | result | run id |
+|---|---|---|---|
+| nginx-golang-mysql | --short-names | green; also green with no flags and ops 2177c549 (branch check/ops-master, commit af6f942) | 45383667105, 45393646760 |
+| nginx-aspnet-mysql | --short-names | proxy answered 502 at the first try (run 45383667105, the probe did not retry); with the retry loop fixed (run 45387284406, branch check/fix-aspnet-sn at 4b7c336) 24 tries over about 5 minutes ended with the last try getting no HTTP response (000), and a 502 page of an earlier try stayed in the body file; a later run of the loop (45392317073, check/fixes-loop) got 000 on all 24 tries, with no 502 at all; not a success; the backend behind the proxy was not diagnosed | 45383667105, 45387284406, 45392317073 |
+| nginx-golang-postgres | --short-names | red, proxy no answer; the hub postgres ignores POSTGRES_DB, POSTGRES_USER and the password | 45383667105 |
+| spring-postgres | --short-names | red: the name db resolves now; the backend dies on FATAL database "example" does not exist (hub postgres creates no database) | 45383667105 |
+| gitea-postgres | --short-names | red: the program chosen is the supervisor s6-svscan (fork), the guest reboots | 45383667105 |
+| nextcloud-postgres, nextcloud-redis-mariadb | --short-names | red: apache2 prefork needs fork, nothing listens | 45383667105 |
+| angular | /proc/self/stat for node (commit e2a2a4a) | green, answer 200 | 45384816850 |
+
+Causes read from the logs, not fixed and not yet confirmed by a run (hypotheses): nginx-flask-mysql has an upstream backend that fails by itself (ImportError url_quote from werkzeug.urls, unpinned requirements); apache2 may need a one-process setting (the option -X is a guess not yet run); gitea may need the choice of the listening child instead of the supervisor (not yet run). The bare names note and the proc/self/stat file are covered by tests that fail when the change is reverted (ci runs 45384856263 and 45384954905).
+
+Run 45393646760 (2026-11-24, branch check/ops-master, commit af6f942, ops 2177c549, each job with the flags of its row): green with no flags: nginx-golang, sparkjava-mysql (backend 200, db open), nginx-golang-mysql (proxy 200), flask-redis; green with --short-names: nginx-golang-plain; red: nginx-golang-postgres, nginx-aspnet-mysql and spring-postgres.
+
+Revert checks of the machine note and the bare names note (2026-11-24, branches from 9321c5d with the change removed and the tests kept):
+
+| branch | change reverted | ci run | tests that failed |
+|---|---|---|---|
+| check/fixes-r4a | the node sentence of the machine note is printed whether or not /proc/self/stat is in the list | 45393185622 | TestMachineFilesOfThePackageAreNoted (the negative half: the node sentence was printed without /proc/self/stat). TestMachineNoteSaysTheNodeFileOnlyWhenTheListHasIt did not fail: its list has /proc/self/stat, so it passes with the sentence unconditional and is a guard of the positive half |
+| check/fixes-r4b | the bare names note is not added | 45393191478 | TestBareNamesNoteIsPrintedWithoutShortNames, TestBareNamesNoteIsAlsoPrintedWithAFindingInAFile |
+
+In the tests of this round the arm64 and existing-file cases of writeMachineFiles are guards: they pass with the change reverted and do not test a change.

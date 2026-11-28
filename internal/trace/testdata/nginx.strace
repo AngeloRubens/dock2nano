@@ -1,0 +1,255 @@
+9     execve("/docker-entrypoint.sh", ["/docker-entrypoint.sh", "nginx", "-g", "daemon off;"], 0x7fffd63a7868 /* 8 vars */) = 0
+9     getcwd("/", 4096)                 = 2
+9     open("/docker-entrypoint.sh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     fork()                            = 10
+9     fork()                            = 11
+10    open("/dev/null", O_WRONLY|O_CREAT|O_TRUNC|O_LARGEFILE, 0666) = 3
+10    execve("/usr/bin/find", ["/usr/bin/find", "/docker-entrypoint.d/", "-mindepth", "1", "-maxdepth", "1", "-type", "f", "-print", "-quit"], 0x7fbcd43beb78 /* 10 vars */) = 0
+10    lstat("/docker-entrypoint.d/", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+10    open("/docker-entrypoint.d/", O_RDONLY|O_LARGEFILE|O_CLOEXEC|O_DIRECTORY) = 3
+10    lstat("/docker-entrypoint.d/30-tune-worker-processes.sh", {st_mode=S_IFREG|0755, st_size=4619, ...}) = 0
+10    +++ exited with 0 +++
+11    +++ exited with 0 +++
+9     stat("/usr/local/sbin/find", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/local/bin/find", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/sbin/find", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/bin/find", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+9     fork()                            = 12
+9     stat("/usr/local/sbin/sort", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/local/bin/sort", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/sbin/sort", 0x7ffe14747a90) = -1 ENOENT (No such file or directory)
+9     stat("/usr/bin/sort", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+9     fork( <unfinished ...>
+12    execve("/usr/bin/find", ["find", "/docker-entrypoint.d/", "-follow", "-type", "f", "-print"], 0x7fbcd43be9e0 /* 10 vars */ <unfinished ...>
+9     <... fork resumed>)               = 13
+12    <... execve resumed>)             = 0
+13    execve("/usr/bin/sort", ["sort", "-V"], 0x7fbcd43be948 /* 10 vars */ <unfinished ...>
+9     fork( <unfinished ...>
+13    <... execve resumed>)             = 0
+9     <... fork resumed>)               = 14
+12    stat("/docker-entrypoint.d/", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+12    open("/docker-entrypoint.d/", O_RDONLY|O_LARGEFILE|O_CLOEXEC|O_DIRECTORY) = 3
+12    stat("/docker-entrypoint.d/30-tune-worker-processes.sh", {st_mode=S_IFREG|0755, st_size=4619, ...}) = 0
+12    stat("/docker-entrypoint.d/20-envsubst-on-templates.sh", {st_mode=S_IFREG|0755, st_size=3018, ...}) = 0
+12    stat("/docker-entrypoint.d/15-local-resolvers.envsh", {st_mode=S_IFREG|0755, st_size=389, ...}) = 0
+12    stat("/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh", {st_mode=S_IFREG|0755, st_size=2125, ...}) = 0
+12    +++ exited with 0 +++
+13    +++ exited with 0 +++
+14    stat("/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh", {st_mode=S_IFREG|0755, st_size=2125, ...}) = 0
+14    fork()                            = 15
+15    execve("/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh", ["/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh"], 0x7fbcd43be9a8 /* 10 vars */) = 0
+15    stat("/", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+15    stat(".", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+15    open("/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+15    fork()                            = 16
+16    stat("/usr/local/sbin/basename", 0x7ffd360d0510) = -1 ENOENT (No such file or directory)
+16    stat("/usr/local/bin/basename", 0x7ffd360d0510) = -1 ENOENT (No such file or directory)
+16    stat("/usr/sbin/basename", 0x7ffd360d0510) = -1 ENOENT (No such file or directory)
+16    stat("/usr/bin/basename", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+16    execve("/usr/bin/basename", ["basename", "/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh"], 0x7f28ac669240 /* 10 vars */) = 0
+16    +++ exited with 0 +++
+15    stat("/proc/net/if_inet6", {st_mode=S_IFREG|0444, st_size=0, ...}) = 0
+15    stat("/etc/nginx/conf.d/default.conf", {st_mode=S_IFREG|0644, st_size=1072, ...}) = 0
+15    open("/dev/null", O_WRONLY|O_CREAT|O_TRUNC|O_LARGEFILE, 0666) = 3
+15    stat("/usr/local/sbin/touch", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/local/bin/touch", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/sbin/touch", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/bin/touch", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/sbin/touch", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/bin/touch", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+15    fork()                            = 17
+17    execve("/bin/touch", ["touch", "/etc/nginx/conf.d/default.conf"], 0x7f28ac669468 /* 10 vars */) = 0
+17    utimensat(AT_FDCWD, "/etc/nginx/conf.d/default.conf", NULL, 0) = 0
+17    +++ exited with 0 +++
+15    stat("/usr/local/sbin/grep", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/local/bin/grep", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/sbin/grep", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/bin/grep", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/sbin/grep", 0x7ffd360d07b0) = -1 ENOENT (No such file or directory)
+15    stat("/bin/grep", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+15    fork()                            = 18
+18    execve("/bin/grep", ["grep", "-q", "listen  \\[::]\\:80;", "/etc/nginx/conf.d/default.conf"], 0x7f28ac669740 /* 10 vars */) = 0
+18    open("/etc/nginx/conf.d/default.conf", O_RDONLY|O_LARGEFILE) = 3
+18    +++ exited with 1 +++
+15    stat("/etc/os-release", {st_mode=S_IFREG|0644, st_size=188, ...}) = 0
+15    open("/etc/os-release", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+15    fork()                            = 19
+19    stat("/usr/local/sbin/apk", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/local/bin/apk", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/sbin/apk", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/bin/apk", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/sbin/apk", {st_mode=S_IFREG|0755, st_size=69648, ...}) = 0
+19    fork()                            = 20
+19    fork()                            = 21
+19    stat("/usr/local/sbin/cut", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/local/bin/cut", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/sbin/cut", 0x7ffd360d0320) = -1 ENOENT (No such file or directory)
+19    stat("/usr/bin/cut", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+20    open("/dev/null", O_WRONLY|O_CREAT|O_TRUNC|O_LARGEFILE, 0666 <unfinished ...>
+19    fork( <unfinished ...>
+20    <... open resumed>)               = 3
+19    <... fork resumed>)               = 22
+19    fork( <unfinished ...>
+21    execve("/bin/grep", ["grep", "etc/nginx/conf.d/default.conf"], 0x7f28ac5b7e78 /* 10 vars */ <unfinished ...>
+19    <... fork resumed>)               = 23
+21    <... execve resumed>)             = 0
+20    execve("/sbin/apk", ["apk", "manifest", "nginx"], 0x7f28ac5b7ea8 /* 10 vars */ <unfinished ...>
+22    execve("/usr/bin/cut", ["cut", "-d ", "-f", "1"], 0x7f28ac5b7ea0 /* 10 vars */ <unfinished ...>
+20    <... execve resumed>)             = 0
+23    execve("/usr/bin/cut", ["cut", "-d", ":", "-f", "2"], 0x7f28ac5b7ec0 /* 10 vars */ <unfinished ...>
+22    <... execve resumed>)             = 0
+23    <... execve resumed>)             = 0
+20    open("/etc/ld-musl-x86_64.path", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/local/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+20    open("/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/local/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+20    open("/lib/libapk.so.2.14.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/local/lib/libapk.so.2.14.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/lib/libapk.so.2.14.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+20    open("/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/local/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    open("/usr/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+20    openat(AT_FDCWD, "/", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+20    openat(3, "etc/apk/arch", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 4
+20    openat(3, "etc/apk/protected_paths.d", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 4
+20    openat(4, "ca-certificates.list", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 5
+20    openat(3, "etc/apk/cache", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    openat(3, "var/cache/apk", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 4
+20    openat(3, "etc/apk/keys", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 5
+20    openat(3, "etc/apk/world", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 6
+20    openat(3, "lib/apk/db/installed", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 6
+20    openat(3, "lib/apk/db/triggers", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 6
+20    openat(3, "lib/apk/db/scripts.tar", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 6
+20    openat(3, "etc/passwd", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 7
+20    openat(3, "etc/group", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 7
+20    openat(3, "etc/apk/repositories", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 6
+20    open("/etc/ssl/openssl.cnf", O_RDONLY|O_LARGEFILE) = 6
+20    openat(4, "APKINDEX.36c0efc6.tar.gz", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    openat(4, "APKINDEX.e33e93f4.tar.gz", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+20    openat(3, "etc/apk/repositories.d", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+21    +++ exited with 0 +++
+20    +++ exited with 0 +++
+22    +++ exited with 0 +++
+23    +++ exited with 0 +++
+19    +++ exited with 0 +++
+15    fork()                            = 24
+15    stat("/usr/local/sbin/sha1sum", 0x7ffd360d05c0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/local/bin/sha1sum", 0x7ffd360d05c0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/sbin/sha1sum", 0x7ffd360d05c0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/bin/sha1sum", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+15    fork()                            = 25
+24    +++ exited with 0 +++
+25    open("/dev/null", O_WRONLY|O_CREAT|O_TRUNC|O_LARGEFILE, 0666) = 3
+25    execve("/usr/bin/sha1sum", ["sha1sum", "-c", "-"], 0x7f28ac5b7e80 /* 10 vars */) = 0
+25    open("/etc/nginx/conf.d/default.conf", O_RDONLY|O_LARGEFILE) = 3
+25    +++ exited with 0 +++
+15    stat("/usr/local/sbin/sed", 0x7ffd360d08e0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/local/bin/sed", 0x7ffd360d08e0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/sbin/sed", 0x7ffd360d08e0) = -1 ENOENT (No such file or directory)
+15    stat("/usr/bin/sed", 0x7ffd360d08e0) = -1 ENOENT (No such file or directory)
+15    stat("/sbin/sed", 0x7ffd360d08e0) = -1 ENOENT (No such file or directory)
+15    stat("/bin/sed", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+15    fork()                            = 26
+26    execve("/bin/sed", ["sed", "-i", "-E", "s,listen       80;,listen       80;\\n    listen  [::]:80;,", "/etc/nginx/conf.d/default.conf"], 0x7f28ac669430 /* 10 vars */) = 0
+26    stat("/etc/nginx/conf.d/default.conf", {st_mode=S_IFREG|0644, st_size=1072, ...}) = 0
+26    open("/etc/nginx/conf.d/default.confcPbkOG", O_RDWR|O_CREAT|O_EXCL|O_LARGEFILE, 0600) = 3
+26    open("/etc/nginx/conf.d/default.conf", O_RDONLY|O_LARGEFILE) = 4
+26    rename("/etc/nginx/conf.d/default.confcPbkOG", "/etc/nginx/conf.d/default.conf") = 0
+26    +++ exited with 0 +++
+15    +++ exited with 0 +++
+14    stat("/docker-entrypoint.d/15-local-resolvers.envsh", {st_mode=S_IFREG|0755, st_size=389, ...}) = 0
+14    open("/docker-entrypoint.d/15-local-resolvers.envsh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+14    stat("/docker-entrypoint.d/20-envsubst-on-templates.sh", {st_mode=S_IFREG|0755, st_size=3018, ...}) = 0
+14    fork()                            = 27
+27    execve("/docker-entrypoint.d/20-envsubst-on-templates.sh", ["/docker-entrypoint.d/20-envsubst-on-templates.sh"], 0x7fbcd43be9a0 /* 10 vars */) = 0
+27    stat("/", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+27    stat(".", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+27    open("/docker-entrypoint.d/20-envsubst-on-templates.sh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+27    fork()                            = 28
+28    stat("/usr/local/sbin/basename", 0x7ffc810401a0) = -1 ENOENT (No such file or directory)
+28    stat("/usr/local/bin/basename", 0x7ffc810401a0) = -1 ENOENT (No such file or directory)
+28    stat("/usr/sbin/basename", 0x7ffc810401a0) = -1 ENOENT (No such file or directory)
+28    stat("/usr/bin/basename", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+28    execve("/usr/bin/basename", ["basename", "/docker-entrypoint.d/20-envsubst-on-templates.sh"], 0x7f86d1b6b238 /* 10 vars */) = 0
+28    +++ exited with 0 +++
+27    fork()                            = 29
+29    fork()                            = 30
+30    open("/dev/null", O_RDONLY|O_LARGEFILE) = 3
+30    stat("/usr/local/sbin/awk", 0x7ffc8103f490) = -1 ENOENT (No such file or directory)
+30    stat("/usr/local/bin/awk", 0x7ffc8103f490) = -1 ENOENT (No such file or directory)
+30    stat("/usr/sbin/awk", 0x7ffc8103f490) = -1 ENOENT (No such file or directory)
+30    stat("/usr/bin/awk", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+30    execve("/usr/bin/awk", ["awk", "END { for (name in ENVIRON) { print ( name ~ // ) ? name : \"\" } }"], 0x7f86d1b6b260 /* 10 vars */) = 0
+30    +++ exited with 0 +++
+29    +++ exited with 0 +++
+27    stat("/etc/nginx/templates", 0x7ffc8103fae0) = -1 ENOENT (No such file or directory)
+27    +++ exited with 0 +++
+14    stat("/docker-entrypoint.d/30-tune-worker-processes.sh", {st_mode=S_IFREG|0755, st_size=4619, ...}) = 0
+14    fork()                            = 31
+31    execve("/docker-entrypoint.d/30-tune-worker-processes.sh", ["/docker-entrypoint.d/30-tune-worker-processes.sh"], 0x7fbcd43be9a0 /* 10 vars */) = 0
+31    stat("/", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+31    stat(".", {st_mode=S_IFDIR|0755, st_size=4096, ...}) = 0
+31    open("/docker-entrypoint.d/30-tune-worker-processes.sh", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+31    fork()                            = 32
+32    stat("/usr/local/sbin/basename", 0x7ffffc304880) = -1 ENOENT (No such file or directory)
+32    stat("/usr/local/bin/basename", 0x7ffffc304880) = -1 ENOENT (No such file or directory)
+32    stat("/usr/sbin/basename", 0x7ffffc304880) = -1 ENOENT (No such file or directory)
+32    stat("/usr/bin/basename", {st_mode=S_IFREG|0755, st_size=808712, ...}) = 0
+32    execve("/usr/bin/basename", ["basename", "/docker-entrypoint.d/30-tune-worker-processes.sh"], 0x7fa09b0d1238 /* 10 vars */) = 0
+32    +++ exited with 0 +++
+31    +++ exited with 0 +++
+14    +++ exited with 0 +++
+9     execve("/usr/local/sbin/nginx", ["nginx", "-g", "daemon off;"], 0x7fbcd44701c8 /* 10 vars */) = -1 ENOENT (No such file or directory)
+9     execve("/usr/local/bin/nginx", ["nginx", "-g", "daemon off;"], 0x7fbcd44701c8 /* 10 vars */) = -1 ENOENT (No such file or directory)
+9     execve("/usr/sbin/nginx", ["nginx", "-g", "daemon off;"], 0x7fbcd44701c8 /* 10 vars */) = 0
+9     open("/etc/ld-musl-x86_64.path", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/lib/libpcre2-8.so.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/local/lib/libpcre2-8.so.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/lib/libpcre2-8.so.0", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     open("/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/local/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/lib/libssl.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     open("/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/local/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/lib/libcrypto.so.3", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     open("/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/local/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/usr/lib/libz.so.1", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 3
+9     open("/etc/localtime", O_RDONLY|O_NONBLOCK|O_LARGEFILE|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+9     open("/var/log/nginx/error.log", O_WRONLY|O_CREAT|O_APPEND|O_LARGEFILE, 0644) = 3
+9     open("/etc/ssl/openssl.cnf", O_RDONLY|O_LARGEFILE) = 4
+9     open("/etc/nginx/nginx.conf", O_RDONLY|O_LARGEFILE) = 4
+9     open("/etc/passwd", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 5
+9     open("/etc/group", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 5
+9     open("/etc/nginx/mime.types", O_RDONLY|O_LARGEFILE) = 5
+9     open("/etc/nginx/conf.d/", O_RDONLY|O_LARGEFILE|O_CLOEXEC|O_DIRECTORY) = 5
+9     open("/etc/nginx/conf.d/default.conf", O_RDONLY|O_LARGEFILE) = 5
+9     mkdir("/var/cache/nginx/client_temp", 0700) = 0
+9     stat("/var/cache/nginx/client_temp", {st_mode=S_IFDIR|0700, st_size=4096, ...}) = 0
+9     chown("/var/cache/nginx/client_temp", 101, -1) = 0
+9     mkdir("/var/cache/nginx/proxy_temp", 0700) = 0
+9     stat("/var/cache/nginx/proxy_temp", {st_mode=S_IFDIR|0700, st_size=4096, ...}) = 0
+9     chown("/var/cache/nginx/proxy_temp", 101, -1) = 0
+9     mkdir("/var/cache/nginx/fastcgi_temp", 0700) = 0
+9     stat("/var/cache/nginx/fastcgi_temp", {st_mode=S_IFDIR|0700, st_size=4096, ...}) = 0
+9     chown("/var/cache/nginx/fastcgi_temp", 101, -1) = 0
+9     mkdir("/var/cache/nginx/uwsgi_temp", 0700) = 0
+9     stat("/var/cache/nginx/uwsgi_temp", {st_mode=S_IFDIR|0700, st_size=4096, ...}) = 0
+9     chown("/var/cache/nginx/uwsgi_temp", 101, -1) = 0
+9     mkdir("/var/cache/nginx/scgi_temp", 0700) = 0
+9     stat("/var/cache/nginx/scgi_temp", {st_mode=S_IFDIR|0700, st_size=4096, ...}) = 0
+9     chown("/var/cache/nginx/scgi_temp", 101, -1) = 0
+9     open("/var/log/nginx/error.log", O_WRONLY|O_CREAT|O_APPEND|O_LARGEFILE, 0644) = 4
+9     open("/var/log/nginx/access.log", O_WRONLY|O_CREAT|O_APPEND|O_LARGEFILE, 0644) = 5
+9     open("/run/nginx.pid", O_RDWR|O_CREAT|O_TRUNC|O_LARGEFILE, 0644) = 8
+9     fork()                            = 39
+9     fork( <unfinished ...>
+39    open("/etc/group", O_RDONLY|O_LARGEFILE|O_CLOEXEC <unfinished ...>
+9     <... fork resumed>)               = 40
+39    <... open resumed>)               = 9
+40    open("/etc/group", O_RDONLY|O_LARGEFILE|O_CLOEXEC) = 11
+39    stat("/usr/share/nginx/html/index.html", {st_mode=S_IFREG|0644, st_size=615, ...}) = 0
+39    open("/usr/share/nginx/html/index.html", O_RDONLY|O_NONBLOCK|O_LARGEFILE) = 13

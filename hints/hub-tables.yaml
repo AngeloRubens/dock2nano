@@ -1,0 +1,29 @@
+# Decisions about programs that the code does not hard-wire.
+
+# Which namespace of the hub wins when two packages fit equally, first first.
+namespace_preference: [eyberg, nanovms]
+
+# Variables of the environment of an image that hold the version of a
+# program, by the name of the image (besides NAME_VERSION).
+version_env:
+  postgres: [PG_VERSION]
+  postgresql: [PG_VERSION]
+
+# How a program that starts several processes is made to run as one, by its
+# configuration file. The settings are applied to the top level of the file
+# of the user with these values, whatever the package of the hub says.
+single_process:
+  nginx:
+    config_paths:
+      - /etc/nginx/nginx.conf
+      - /usr/local/nginx/conf/nginx.conf
+      - /usr/local/etc/nginx/nginx.conf
+    config_flag: -c
+    params_flag: -g
+    base_volume_size: 200m
+    base_volume_evidence: the hub package eyberg/nginx 1.28.3 ran out of space (No space left on device) when its pid file was written on the default disk in a CI run, and ran with 200m
+    settings:
+      - {name: master_process, value: "off"}
+      - {name: daemon, value: "off"}
+      - {name: worker_processes, value: "1"}
+    compare: [listen, server_name, root, pid, error_log, access_log]
