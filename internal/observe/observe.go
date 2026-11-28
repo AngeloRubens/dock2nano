@@ -1086,7 +1086,7 @@ const defaultHostname = "dock2nano"
 // digit or "-" turned into "-", at most 63 characters, no "-" at either end. "dock2nano" when
 // nothing is left.
 func sanitizeHostname(s string) string {
-	b := []byte(strings.ToLower(s))
+	b := []byte(s)
 	for i, c := range b {
 		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 			b[i] = '-'
