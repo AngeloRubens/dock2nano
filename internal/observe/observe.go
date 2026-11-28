@@ -1225,7 +1225,7 @@ func (r *run) writeHostname(sysroot string) {
 
 	hostsPath := filepath.Join(sysroot, "etc", "hosts")
 	fi, err = os.Lstat(hostsPath)
-	if err != nil || !fi.Mode().IsRegular() {
+	if err != nil {
 		warn(": /etc/hosts of the package is missing or is not a regular file")
 		return
 	}
