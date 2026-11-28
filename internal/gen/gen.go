@@ -877,7 +877,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result, pkg string
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
-	if obs.HostnameMade != "" {
+	if false && obs.HostnameMade != "" {
 		who := fmt.Sprintf("The name of the service (%s) is not mapped there", s.Name)
 		dns := ""
 		if pkg != s.Name {
