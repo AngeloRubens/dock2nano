@@ -1139,7 +1139,7 @@ func validHostname(s string) bool {
 func errReason(err error) string {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
-		return pe.Err.Error()
+		return err.Error()
 	}
 	return err.Error()
 }
