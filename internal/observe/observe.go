@@ -1229,6 +1229,10 @@ func (r *run) writeHostname(sysroot string) {
 		return
 	}
 
+	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + " (the /etc/hosts of the package only gained a loopback line)")
+		return
+	}
 	if !hostsNames(data, name) {
 		add := "127.0.0.1\t" + name + "\n"
 		if len(data) > 0 && data[len(data)-1] != '\n' {
@@ -1245,10 +1249,6 @@ func (r *run) writeHostname(sysroot string) {
 			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be written: " + errReason(err))
 			return
 		}
-	}
-	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
-		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + " (the /etc/hosts of the package only gained a loopback line)")
-		return
 	}
 	r.hostnameMade = name
 }
