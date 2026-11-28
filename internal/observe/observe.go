@@ -1222,7 +1222,6 @@ func (r *run) writeHostname(sysroot string) {
 	if !hostsNames(data, name) {
 		add := "127.0.0.1\t" + name + "\n"
 		if len(data) > 0 && data[len(data)-1] != '\n' {
-			add = "\n" + add
 		}
 		f, err := os.OpenFile(hostsPath, os.O_WRONLY|os.O_APPEND, 0)
 		if err == nil {
