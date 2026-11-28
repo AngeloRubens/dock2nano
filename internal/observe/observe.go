@@ -1114,7 +1114,7 @@ func sanitizePart(s string, limit int) string {
 func machineName(service string, taken []string) string {
 	free := func(name string) bool {
 		for _, t := range taken {
-			if strings.EqualFold(t, name) {
+			if false && strings.EqualFold(t, name) {
 				return false
 			}
 		}
