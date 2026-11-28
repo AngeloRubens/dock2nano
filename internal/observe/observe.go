@@ -793,69 +793,96 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			r.warnOnce(fmt.Sprintf("could not keep the trace in %s: %v", r.o.KeepTrace, err))
 		}
 	}
-	final, found := trace.FinalExec(raw)
+	final, found := trace.FinalExecScripts(raw, nil)
 	if !found {
 		return nil, fmt.Errorf("observe: %s started no program in %d seconds%s", image, r.o.Seconds, r.logTail(id))
 	}
-	pid, program, from := final.Pid, final.Path, final.Line
-	var passedOver []string
-	for _, l := range final.PassedOver {
-		passedOver = append(passedOver, trace.Label(l.Path, l.Argv))
-	}
-	r.vlogf("the program is %s, process %s\n", program, pid)
+	var (
+		pid, program string
+		from         int
+		passedOver   []string
+		cmdline      []string
+		cwd, exe     string
+		uid, gid     int
+	)
+	// A program that is a shell script started through its shebang cannot run on nanos, which has no
+	// fork: the process it ran is the program. The first choice is checked against /proc, and the
+	// choice is made again with the script known as a shell (at most twice).
+	shellScripts := map[string]bool{}
+	for round := 0; ; round++ {
+		pid, program, from = final.Pid, final.Path, final.Line
+		passedOver = nil
+		for _, l := range final.PassedOver {
+			passedOver = append(passedOver, trace.Label(l.Path, l.Argv))
+		}
+		r.vlogf("the program is %s, process %s\n", program, pid)
 
-	// What the process says about itself, while it is there to ask. The command line comes from
-	// the execve call: a program such as nginx rewrites /proc/<pid>/cmdline, so that is only
-	// compared with it.
-	cmdline := slices.Clone(final.Argv)
-	cwd, exe := "", ""
-	uid, gid := -1, -1
-	running, err := r.d.Running(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("observe: checking that the traced container runs: %w", err)
-	}
-	if running {
-		base := "/proc/" + pid + "/"
-		if out, ok := r.procRead(ctx, id, "command line", []string{"cat", base + "cmdline"}); ok {
-			// a program that rewrites its command line, nginx for one, pads it with NULs
-			parts := trimEmpty(trace.SplitNul(out))
-			// the same trim for the copy of execve that is compared, so that a trailing empty
-			// argument (app "") is not taken for a difference
-			asked := trimEmpty(slices.Clone(cmdline))
-			if len(parts) > 0 {
-				switch {
-				case len(cmdline) == 0:
-					cmdline = parts
-				case startedThroughShebang(parts, asked, program):
-					r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
-					cmdline = parts
-				case !slices.Equal(parts, asked):
-					r.warnOnce(r.redact(fmt.Sprintf(NoteProcCmdline+" %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
+		// What the process says about itself, while it is there to ask. The command line comes from
+		// the execve call: a program such as nginx rewrites /proc/<pid>/cmdline, so that is only
+		// compared with it.
+		cmdline = slices.Clone(final.Argv)
+		cwd, exe = "", ""
+		uid, gid = -1, -1
+		shebangShell := ""
+		running, err := r.d.Running(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("observe: checking that the traced container runs: %w", err)
+		}
+		if running {
+			base := "/proc/" + pid + "/"
+			if out, ok := r.procRead(ctx, id, "command line", []string{"cat", base + "cmdline"}); ok {
+				// a program that rewrites its command line, nginx for one, pads it with NULs
+				parts := trimEmpty(trace.SplitNul(out))
+				// the same trim for the copy of execve that is compared, so that a trailing empty
+				// argument (app "") is not taken for a difference
+				asked := trimEmpty(slices.Clone(cmdline))
+				if len(parts) > 0 {
+					switch {
+					case len(cmdline) == 0:
+						cmdline = parts
+					case startedThroughShebang(parts, asked, program):
+						shebangShell = shellOfShebang(parts)
+						r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
+						cmdline = parts
+					case !slices.Equal(parts, asked):
+						r.warnOnce(r.redact(fmt.Sprintf(NoteProcCmdline+" %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
+					}
 				}
 			}
-		}
-		if out, ok := r.procRead(ctx, id, "environment", []string{"cat", base + "environ"}); ok {
-			if parts := trace.SplitNul(out); len(parts) > 0 {
-				env = parts
+			if out, ok := r.procRead(ctx, id, "environment", []string{"cat", base + "environ"}); ok {
+				if parts := trace.SplitNul(out); len(parts) > 0 {
+					env = parts
+				}
 			}
-		}
-		if out, ok := r.procRead(ctx, id, "working directory", []string{"readlink", base + "cwd"}); ok {
-			cwd = strings.TrimSpace(string(out))
-		}
-		if out, ok := r.procRead(ctx, id, "executable", []string{"readlink", base + "exe"}); ok {
-			exe = strings.TrimSpace(string(out))
-		}
-		if out, ok := r.procRead(ctx, id, "user and group", []string{"cat", base + "status"}); ok {
-			var good bool
-			if uid, gid, good = parseStatusIDs(string(out)); !good {
-				r.warnOnce(NoteUserGroup + " of the program from /proc: they are not known")
+			if out, ok := r.procRead(ctx, id, "working directory", []string{"readlink", base + "cwd"}); ok {
+				cwd = strings.TrimSpace(string(out))
 			}
+			if out, ok := r.procRead(ctx, id, "executable", []string{"readlink", base + "exe"}); ok {
+				exe = strings.TrimSpace(string(out))
+			}
+			if out, ok := r.procRead(ctx, id, "user and group", []string{"cat", base + "status"}); ok {
+				var good bool
+				if uid, gid, good = parseStatusIDs(string(out)); !good {
+					r.warnOnce(NoteUserGroup + " of the program from /proc: they are not known")
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("observe: reading /proc of the program: %w", err)
+			}
+		} else {
+			r.warnOnce(NoteStoppedBeforeProc + ": the command line, environment and directory are those of the image")
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("observe: reading /proc of the program: %w", err)
+		// the interpreter of the program is a shell: the script is passed over for what it ran
+		if shebangShell == "" || round >= 2 || shellScripts[program] {
+			break
 		}
-	} else {
-		r.warnOnce(NoteStoppedBeforeProc + ": the command line, environment and directory are those of the image")
+		shellScripts[program] = true
+		next, ok := trace.FinalExecScripts(raw, shellScripts)
+		if !ok || next.Pid == final.Pid {
+			break
+		}
+		r.warnOnce(r.redact(fmt.Sprintf("the program started was the shell script %s (interpreter %s); the process it ran, %s, is taken instead", program, shebangShell, next.Path)))
+		final = next
 	}
 	// The program may change its directory while it runs (rr goes to the folder of its config):
 	// /proc says where it is now, and the package starts it where it started, which the trace
@@ -2287,6 +2314,24 @@ func trimEmpty(list []string) []string {
 		list = list[:len(list)-1]
 	}
 	return list
+}
+
+// shellOfShebang returns the interpreter of a command line that startedThroughShebang accepted
+// when it is a shell (sh, bash, dash, ash, zsh, ksh, mksh; through env when the first element is
+// env and the second the shell), and "" when it is another interpreter.
+func shellOfShebang(proc []string) string {
+	if len(proc) == 0 {
+		return ""
+	}
+	interp := proc[0]
+	if path.Base(interp) == "env" && len(proc) > 1 {
+		interp = proc[1]
+	}
+	switch path.Base(interp) {
+	case "sh", "bash", "dash", "ash", "zsh", "ksh", "mksh":
+		return interp
+	}
+	return ""
 }
 
 // startedThroughShebang tells whether the command line in /proc is the one execve was given with

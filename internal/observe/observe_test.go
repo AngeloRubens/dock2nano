@@ -659,6 +659,55 @@ func TestObserveShebangScriptIsTheFileOfExecveNotArgvZero(t *testing.T) {
 	equal(t, "argv", res.Argv, []string{"/bin/sh", "/app/run.sh", "--x"})
 }
 
+// scriptWithChild is the scene where the program of the first choice is a script and a process it
+// started runs java
+func scriptWithChild(s *scene, script, proc string) {
+	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"`+script+`", ["`+script+`", "--x"]`, 1)
+	s.d.traceTxt += "11 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD, child_tidptr=0x7f00) = 12\n"
+	s.d.traceTxt += `12 execve("/usr/bin/java", ["java", "-jar", "x.jar"], 0x7ffd /* 3 vars */) = 0` + "\n"
+	s.d.files[script] = entry{data: "#!" + strings.SplitN(proc, "\x00", 2)[0] + "\n", mode: 0755}
+	s.d.files["/usr/bin/java"] = entry{data: "java", mode: 0755}
+	s.d.exec["cat /proc/11/cmdline"] = proc
+	s.d.exec["cat /proc/12/cmdline"] = "java\x00-jar\x00x.jar\x00"
+	s.d.exec["cat /proc/12/environ"] = "A=1\x00"
+	s.d.exec["readlink /proc/12/cwd"] = "/srv\n"
+	s.d.exec["readlink /proc/12/exe"] = "/usr/bin/java\n"
+	s.d.exec["cat /proc/12/status"] = statusText(999, 999)
+}
+
+func TestObserveShellScriptProgramIsReplacedByItsChild(t *testing.T) {
+	s := newScene(t)
+	scriptWithChild(s, "/app/run.sh", "/bin/bash\x00/app/run.sh\x00--x\x00")
+	s.d.files["/bin/bash"] = entry{data: "bash", mode: 0755}
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/bin/java")
+	equal(t, "argv", res.Argv, []string{"java", "-jar", "x.jar"})
+	note := "the program started was the shell script /app/run.sh (interpreter /bin/bash); the process it ran, /usr/bin/java, is taken instead"
+	if !slices.Contains(res.Warnings, note) {
+		t.Errorf("warnings %q lack %q", res.Warnings, note)
+	}
+}
+
+func TestObserveShebangPythonScriptIsNotReplacedByItsChild(t *testing.T) {
+	s := newScene(t)
+	scriptWithChild(s, "/usr/local/bin/tool", "/usr/local/bin/python3.9\x00/usr/local/bin/tool\x00--x\x00")
+	s.d.files["/usr/local/bin/python3.9"] = entry{data: "py", mode: 0755}
+	s.d.exec["readlink /proc/11/exe"] = "/usr/local/bin/python3.9\n"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "program", res.Program, "/usr/local/bin/python3.9")
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the program started was the shell script") {
+			t.Errorf("a python script was taken for a shell script: %q", w)
+		}
+	}
+}
+
 func TestObserveTrailingEmptyArgumentIsNotADifference(t *testing.T) {
 	s := newScene(t)
 	s.d.traceTxt = strings.Replace(sceneTrace, `"/usr/bin/app", ["app", "--serve"]`, `"/usr/bin/app", ["app", "--serve", ""]`, 1)
