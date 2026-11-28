@@ -105,7 +105,8 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 				pkgOf[s.Name] = gen.PackageName(s.Name)
 			}
 		}
-		taken = takenNames(all, pkgOf)
+		_ = all
+		taken = takenNames(converted, pkgOf)
 	}
 
 	// One network for the whole run: the service under observation and the
