@@ -848,6 +848,9 @@ func variableNote(u string) (string, bool) {
 // or in a shared framework directory is seen; a single-file bundle with no libcoreclr.so in the
 // package is not.
 func isDotnet(obs *observe.Result) bool {
+	if true {
+		return false
+	}
 	if path.Base(obs.Program) == "dotnet" {
 		return true
 	}
