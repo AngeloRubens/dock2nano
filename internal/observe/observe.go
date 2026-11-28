@@ -149,15 +149,16 @@ type Options struct {
 	// ExerciseCmd are not touched.
 	ExerciseHost string
 
-	// Hostname is the name of the service. The machine is named after it, with "-host" added
+	// Hostname is the base of the machine name: the package name of the service (unique among the
+	// services, at most 15 characters). The machine is named after it, with "-host" added
 	// (lower-cased and reduced to letters, digits and "-", at most 63 characters in all; "dock2nano"
 	// when nothing is left): that name is in /etc/hostname and on 127.0.0.1 in /etc/hosts, and the
 	// service name itself is not, as peers resolve it to the address of the machine. The hostname:
 	// key of a compose file is not read. An /etc/hostname that the sysroot has as a regular file is
 	// replaced.
 	Hostname string
-	// TakenNames are the names that the converted services use (service name, package name, network
-	// alias), lower case. The name of the machine is none of them: when "<service>-host" is one,
+	// TakenNames are the names that the services of the project use (service name, package name),
+	// lower case, of every service of the file, converted or not. The name of the machine is none of them: when "<service>-host" is one,
 	// "-host2", "-host3" and so on are tried. Only these names are checked.
 	TakenNames []string
 
@@ -1089,13 +1090,18 @@ const defaultHostname = "dock2nano"
 const hostSuffix = "-host"
 
 // sanitizePart makes a part of a name of a machine of s: lower case, a character that is not a
-// letter, a digit or "-" turned into "-", at most limit characters, no "-" at either end. It is
-// empty when nothing is left.
+// letter, a digit or "-" turned into "-", repeated "-" collapsed into one (as the package names
+// are), at most limit characters, no "-" at either end. It is empty when nothing is left.
 func sanitizePart(s string, limit int) string {
-	b := []byte(strings.ToLower(s))
-	for i, c := range b {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			b[i] = '-'
+	var b []byte
+	dash := false
+	for _, c := range []byte(strings.ToLower(s)) {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			b = append(b, c)
+			dash = false
+		} else if !dash {
+			b = append(b, '-')
+			dash = true
 		}
 	}
 	if len(b) > limit {
@@ -1104,8 +1110,9 @@ func sanitizePart(s string, limit int) string {
 	return strings.Trim(string(b), "-")
 }
 
-// machineName is the name of the machine of the service: its name, sanitized, and "-host" (the
-// service part is cut so that the whole is at most 63 characters). It is not the name of the
+// machineName is the name of the machine of the service: its package name (service is the base
+// that cmd gives: unique, at most 15 characters), sanitized, and "-host" (the base is cut so that
+// the whole is at most 63 characters). It is not the name of the
 // service: the peers use that name for the address of the service, and a program that is
 // configured with its own service name must not find 127.0.0.1 behind it. When the name is one of
 // taken (without regard to case), "-host2", "-host3" and so on are tried until one is not. When
@@ -1149,7 +1156,11 @@ func errReason(err error) string {
 }
 
 // hostsNames says whether a line of the hosts file has name as a name on 127.0.0.1 (not as the
-// address, not on another address, and not in a comment), without regard to case.
+// address, not on another address, and not in a comment), without regard to case. A line that has
+// the name on another address does not count: the line on 127.0.0.1 is appended after it. (glibc
+// takes the first match, so that line would win for a lookup by name, but the hosts file of the
+// sysroot is the one of this tool: it is made by writeLocalNames or comes from the image, and a
+// name of the machine on another address there is not expected.)
 func hostsNames(hosts []byte, name string) bool {
 	for _, line := range strings.Split(string(hosts), "\n") {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
@@ -1172,20 +1183,27 @@ func hostsNames(hosts []byte, name string) bool {
 // of the package at boot, the whole file less the CR and LF at its end; without it the machine is
 // named after its address (192-168-33-209) and nothing resolves that name, so a program that
 // looks up its own host name fails (WildFly: UnknownHostException in InetAddress.getLocalHost();
-// ASP.NET: SocketException in Dns.GetHostEntry). The name is machineName of the service, and only
-// that name is put on 127.0.0.1: the service name stays the name that peers resolve to the
-// address of the machine. An /etc/hostname of the sysroot that is a regular file is replaced; a
-// link or a directory there is not touched. /etc/hosts must be a regular file that can be read,
-// and it is checked before anything is written: when it cannot be used nothing is written. It
-// gets the line "127.0.0.1<TAB>name" when no line of it has the name on 127.0.0.1. It runs after
-// writeLocalNames. hostnameMade is set when both files have the name at the end. A file that is
-// not a regular file or a write that fails is one warning and no claim, and no /etc/hostname
-// left behind by this call.
+// ASP.NET: SocketException in Dns.GetHostEntry). The name is machineName of the package name of
+// the service, and only that name is put on 127.0.0.1: the service name stays the name that peers
+// resolve to the address of the machine. /etc/hosts must be a regular file that can be read, and
+// /etc/hostname must not be a link or a directory: both are checked before anything is written,
+// and when one cannot be used nothing is written. Then the line "127.0.0.1<TAB>name" is appended
+// to /etc/hosts when no line of it has the name on 127.0.0.1, and only after that /etc/hostname is
+// written, so that no step has to be undone: a failure of the append leaves /etc/hostname as it
+// was, and a failure of the write of /etc/hostname leaves a hosts file that gained only a
+// loopback line for a name nothing else uses. An /etc/hostname of the sysroot that is a regular
+// file is replaced (it is almost never there). It runs after writeLocalNames. hostnameMade is set
+// when both files have the name at the end; a file that cannot be used or a write that fails is
+// one warning and no claim.
 func (r *run) writeHostname(sysroot string) {
 	name := machineName(r.o.Hostname, r.o.TakenNames)
 
 	hostsPath := filepath.Join(sysroot, "etc", "hosts")
 	fi, err := os.Lstat(hostsPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package does not exist")
+		return
+	}
 	if err != nil {
 		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
 		return
@@ -1196,7 +1214,7 @@ func (r *run) writeHostname(sysroot string) {
 	}
 	data, err := os.ReadFile(hostsPath)
 	if err != nil {
-		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
 		return
 	}
 
@@ -1207,14 +1225,6 @@ func (r *run) writeHostname(sysroot string) {
 		r.warnOnce(NoteHostname + ": /etc/hostname of the package is not a regular file")
 		return
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
-		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(hostnamePath), 0o755); err != nil {
-		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
-		return
-	}
-	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
 		return
 	}
@@ -1232,10 +1242,13 @@ func (r *run) writeHostname(sysroot string) {
 			}
 		}
 		if err != nil {
-			os.Remove(hostnamePath)
-			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
+			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be written: " + errReason(err))
 			return
 		}
+	}
+	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + " (the /etc/hosts of the package only gained a loopback line)")
+		return
 	}
 	r.hostnameMade = name
 }

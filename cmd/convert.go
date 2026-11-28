@@ -90,12 +90,22 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		converted = append(converted, s.Name)
 	}
 	var taken []string
+	pkgOf := map[string]string{}
 	if len(converted) > 0 {
-		pkgOf, _, err := gen.PackageNames(project, converted)
+		pkgOf, _, err = gen.PackageNames(project, converted)
 		if err != nil {
 			return 0, err
 		}
-		taken = takenNames(converted, pkgOf)
+		// a service that is not converted (not selected, a profile, no replicas, no image) is a name
+		// a peer may still use: its package name is the one the generator would give
+		all := make([]string, 0, len(ordered))
+		for _, s := range ordered {
+			all = append(all, s.Name)
+			if _, ok := pkgOf[s.Name]; !ok {
+				pkgOf[s.Name] = gen.PackageName(s.Name)
+			}
+		}
+		taken = takenNames(all, pkgOf)
 	}
 
 	// One network for the whole run: the service under observation and the
@@ -103,6 +113,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// do with docker compose. It is removed however the run ends.
 	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, hostNotes: hostNotesByService, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
 	rs.taken = taken
+	rs.pkgOf = pkgOf
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -751,11 +762,12 @@ func dependencyOrder(p *compose.Project) ([]*compose.Service, error) {
 	return out, nil
 }
 
-// takenNames lists, lower-cased and once each, the names the converted services answer to: the
-// service name, its package name and its network alias (the service name).
-func takenNames(converted []string, pkgOf map[string]string) []string {
+// takenNames lists, lower-cased and once each, the names the services answer to: the service name
+// (which is also its network alias) and its package name. It is called with every service of the
+// project, converted or not.
+func takenNames(all []string, pkgOf map[string]string) []string {
 	var out []string
-	for _, name := range converted {
+	for _, name := range all {
 		for _, n := range []string{name, pkgOf[name]} {
 			n = strings.ToLower(n)
 			if n != "" && !slices.Contains(out, n) {
@@ -838,8 +850,12 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	oo.ExerciseHost = exerciseHostFor(s.Name, o.exerciseHosts)
 	oo.ServiceName = s.Name
-	// the compose parser does not model hostname: the machine is named after the service (observe adds "-host")
-	oo.Hostname = s.Name
+	// the compose parser does not model hostname: the machine is named after the package name of the
+	// service, which is unique and short (observe adds "-host"); the service name when there is none
+	oo.Hostname = rs.pkgOf[s.Name]
+	if oo.Hostname == "" {
+		oo.Hostname = s.Name
+	}
 	oo.TakenNames = rs.taken
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
@@ -1205,10 +1221,11 @@ func networkName() (string, error) {
 // others.
 type runState struct {
 	network string
-	// taken holds the names that the converted services use for themselves and for each other
-	// (service name, package name, network alias, lower case): the machine of a service is not
-	// named with one of them.
+	// taken holds the names that the services of the file use for themselves and for each other
+	// (service name and package name of every service, converted or not, lower case): the machine
+	// of a service is not named with one of them. pkgOf is the package name of every service.
 	taken []string
+	pkgOf map[string]string
 	// noWith is --no-with; retry holds the services to observe again with the others running;
 	// retried the ones that were.
 	noWith  bool

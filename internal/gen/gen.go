@@ -3,7 +3,8 @@
 // service, the compose.yaml that "ops compose up" reads, and a report.
 //
 // The rules are generic. Nothing is decided by the name of a program or of an
-// image. Whatever does not convert is written to the report with its key and
+// image; the one place that looks at the program is a note of the report
+// (dotnet), which only adds a line and changes nothing in the package. Whatever does not convert is written to the report with its key and
 // the reason, and is never dropped in silence. What comes out is what was
 // observed, to be reviewed; Render says so on its first line.
 package gen
@@ -843,7 +844,9 @@ func variableNote(u string) (string, bool) {
 
 // isDotnet says whether the program of the observation is the .NET host (dotnet), or a file under
 // the directories where the images of Microsoft put the runtime, or the package has libcoreclr.so
-// beside the program or in a shared framework directory (a self-contained or apphost app).
+// beside the program or in a shared framework directory. An app that has libcoreclr.so beside it
+// or in a shared framework directory is seen; a single-file bundle with no libcoreclr.so in the
+// package is not.
 func isDotnet(obs *observe.Result) bool {
 	if path.Base(obs.Program) == "dotnet" {
 		return true
@@ -856,14 +859,14 @@ func isDotnet(obs *observe.Result) bool {
 	if obs.Sysroot == "" {
 		return false
 	}
-	// a self-contained or apphost app: the runtime library is beside the program, or in a shared
-	// framework directory of the package
-	if _, err := os.Stat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
+	// the runtime library is beside the program, or in a shared framework directory of the package
+	if _, err := os.Lstat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
 		return true
 	}
 	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
-		pat := filepath.Join(obs.Sysroot, filepath.FromSlash(base), "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
-		if m, err := filepath.Glob(pat); err == nil && len(m) > 0 {
+		// the pattern is relative to the sysroot, so that the path of the sysroot is never a pattern
+		pat := path.Join(base, "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
+		if m, err := fs.Glob(os.DirFS(obs.Sysroot), pat); err == nil && len(m) > 0 {
 			return true
 		}
 	}
@@ -875,7 +878,13 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result, pkg string
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
 	if obs.HostnameMade != "" {
-		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts with the line 127.0.0.1 %s, and no other name of ours on loopback. The name of the service (%s) and its package name (%s) are not mapped there: peers reach it as %s.service (and %s with an ops that includes nanovms/ops#1815), which the DNS of ops answers with the address of the machine, so a program configured with that name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails. The same holds the other way: a program that announces the address of its own host name (Cassandra with listen_address unset, the default advertised listener of Kafka, the node names of RabbitMQ and Hazelcast) now announces loopback or %s with no error, where before it failed loudly with UnknownHostException; set its advertised address to %s.service. Not measured: naming the machine %s.service with no line in /etc/hosts", obs.HostnameMade, obs.HostnameMade, obs.HostnameMade, s.Name, pkg, pkg, pkg, obs.HostnameMade, pkg, pkg))
+		who := fmt.Sprintf("The name of the service (%s) is not mapped there", s.Name)
+		dns := ""
+		if pkg != s.Name {
+			who = fmt.Sprintf("The name of the service (%s) and its package name (%s) are not mapped there", s.Name, pkg)
+			dns = fmt.Sprintf(" (the DNS of ops answers the package name, not the service name %s)", s.Name)
+		}
+		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts with a line naming it on 127.0.0.1. %s: peers reach it as %s.service (and %s with an ops that includes nanovms/ops#1815)%s, which the DNS of ops answers with the address of the machine, so a program configured with that name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails. The other way round: a program that announces the address of its own host name (Cassandra with listen_address unset, the default advertised listener of Kafka, the node names of RabbitMQ and Hazelcast) is expected to announce loopback or %s with no error, where before it failed loudly with UnknownHostException; set its advertised address to %s.service. The name %s itself was not measured; the measured rows used the name of the service. Not measured either: naming the machine %s.service with no line in /etc/hosts", obs.HostnameMade, obs.HostnameMade, who, pkg, pkg, dns, obs.HostnameMade, pkg, obs.HostnameMade, pkg))
 	}
 	if isDotnet(obs) {
 		g.add(s.Name, plan.Note, "dotnet", "the program is a .NET one: in the 9 measured rows (the ASP.NET sample, with DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0, kvm, and the library or the framework directory copied into the package) 3 started the server, 5 stopped with signal 11 (a page fault in the CLR) and 1 did neither; only one row answered 200. A library that the CLR loads only when an exception is thrown (Microsoft.AspNetCore.Diagnostics.Abstractions.dll) is not carried unless the observation reaches that path. The start is not reliable: review the output")

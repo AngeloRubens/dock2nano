@@ -2989,3 +2989,92 @@ func TestCommandFlagServiceStartedAsADependencyRunsTheReplacedCommand(t *testing
 		t.Errorf("api was not started for web: %v", h.events)
 	}
 }
+
+// observedOptions is the options of the observation of the service.
+func observedOptions(t *testing.T, h *harness, service string) observe.Options {
+	t.Helper()
+	for _, o := range h.observed {
+		if o.ServiceName == service {
+			return o
+		}
+	}
+	t.Fatalf("service %s was not observed: %v", service, h.names())
+	return observe.Options{}
+}
+
+func TestObserveOptionsTakenNamesHaveEveryServiceAndItsPackageName(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		file    string
+		args    []string
+		service string
+		want    []string
+		not     []string
+	}{
+		{
+			// the lower-cased service name ("my_app") and the package name ("my-app"), and the peer
+			// "web-host" that the machine name of web would be
+			name:    "three services",
+			file:    "services:\n  web:\n    image: w\n  web-host:\n    image: wh\n  My_App:\n    image: m\n",
+			service: "web",
+			want:    []string{"web", "web-host", "my_app", "my-app"},
+		},
+		{
+			// the package name of Web_Host is web-host, and its lower-cased name is web_host
+			name:    "package name of another case",
+			file:    "services:\n  web:\n    image: w\n  Web_Host:\n    image: wh\n",
+			service: "web",
+			want:    []string{"web", "web_host", "web-host"},
+		},
+		{
+			name:    "a skipped service",
+			file:    "services:\n  web:\n    image: w\n  web-host:\n    image: wh\n    profiles: [debug]\n  My_App:\n    image: m\n    deploy:\n      replicas: 0\n",
+			service: "web",
+			want:    []string{"web", "web-host", "my_app", "my-app"},
+		},
+		{
+			name:    "a service that is not selected",
+			file:    "services:\n  web:\n    image: w\n  Other_One:\n    image: o\n",
+			args:    []string{"--service", "web"},
+			service: "web",
+			want:    []string{"web", "other_one", "other-one"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.write("compose.yaml", c.file)
+			for _, img := range []string{"w", "wh", "m", "o"} {
+				h.dock.have[img] = true
+			}
+			h.mustRun(0, append([]string{"convert"}, c.args...)...)
+			got := observedOptions(t, h, c.service).TakenNames
+			for _, w := range c.want {
+				if !slices.Contains(got, w) {
+					t.Errorf("TakenNames %v lacks %q", got, w)
+				}
+			}
+			for _, n := range got {
+				if n != strings.ToLower(n) {
+					t.Errorf("TakenNames %v has %q, not lower case", got, n)
+				}
+			}
+		})
+	}
+}
+
+func TestObserveHostnameIsThePackageNameAndLongNamesDoNotCollide(t *testing.T) {
+	a, b := strings.Repeat("a", 58)+"x", strings.Repeat("a", 58)+"y"
+	h := newHarness(t)
+	h.write("compose.yaml", "services:\n  "+a+":\n    image: w\n  "+b+":\n    image: wh\n  web_app:\n    image: m\n")
+	for _, img := range []string{"w", "wh", "m"} {
+		h.dock.have[img] = true
+	}
+	h.mustRun(0, "convert")
+	ha, hb := observedOptions(t, h, a).Hostname, observedOptions(t, h, b).Hostname
+	if ha == hb || ha != gen.PackageName(a) || hb != gen.PackageName(b) || len(ha) > 15 || len(hb) > 15 {
+		t.Errorf("Hostname %q and %q", ha, hb)
+	}
+	if got := observedOptions(t, h, "web_app").Hostname; got != "web-app" {
+		t.Errorf("Hostname of web_app = %q", got)
+	}
+}

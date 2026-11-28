@@ -33,21 +33,9 @@ func PackageNames(p *compose.Project, converted []string) (map[string]string, []
 	owner := map[string]string{}
 	var items []plan.Item
 	for _, service := range converted {
-		pkg := cleanName(service)
+		pkg, reason := packageNameOf(service)
 		if pkg == "" {
 			return nil, nil, fmt.Errorf("service %q: the name has no letter or digit to make a package name from", service)
-		}
-		reason := ""
-		if len(pkg) > maxPkgLen {
-			sum := sha1.Sum([]byte(service))
-			pkg = pkg[:8] + "-" + hex.EncodeToString(sum[:])[:6]
-			reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
-		} else if pkg != service {
-			reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
-		}
-		if pkg == reservedPkg {
-			pkg = reservedPkgNew
-			reason = "dns is the name of the package ops-dns in the same compose file"
 		}
 		if other, dup := owner[pkg]; dup {
 			return nil, nil, fmt.Errorf("services %q and %q both become the package name %q", other, service, pkg)
@@ -59,6 +47,34 @@ func PackageNames(p *compose.Project, converted []string) (map[string]string, []
 		}
 	}
 	return names, items, nil
+}
+
+// PackageName is the package name that PackageNames gives to a service, without the check for a
+// second service with the same package name. It is "" when the name has no letter or digit. It is
+// for a service that is not converted, whose package name is still a name that a peer may use.
+func PackageName(service string) string {
+	pkg, _ := packageNameOf(service)
+	return pkg
+}
+
+// packageNameOf is the package name of a service and, when it is not the service name, why.
+func packageNameOf(service string) (pkg, reason string) {
+	pkg = cleanName(service)
+	if pkg == "" {
+		return "", ""
+	}
+	if len(pkg) > maxPkgLen {
+		sum := sha1.Sum([]byte(service))
+		pkg = pkg[:8] + "-" + hex.EncodeToString(sum[:])[:6]
+		reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
+	} else if pkg != service {
+		reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
+	}
+	if pkg == reservedPkg {
+		pkg = reservedPkgNew
+		reason = "dns is the name of the package ops-dns in the same compose file"
+	}
+	return pkg, reason
 }
 
 // cleanName lower-cases s, turns every character outside a-z0-9 into '-',

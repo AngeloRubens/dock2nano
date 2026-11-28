@@ -3355,11 +3355,21 @@ func TestWriteHostnameDoesNotTouchAFileThatIsNotARegularFile(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink("/proc/sys/kernel/hostname", filepath.Join(dir, "etc", "hostname")); err != nil {
+		// the target is a file that can be written: only the test of the kind of file keeps the
+		// name out of it (also when the test runs as root)
+		target := filepath.Join(dir, "elsewhere")
+		const before = "keep\n"
+		if err := os.WriteFile(target, []byte(before), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, "etc", "hostname")); err != nil {
 			t.Fatal(err)
 		}
 		r := hostnameRun(dir, "web")
 		check(t, r)
+		if b, err := os.ReadFile(target); err != nil || string(b) != before {
+			t.Errorf("the target of the link = %q, %v", b, err)
+		}
 		if _, err := os.Stat(filepath.Join(dir, "etc", "hosts")); err != nil {
 			t.Fatal(err)
 		}
@@ -3436,7 +3446,7 @@ func TestWriteHostnameWritesNothingWhenTheHostsFileIsNotUsable(t *testing.T) {
 	if r.hostnameMade != "" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
 	}
-	if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) || !strings.Contains(r.warn[0], "the /etc/hosts of the package could not be read") || strings.Contains(r.warn[0], dir) {
+	if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) || !strings.Contains(r.warn[0], "the /etc/hosts of the package does not exist") || strings.Contains(r.warn[0], dir) {
 		t.Errorf("warnings = %q", r.warn)
 	}
 	// /etc/hosts is a directory
@@ -3475,7 +3485,40 @@ func TestWriteHostnameClaimsNothingWhenTheAppendFails(t *testing.T) {
 		t.Errorf("/etc/hosts = %q", got)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "etc", "hostname")); err == nil {
-		t.Error("/etc/hostname was left behind")
+		t.Error("/etc/hostname was written although the append failed")
+	}
+}
+
+func TestWriteHostnameClaimsNothingWhenTheHostnameWriteFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a directory that is not writable")
+	}
+	// /etc cannot get a new file, while /etc/hosts can be appended to: the append works and the
+	// write of /etc/hostname fails
+	dir := t.TempDir()
+	etc := filepath.Join(dir, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "hosts"), []byte("10.0.0.1 db\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(etc, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(etc, 0o755) })
+	r := hostnameRun(dir, "web")
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) || !strings.Contains(r.warn[0], "only gained a loopback line") || strings.Contains(r.warn[0], dir) {
+		t.Errorf("warnings = %q", r.warn)
+	}
+	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n127.0.0.1\tweb-host\n" {
+		t.Errorf("/etc/hosts = %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(etc, "hostname")); err == nil {
+		t.Error("/etc/hostname exists")
 	}
 }
 
@@ -3513,6 +3556,9 @@ func TestSanitizePart(t *testing.T) {
 		{strings.Repeat("a", 70), 63, strings.Repeat("a", 63)},
 		{strings.Repeat("a", 62) + "_x", 63, strings.Repeat("a", 62)},
 		{"abc-def", 4, "abc"},
+		{"a__b", 63, "a-b"},
+		{"a_-_b", 63, "a-b"},
+		{"a  b", 63, "a-b"},
 	} {
 		if got := sanitizePart(c.in, c.limit); got != c.want {
 			t.Errorf("sanitizePart(%q, %d) = %q, want %q", c.in, c.limit, got, c.want)
@@ -3530,6 +3576,7 @@ func TestMachineName(t *testing.T) {
 		{"My_App.Svc", nil, "my-app-svc-host"},
 		{"", nil, "dock2nano"},
 		{"___", nil, "dock2nano"},
+		{"a__b", nil, "a-b-host"},
 		{"dock2nano", nil, "dock2nano-host"},
 		{strings.Repeat("a", 70), nil, strings.Repeat("a", 58) + "-host"},
 		{strings.Repeat("a", 57) + "_x", nil, strings.Repeat("a", 57) + "-host"},

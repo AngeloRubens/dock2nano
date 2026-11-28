@@ -2479,12 +2479,14 @@ func TestHostnameOfThePackageIsNoted(t *testing.T) {
 	in.Services["web"].Observed.HostnameMade = "web-host"
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Note, "hostname", "the machine is named web-host")
-	want1(t, p, "web", plan.Note, "hostname", "the line 127.0.0.1 web-host")
-	want1(t, p, "web", plan.Note, "hostname", "The name of the service (web) and its package name (web) are not mapped there: peers reach it as web.service (and web with an ops that includes nanovms/ops#1815)")
+	want1(t, p, "web", plan.Note, "hostname", "a line naming it on 127.0.0.1")
+	want1(t, p, "web", plan.Note, "hostname", "The name of the service (web) is not mapped there: peers reach it as web.service (and web with an ops that includes nanovms/ops#1815)")
 	want1(t, p, "web", plan.Note, "hostname", "Dns.GetHostEntry")
-	want1(t, p, "web", plan.Note, "hostname", "announces the address of its own host name")
+	want1(t, p, "web", plan.Note, "hostname", "announces the address of its own host name (Cassandra")
+	want1(t, p, "web", plan.Note, "hostname", "is expected to announce loopback or web-host with no error")
+	want1(t, p, "web", plan.Note, "hostname", "The name web-host itself was not measured; the measured rows used the name of the service")
 	want1(t, p, "web", plan.Note, "hostname", "set its advertised address to web.service")
-	want1(t, p, "web", plan.Note, "hostname", "Not measured: naming the machine web.service with no line in /etc/hosts")
+	want1(t, p, "web", plan.Note, "hostname", "Not measured either: naming the machine web.service with no line in /etc/hosts")
 	if m := itemsOf(p, "web", plan.Note, "hostname")[0].Message; strings.Contains(m, "::1") {
 		t.Errorf("the note names ::1: %q", m)
 	}
@@ -2492,7 +2494,31 @@ func TestHostnameOfThePackageIsNoted(t *testing.T) {
 	in = newInput(&fake{}, svc("web_app"))
 	in.Services["web_app"].Observed.HostnameMade = "web_app-host"
 	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "peers reach it as web-app.service (and web-app with an ops")
+	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "The name of the service (web_app) and its package name (web-app) are not mapped there")
+	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "the DNS of ops answers the package name, not the service name web_app")
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "hostname")
+}
+
+func TestPackageNameIsUniqueForLongNamesThatShareTheirStart(t *testing.T) {
+	a, b := strings.Repeat("a", 58)+"x", strings.Repeat("a", 58)+"y"
+	pa, pb := PackageName(a), PackageName(b)
+	if pa == pb || len(pa) > 15 || len(pb) > 15 {
+		t.Errorf("package names %q and %q", pa, pb)
+	}
+	names := map[string]string{}
+	for _, n := range []string{"web", "web_app", "My.Svc", a, "dns", "---"} {
+		names[n] = PackageName(n)
+	}
+	want := map[string]string{"web": "web", "web_app": "web-app", "My.Svc": "my-svc", a: pa, "dns": "svc-dns", "---": ""}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("PackageName = %v", names)
+	}
+	// the same name PackageNames gives
+	p := &compose.Project{}
+	got, _, err := PackageNames(p, []string{a, b})
+	if err != nil || got[a] != pa || got[b] != pb {
+		t.Errorf("PackageNames = %v, %v", got, err)
+	}
 }
 
 func TestDotnetProgramIsNoted(t *testing.T) {
@@ -2537,6 +2563,21 @@ func TestIsDotnetSeesTheRuntimeLibraryOfThePackage(t *testing.T) {
 	}
 	if isDotnet(&observe.Result{Program: "/app/Web"}) {
 		t.Error("isDotnet is true with no sysroot")
+	}
+}
+
+func TestIsDotnetDoesNotReadTheSysrootPathAsAPattern(t *testing.T) {
+	// the sysroot has glob characters in its path: only a pattern relative to it finds the library
+	root := filepath.Join(t.TempDir(), "[a]*?")
+	lib := filepath.Join(root, "usr", "share", "dotnet", "shared", "Microsoft.NETCore.App", "8.0.1", "libcoreclr.so")
+	if err := os.MkdirAll(filepath.Dir(lib), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lib, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isDotnet(&observe.Result{Program: "/app/Web", Sysroot: root}) {
+		t.Error("isDotnet is false for a sysroot with glob characters in its path")
 	}
 }
 
