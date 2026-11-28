@@ -869,7 +869,7 @@ func isDotnet(obs *observe.Result) bool {
 	defer r.Close()
 	// the runtime library is beside the program, or in a shared framework directory of the package
 	if rel := path.Join(strings.TrimPrefix(path.Dir(obs.Program), "/"), "libcoreclr.so"); filepath.IsLocal(filepath.FromSlash(rel)) {
-		if _, err := r.Lstat(filepath.FromSlash(rel)); err == nil {
+		if _, err := os.Lstat(filepath.Join(obs.Sysroot, filepath.FromSlash(rel))); err == nil {
 			return true
 		}
 	}
