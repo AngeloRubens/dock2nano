@@ -1264,25 +1264,7 @@ func (r *run) writeHostname(sysroot string) {
 // renamed over path, so that a failed write cannot leave path empty or half written. The
 // temporary file is removed on any failure.
 func writeFileInPlace(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".hostname-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(tmp, 0o644)
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		os.Remove(tmp)
-	}
-	return err
+	return os.WriteFile(path, data, 0o644)
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home
