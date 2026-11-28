@@ -1128,7 +1128,7 @@ func machineName(service string, taken []string) string {
 		part = defaultHostname
 	}
 	for n := 1; ; n++ {
-		suffix := hostSuffix
+		suffix := ""
 		if n > 1 {
 			suffix += strconv.Itoa(n)
 		}
