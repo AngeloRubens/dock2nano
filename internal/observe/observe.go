@@ -823,7 +823,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		cmdline = slices.Clone(final.Argv)
 		cwd, exe = "", ""
 		uid, gid = -1, -1
-		shebangShell := ""
+		shebangShell, shebangWarning := "", ""
 		running, err := r.d.Running(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("observe: checking that the traced container runs: %w", err)
@@ -842,7 +842,8 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 						cmdline = parts
 					case startedThroughShebang(parts, asked, program):
 						shebangShell = shellOfShebang(parts)
-						r.warnOnce(r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline)))
+						// said when the program is kept: a script that is replaced gets its own note
+						shebangWarning = r.redact(fmt.Sprintf("the program was started through a shebang: the command line of /proc %q is used, not the one execve was given %q", parts, cmdline))
 						cmdline = parts
 					case !slices.Equal(parts, asked):
 						r.warnOnce(r.redact(fmt.Sprintf(NoteProcCmdline+" %q differs from the one execve was given %q: the one execve was given is used", parts, cmdline)))
@@ -874,11 +875,17 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 		}
 		// the interpreter of the program is a shell: the script is passed over for what it ran
 		if shebangShell == "" || round >= 2 || shellScripts[program] {
+			if shebangWarning != "" {
+				r.warnOnce(shebangWarning)
+			}
 			break
 		}
 		shellScripts[program] = true
 		next, ok := trace.FinalExecScripts(raw, shellScripts)
 		if !ok || next.Pid == final.Pid {
+			if shebangWarning != "" {
+				r.warnOnce(shebangWarning)
+			}
 			break
 		}
 		r.warnOnce(r.redact(fmt.Sprintf("the program started was the shell script %s (interpreter %s); the process it ran, %s, is taken instead", program, shebangShell, next.Path)))

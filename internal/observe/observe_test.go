@@ -689,6 +689,12 @@ func TestObserveShellScriptProgramIsReplacedByItsChild(t *testing.T) {
 	if !slices.Contains(res.Warnings, note) {
 		t.Errorf("warnings %q lack %q", res.Warnings, note)
 	}
+	// the script is replaced: the shebang warning about it would be stale
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "the program was started through a shebang") {
+			t.Errorf("stale shebang warning for the replaced script: %q", w)
+		}
+	}
 }
 
 func TestObserveShebangPythonScriptIsNotReplacedByItsChild(t *testing.T) {
@@ -705,6 +711,11 @@ func TestObserveShebangPythonScriptIsNotReplacedByItsChild(t *testing.T) {
 		if strings.Contains(w, "the program started was the shell script") {
 			t.Errorf("a python script was taken for a shell script: %q", w)
 		}
+	}
+	// the program is kept: its shebang warning stays
+	shebang := `the program was started through a shebang: the command line of /proc ["/usr/local/bin/python3.9" "/usr/local/bin/tool" "--x"] is used, not the one execve was given ["/usr/local/bin/tool" "--x"]`
+	if !slices.Contains(res.Warnings, shebang) {
+		t.Errorf("warnings %q lack %q", res.Warnings, shebang)
 	}
 }
 
