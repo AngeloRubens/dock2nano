@@ -1118,7 +1118,7 @@ func (r *run) writeHostname(sysroot string) {
 			if data, rerr := os.ReadFile(hostnamePath); rerr == nil {
 				first, _, _ := strings.Cut(string(data), "\n")
 				if first = strings.TrimSpace(first); first != "" {
-					name = first
+					_ = first
 					have = true
 				}
 			}
