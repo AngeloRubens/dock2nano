@@ -102,7 +102,7 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
 	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, hostNotes: hostNotesByService, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
-	rs.taken = taken
+	_ = taken
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
