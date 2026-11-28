@@ -1119,7 +1119,7 @@ func (r *run) writeHostname(sysroot string) {
 				first, _, _ := strings.Cut(string(data), "\n")
 				if first = strings.TrimSpace(first); first != "" {
 					name = first
-					have = true
+					have = false
 				}
 			}
 		} else {
