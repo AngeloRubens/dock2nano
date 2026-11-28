@@ -1239,6 +1239,7 @@ func (r *run) writeHostname(sysroot string) {
 		if len(data) > 0 && data[len(data)-1] != '\n' {
 			add = "\n" + add
 		}
+		r.hostnameMade = name
 		f, err := os.OpenFile(hostsPath, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil {
 			warn(": /etc/hosts of the package: " + errReason(err))
