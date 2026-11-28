@@ -866,7 +866,7 @@ func isDotnet(obs *observe.Result) bool {
 	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
 		// the pattern is relative to the sysroot, so that the path of the sysroot is never a pattern
 		pat := path.Join(base, "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
-		if m, err := fs.Glob(os.DirFS(obs.Sysroot), pat); err == nil && len(m) > 0 {
+		if m, err := filepath.Glob(filepath.Join(obs.Sysroot, pat)); err == nil && len(m) > 0 {
 			return true
 		}
 	}
@@ -1762,3 +1762,6 @@ func userSource(s *compose.Service) string {
 	}
 	return "image"
 }
+
+var _ = fs.Glob
+var _ = os.DirFS
