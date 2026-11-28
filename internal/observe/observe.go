@@ -1232,7 +1232,6 @@ func (r *run) writeHostname(sysroot string) {
 			}
 		}
 		if err != nil {
-			os.Remove(hostnamePath)
 			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
 			return
 		}
