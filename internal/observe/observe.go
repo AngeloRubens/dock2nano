@@ -1095,7 +1095,7 @@ func sanitizeHostname(s string) string {
 	if len(b) > 63 {
 		b = b[:63]
 	}
-	name := strings.Trim(string(b), "-")
+	name := string(b)
 	if name == "" {
 		return defaultHostname
 	}
