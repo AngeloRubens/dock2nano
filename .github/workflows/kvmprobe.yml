@@ -1,0 +1,18 @@
+name: kvmprobe
+on:
+  push:
+    branches: ['mut/kvmprobe']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "cpu flags vmx/svm lines: $(grep -cE 'vmx|svm' /proc/cpuinfo)"; grep -m1 'model name' /proc/cpuinfo
+          ls -l /dev/kvm; lsmod | grep -i kvm; systemd-detect-virt || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 >/dev/null
+          sudo chmod 666 /dev/kvm
+          printf 'info kvm\ninfo status\nquit\n' | timeout 60 qemu-system-x86_64 -machine q35,accel=kvm -cpu host -display none -S -monitor stdio -nodefaults 2>&1 | tail -8
+          echo "--- same with tcg only, for comparison"
+          printf 'info kvm\nquit\n' | timeout 60 qemu-system-x86_64 -machine q35,accel=tcg -display none -S -monitor stdio -nodefaults 2>&1 | tail -4
