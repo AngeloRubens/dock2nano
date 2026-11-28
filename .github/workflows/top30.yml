@@ -20,13 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: helidon-a, repo: helidon-io/helidon-examples, sha: 1ea90c465d86828922ae0ad04a06bbf8b43ef5d6, dockerfile: examples/quickstarts/helidon-quickstart-se/Dockerfile, context: "examples/quickstarts/helidon-quickstart-se", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/greet", jq: ""}
-          - {name: helidon-b, repo: helidon-io/helidon-examples, sha: 1ea90c465d86828922ae0ad04a06bbf8b43ef5d6, dockerfile: examples/quickstarts/helidon-quickstart-se/Dockerfile, context: "examples/quickstarts/helidon-quickstart-se", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/greet", jq: ""}
-          - {name: petclinic-kt-a, repo: spring-petclinic/spring-petclinic-kotlin, sha: 9823b3aa97988854668e608750db88502775caa7, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: petclinic-kt-b, repo: spring-petclinic/spring-petclinic-kotlin, sha: 9823b3aa97988854668e608750db88502775caa7, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: btcpay-a, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: btcpay-b, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: btcpay-c, repo: btcpayserver/btcpayserver, sha: 06ca9c21682fa87c3124bd2cf9c4e3cc7bee22f2, dockerfile: Dockerfile, context: ".", port: "49392", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: activemq, repo: apache/activemq, sha: 2dae41f0fceb051c684e0b2365410cbf7924d1cf, dockerfile: assembly/src/docker/Dockerfile, context: "assembly/src/docker", port: "8161", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "activemq_dist=https://archive.apache.org/dist/activemq/6.4.0/apache-activemq-6.4.0-bin.tar.gz", ccmd: ""}
+          - {name: activemq-b, repo: apache/activemq, sha: 2dae41f0fceb051c684e0b2365410cbf7924d1cf, dockerfile: assembly/src/docker/Dockerfile, context: "assembly/src/docker", port: "8161", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "activemq_dist=https://archive.apache.org/dist/activemq/6.4.0/apache-activemq-6.4.0-bin.tar.gz", ccmd: ""}
+          - {name: keycloak, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "KEYCLOAK_VERSION=26.8.2", ccmd: "start-dev"}
+          - {name: keycloak-b, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "KEYCLOAK_VERSION=26.8.2", ccmd: "start-dev"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -98,6 +95,8 @@ jobs:
           XENV: ${{ matrix.env }}
           TRIES: ${{ matrix.tries }}
           XPRE: ${{ matrix.pre }}
+          XBARGS: ${{ matrix.bargs }}
+          XCCMD: ${{ matrix.ccmd }}
           XCARGS: ${{ matrix.cargs }}
           XMKDIRS: ${{ matrix.mkdirs }}
           XCOPY: ${{ matrix.copy }}
@@ -133,7 +132,7 @@ jobs:
           # 2. build with docker (timed here; the conversion builds the image again)
           s=$(date +%s)
           if [ -n "${XPRE:-}" ]; then echo "ROW pre-build in $CTX: $XPRE"; (cd "$W/$CTX" && eval "$XPRE") > "$R/prebuild.log" 2>&1; echo "ROW pre-build exit $?"; tail -5 "$R/prebuild.log"; fi
-          if docker build -t "top30-$NAME" -f "$W/$DOCKERFILE" "$W/$CTX" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
+          BA=(); for kv in ${XBARGS:-}; do BA+=(--build-arg "$kv"); done; if docker build "${BA[@]}" -t "top30-$NAME" -f "$W/$DOCKERFILE" "$W/$CTX" > "$R/docker-build.log" 2>&1; then bld=ok; else bld=fail; fi
           echo "ROW docker_build=$bld seconds=$(( $(date +%s) - s ))"
           if [ "$bld" = fail ]; then
             echo "ROW docker_build error lines:"; grep -i "error\|failed\|not found" "$R/docker-build.log" | tail -4 | cut -c1-240
@@ -164,7 +163,17 @@ jobs:
           # 3. convert, with the flags of the usage text: --ops-home, -o, --pull; the rest is the default
           cd "$GITHUB_WORKSPACE"
           CARGS_ARR=(); if [ -n "${XCARGS:-}" ]; then eval "CARGS_ARR=($XCARGS)"; echo "ROW extra arguments of convert: $XCARGS"; fi
-          "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull "${CARGS_ARR[@]}" > "$R/report.txt" 2>&1
+          if [ -n "${XBARGS:-}" ]; then
+            # the user passes the build arguments in a compose file (build.args); the tool reads that file
+            rel=$(realpath --relative-to="$W/$CTX" "$W/$DOCKERFILE")
+            { echo "services:"; echo "  $NAME:"; echo "    build:"; echo "      context: $CTX"; echo "      dockerfile: $rel"; echo "      args:"
+              for kv in $XBARGS; do echo "        ${kv%%=*}: \"${kv#*=}\""; done
+              if [ -n "${XCCMD:-}" ]; then echo "    command: [\"$XCCMD\"]"; fi; } > "$W/d2n-compose.yml"
+            echo "ROW compose file written by the workflow:"; cat "$W/d2n-compose.yml"
+            "$RUNNER_TEMP/d2n" convert -f "$W/d2n-compose.yml" -o "$R/compose" --ops-home "$OPS_HOME" --pull "${CARGS_ARR[@]}" > "$R/report.txt" 2>&1
+          else
+            "$RUNNER_TEMP/d2n" convert --dockerfile "$W/$DOCKERFILE" --context "$W/$CTX" --name "$NAME" -o "$R/compose" --ops-home "$OPS_HOME" --pull "${CARGS_ARR[@]}" > "$R/report.txt" 2>&1
+          fi
           cexit=$?
           cat "$R/report.txt" | cut -c1-300
           echo "ROW convert_exit=$cexit"
