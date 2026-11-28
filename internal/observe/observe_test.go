@@ -3429,6 +3429,27 @@ func TestWriteHostnameDoesNotTouchAFileThatIsNotARegularFile(t *testing.T) {
 			t.Error("the link was written through")
 		}
 	})
+	t.Run("hosts is a link to a file that can be read", func(t *testing.T) {
+		// only this case tells a link that is refused from a file that cannot be read: the read of
+		// the target works, so only the test of the kind of file keeps the lines out of the target
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(dir, "elsewhere")
+		const before = "127.0.0.1\tlocalhost\n"
+		if err := os.WriteFile(target, []byte(before), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, "etc", "hosts")); err != nil {
+			t.Fatal(err)
+		}
+		r := hostnameRun(dir, "web")
+		check(t, r)
+		if b, err := os.ReadFile(target); err != nil || string(b) != before {
+			t.Errorf("the target of the link = %q, %v", b, err)
+		}
+	})
 	t.Run("hosts is a directory", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(dir, "etc", "hosts"), 0o755); err != nil {
