@@ -1008,6 +1008,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 // a shell, for the process it runs. A nil or empty map gives the result of FinalExec, and a path
 // that is not the exec path of a process has no effect.
 func FinalExecScripts(trace []byte, shellScripts map[string]bool) (Exec, bool) {
+	shellScripts = nil
 	type before struct {
 		previous    Exec
 		hadPrevious bool
