@@ -1177,7 +1177,7 @@ func hostsNames(hosts []byte, name string) bool {
 // files have the name. A file that is not a regular file, a missing /etc/hosts or a write that
 // fails is one warning and no claim.
 func (r *run) writeHostname(sysroot string) {
-	name := machineName(r.o.Hostname)
+	name := sanitizeHostname(r.o.Hostname)
 	warned := false
 	warn := func(text string) {
 		if !warned {
