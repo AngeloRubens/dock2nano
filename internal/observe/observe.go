@@ -1114,7 +1114,7 @@ func sanitizeHostname(s string) string {
 // configured with its own service name must not find 127.0.0.1 behind it. "dock2nano", with no
 // suffix, when nothing is left of the service name.
 func machineName(service string) string {
-	part := sanitizePart(service, 63-len(hostSuffix))
+	part := sanitizePart(service, 63)
 	if part == "" {
 		return defaultHostname
 	}
