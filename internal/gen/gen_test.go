@@ -2474,6 +2474,25 @@ func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
 	wantNone(t, mustGen(t, in2), "web", plan.Note, "hosts")
 }
 
+func TestHostnameOfThePackageIsNoted(t *testing.T) {
+	in := newInput(&fake{}, svc("web"))
+	in.Services["web"].Observed.HostnameMade = "web"
+	p := mustGen(t, in)
+	want1(t, p, "web", plan.Note, "hostname", "/etc/hostname web and an /etc/hosts that maps web to 127.0.0.1")
+	want1(t, p, "web", plan.Note, "hostname", "Dns.GetHostEntry")
+	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "hostname")
+}
+
+func TestDotnetProgramIsNoted(t *testing.T) {
+	for _, program := range []string{"/usr/bin/dotnet", "/usr/share/dotnet/dotnet", "/usr/lib/dotnet/dotnet"} {
+		in := newInput(&fake{}, svc("web"))
+		in.Services["web"].Observed.Program = program
+		in.Services["web"].Observed.Argv = []string{program, "App.dll"}
+		want1(t, mustGen(t, in), "web", plan.Note, "dotnet", "signal 11")
+	}
+	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "dotnet")
+}
+
 func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
 	in := newInput(&fake{}, svc("db"))
 	in.Services["db"].Observed.MachineFiles = []string{"/proc/cpuinfo", "/sys/devices/system/cpu/possible"}

@@ -841,9 +841,30 @@ func variableNote(u string) (string, bool) {
 	return what, ok && what != ""
 }
 
+// isDotnet says whether the program of the observation is the .NET host (dotnet), or a file under
+// the directories where the images of Microsoft put the runtime. The observation does not list the
+// files it carries, so the program is what is read.
+func isDotnet(obs *observe.Result) bool {
+	if path.Base(obs.Program) == "dotnet" {
+		return true
+	}
+	for _, dir := range []string{"/usr/share/dotnet/", "/usr/lib/dotnet/"} {
+		if strings.HasPrefix(obs.Program, dir) {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
+	}
+	if obs.HostnameMade != "" {
+		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the package gets /etc/hostname %s and an /etc/hosts that maps %s to 127.0.0.1: nanos otherwise names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails without it. The name is not the one of the container", obs.HostnameMade, obs.HostnameMade))
+	}
+	if isDotnet(obs) {
+		g.add(s.Name, plan.Note, "dotnet", "the program is a .NET one: in the measured rows a .NET program on nanos in CI stopped in 4 of 5 trials with signal 11 (a page fault in the CLR), also with DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0 and with kvm (the ASP.NET sample answered once with them, in the rows with the library copied). A library that the CLR loads only when an exception is thrown (Microsoft.AspNetCore.Diagnostics.Abstractions.dll) is not carried unless the observation reaches that path. The start is not reliable: review the output")
 	}
 	if obs.TmpMade {
 		g.add(s.Name, plan.Note, "tmp", "the package carries an empty /tmp: nanos has none, and a program that makes a temporary file there stops at the first try (PHP: OPcache makes its lock file there, and php -S, php-fpm and apache with mod_php end with \"Unable to create lock file: No such file or directory\" without it)")

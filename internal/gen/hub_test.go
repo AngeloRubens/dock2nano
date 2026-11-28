@@ -456,6 +456,7 @@ func hubWholeObs() *observe.Result {
 		TmpMade:            true,
 		Vanished:           2,
 		LocalNames:         true,
+		HostnameMade:       "web",
 		Warnings:           []string{"kept"},
 	}
 }
@@ -469,7 +470,7 @@ func TestApplyHubWholeTakesTheProgramAndTheArgumentsOfTheHub(t *testing.T) {
 	if !reflect.DeepEqual(obs.Env, []string{"POSTGRES_PASSWORD=secret", "LANG=en_US.UTF-8"}) {
 		t.Errorf("env: %v", obs.Env)
 	}
-	if obs.Children != 0 || obs.ChildCalls != nil || obs.StoppedEarly || obs.ConfigurationFiles != nil || obs.CreatedAtRuntime != nil || obs.MachineFiles != nil || obs.TmpMade || obs.Vanished != 0 || obs.LocalNames {
+	if obs.Children != 0 || obs.ChildCalls != nil || obs.StoppedEarly || obs.ConfigurationFiles != nil || obs.CreatedAtRuntime != nil || obs.MachineFiles != nil || obs.TmpMade || obs.Vanished != 0 || obs.LocalNames || obs.HostnameMade != "" {
 		t.Errorf("what was seen about the image was not cleared: %+v", obs)
 	}
 	if !reflect.DeepEqual(obs.Warnings, []string{"kept"}) {

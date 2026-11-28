@@ -819,6 +819,8 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.Exercise = exerciseFor(s.Name, o.exercise, p)
 	oo.ExerciseHost = exerciseHostFor(s.Name, o.exerciseHosts)
 	oo.ServiceName = s.Name
+	// the compose parser does not model hostname: the name of the service is the name of the machine
+	oo.Hostname = s.Name
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
 	}

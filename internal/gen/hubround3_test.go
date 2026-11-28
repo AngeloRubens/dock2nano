@@ -287,6 +287,7 @@ func TestEveryPrefixOfAFileNoteIsDropped(t *testing.T) {
 		observe.NoteBind:              "the bind /data is mounted read-only: it is big; the program cannot write there as it would in a real run",
 		observe.NoteMachineFiles:      "could not write the machine files for the package: disk full",
 		observe.NoteHosts:             "could not make /etc/hosts for the package: disk full",
+		observe.NoteHostname:          "could not make /etc/hostname for the package: disk full",
 		observe.NoteProcCmdline:       `the command line in /proc ["a"] differs from the one execve was given ["b"]: the one execve was given is used`,
 		observe.NoteStoppedBeforeProc: "the program had stopped before /proc could be read: the command line, environment and directory are those of the image",
 		observe.NoteUserGroup:         "could not read the user and group of the program from /proc: they are not known",

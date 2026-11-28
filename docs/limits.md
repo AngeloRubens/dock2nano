@@ -234,3 +234,19 @@ A row built for this rule, ci/nearest/Dockerfile on the check branches: python:3
 A first version of the row, without the "& wait", answered 200 also without the rule (runs 45581649928 and 45581655781): the shell of busybox runs the last command of -c in its own process, so no shell was left. Only the second form is a case of the rule. One image and one shell (busybox ash) were measured; a java server, or bash, were not.
 - A waiter as the last command (check/top30-nearest-after, run 45596587190, dock2nano 77544d7, ci/nearest-tail: `python3 -m http.server 8000 --bind 0.0.0.0 & tail -f /dev/null`): as the realistic trace says, the program is the tail (busybox, 2 arguments), the report has the item "program is a waiter" naming python3 -m http.server, and 8000 answers 000 x24. The same run, with the first row (the loop, the server and a wait): python3.12, 200 on the first try, at the head 77544d7 of the code (the rule with the order of the forks, the waiters and copiers, the beside item).
 - The same two rows at the head of the code (check/top30-nearest-after, run 45621460987, merge 29e5218 of fix/top30-nearest at 469d83a): loopsrv python3.12 and 200 on 8000; tailsrv the tail (busybox, 2 arguments) and 000 x24, as above.
+
+## The name of the machine
+
+Cause: nanos reads etc/hostname from the package filesystem at boot. Without it the guest is named after its address (192-168-33-209) and nothing resolves that name. A program that looks up its own host name fails: WildFly with UnknownHostException in InetAddress.getLocalHost() (wildfly-bm rows, run 46016545089, 2 of 2) and the ASP.NET Razor sample with SocketException (00000001, 11) from Dns.GetHostEntry (aspnet-dll rows, same run, 2 of 3; the third stopped with signal 11).
+
+Kind: gap of the tool, fixed: the package gets /etc/hostname with the name of the service (a name already in the sysroot is kept) and /etc/hosts gets a line that maps that name to 127.0.0.1. The report has the item "hostname". The hostname: key of a compose file is not read; the name of the service is used.
+Measured (run 46056953308): with /etc/hostname = web and the line 127.0.0.1 web in /etc/hosts, wildfly-hn-a and wildfly-hn-b answer 200 (WFLYSRV0025 in the log, no UnknownHostException), and aspnet-hn-a answers 200.
+Not shown: that the output of the tool itself (and not a package made by hand in those rows) gives the same result; the effect on other programs; an aspnetapp row with the name but without the copied library was not tried.
+
+## A .NET program stops with signal 11
+
+Measured (run 46056953308): aspnet-hn-b, aspnet-hn-c and the control without the name stopped with signal 11 (a page fault in the CLR, also seen on btcpay) in every attempt, with and without the name; aspnet-hn-a answered 200. Counted over the trials of these rows, a .NET program stopped in 4 of 5, also with DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0 and kvm (the ASP.NET sample answered once with them, in the rows with the library copied: aspnet-hn-a).
+A library that the CLR loads only when an exception is thrown (Microsoft.AspNetCore.Diagnostics.Abstractions.dll) is not carried unless the observation reaches that path.
+
+Kind: open. The report has the item "dotnet" for a program that is the .NET host (dotnet, or a file under /usr/share/dotnet or /usr/lib/dotnet): the start is not reliable and the output is to be reviewed.
+Not shown: the cause of signal 11; whether the settings above change the rate (they were set in every trial); aspnetapp with the name but without the copied library was not tried.
