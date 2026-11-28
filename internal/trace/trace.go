@@ -998,6 +998,16 @@ func IsInit(p string) bool { return initName.MatchString(path.Base(p)) }
 // /proc/<pid>/cmdline and /proc/<pid>/environ by the caller, except that a program may rewrite its
 // command line (nginx does): Argv here is what execve was called with. The environment is not kept.
 func FinalExec(trace []byte) (Exec, bool) {
+	return FinalExecScripts(trace, nil)
+}
+
+// FinalExecScripts is FinalExec for a caller that knows that some of the files executed are shell
+// scripts started through their shebang: such a script is the exec path of its process, so the
+// base name of the path does not say that the process is a shell. shellScripts holds those exec
+// paths (exactly as execve was given them); a process whose exec path is in it is passed over like
+// a shell, for the process it runs. A nil or empty map gives the result of FinalExec, and a path
+// that is not the exec path of a process has no effect.
+func FinalExecScripts(trace []byte, shellScripts map[string]bool) (Exec, bool) {
 	type before struct {
 		previous    Exec
 		hadPrevious bool
@@ -1201,7 +1211,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 			e := last[pid]
 			name := path.Base(e.Path)
 			interp, _ := interpreterOf(e.Path, e.Argv)
-			c.isShell = shells[interp]
+			c.isShell = shells[interp] || shellScripts[e.Path]
 			c.supervisor = Supervisor(e.Path, e.Argv) != ""
 			c.notProgram = c.isShell || waiters[name] || copiers[name] || name == "busybox" || name == "ps"
 			for _, up := range c.chain {
@@ -1262,7 +1272,8 @@ func FinalExec(trace []byte) (Exec, bool) {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
 			isInit := IsInit(last[process].Path)
-			if !launcher && !isInit && !shells[path.Base(last[process].Path)] {
+			isShell := shells[path.Base(last[process].Path)] || shellScripts[last[process].Path]
+			if !launcher && !isInit && !isShell {
 				break
 			}
 			var children []string
@@ -1271,7 +1282,7 @@ func FinalExec(trace []byte) (Exec, bool) {
 					children = append(children, other)
 				}
 			}
-			if len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {
+			if len(children) > 1 && isShell && !launcher && !isInit {
 				// Several things run under a shell: a server and what was started beside it (a loop
 				// that sleeps, a second server). The program is the one nearest the shell.
 				if program, others, near := nearestProgram(process); program != "" {

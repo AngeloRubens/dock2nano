@@ -1403,3 +1403,45 @@ func TestNearestProgramKnowsTheOtherShells(t *testing.T) {
 		})
 	}
 }
+
+const scriptShellTrace = `9     execve("/opt/jboss/wildfly/bin/standalone.sh", ["/opt/jboss/wildfly/bin/standalone.sh", "-b", "0.0.0.0"], 0x55e04c68b400 /* 16 vars */) = 0
+9     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 10
+10    execve("/usr/bin/dirname", ["dirname", "/opt/jboss/wildfly/bin/standalone.sh"], 0x55e04c68b400 /* 16 vars */) = 0
+10    +++ exited with 0 +++
+9     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 92
+92    execve("/opt/java/openjdk/bin/java", ["/opt/java/openjdk/bin/java", "-Xms64m", "-jar", "/opt/jboss/wildfly/jboss-modules.jar"], 0x56467df1f050 /* 19 vars */) = 0
+`
+
+// a script started through its shebang has the script as exec path: only the caller knows that it
+// is a shell script, and FinalExec alone stays on it
+func TestFinalExecStaysOnAShellScriptItDoesNotKnow(t *testing.T) {
+	got, found := FinalExec([]byte(scriptShellTrace))
+	if !found || got.Pid != "9" || got.Path != "/opt/jboss/wildfly/bin/standalone.sh" {
+		t.Errorf("FinalExec = %+v, %v; want the script, process 9", got, found)
+	}
+}
+
+func TestFinalExecScriptsPassesOverTheScript(t *testing.T) {
+	got, found := FinalExecScripts([]byte(scriptShellTrace), map[string]bool{"/opt/jboss/wildfly/bin/standalone.sh": true})
+	wantArgv := []string{"/opt/java/openjdk/bin/java", "-Xms64m", "-jar", "/opt/jboss/wildfly/jboss-modules.jar"}
+	if !found || got.Pid != "92" || got.Path != "/opt/java/openjdk/bin/java" || !reflect.DeepEqual(got.Argv, wantArgv) {
+		t.Errorf("FinalExecScripts = %+v, %v; want java, process 92", got, found)
+	}
+}
+
+func TestFinalExecScriptsLeavesOutTheLoopBesideTheProgram(t *testing.T) {
+	trace := scriptShellTrace + `9     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 93
+93    execve("/usr/bin/sleep", ["sleep", "60"], 0x56467df1f050 /* 19 vars */) = 0
+`
+	got, found := FinalExecScripts([]byte(trace), map[string]bool{"/opt/jboss/wildfly/bin/standalone.sh": true})
+	if !found || got.Pid != "92" || got.Path != "/opt/java/openjdk/bin/java" {
+		t.Errorf("FinalExecScripts = %+v, %v; want java, process 92", got, found)
+	}
+}
+
+func TestFinalExecScriptsIgnoresAPathThatIsNotAnExecPath(t *testing.T) {
+	got, found := FinalExecScripts([]byte(scriptShellTrace), map[string]bool{"/opt/jboss/wildfly/bin/other.sh": true, "/opt/java/openjdk/bin/java": false})
+	if !found || got.Pid != "9" || got.Path != "/opt/jboss/wildfly/bin/standalone.sh" {
+		t.Errorf("FinalExecScripts = %+v, %v; want the script, process 9", got, found)
+	}
+}
