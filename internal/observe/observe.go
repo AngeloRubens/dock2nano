@@ -157,9 +157,10 @@ type Options struct {
 	// key of a compose file is not read. An /etc/hostname that the sysroot has as a regular file is
 	// replaced.
 	Hostname string
-	// TakenNames are the names that the services of the project use (service name, package name),
-	// lower case, of every service of the file, converted or not. The name of the machine is none of them: when "<service>-host" is one,
-	// "-host2", "-host3" and so on are tried. Only these names are checked.
+	// TakenNames are the names of every service of the file, converted or not (the service name
+	// and the package name), lower case. The name of the machine is none of them: when
+	// "<package name>-host" is one, "-host2", "-host3" and so on are tried. Only these names are
+	// checked.
 	TakenNames []string
 
 	// ServiceName is the name of the service in the compose file. It is used only in the text of a
@@ -1083,10 +1084,10 @@ func (r *run) writeLocalNames(sysroot string) {
 // defaultHostname is the name of the machine when the one asked for has nothing usable in it.
 const defaultHostname = "dock2nano"
 
-// hostSuffix ends the name of the machine. The name is checked against TakenNames, the names that
-// the converted services have (service name, package name, network alias), and a number is added
-// when one of them is the same. A name that is not in the compose file, and is used by something
-// else on the network of the program, is not checked.
+// hostSuffix ends the name of the machine. The name is checked against TakenNames, the names of
+// every service of the file (service name and package name), and a number is added when one of
+// them is the same. A name that is not in the compose file, and is used by something else on the
+// network of the program, is not checked.
 const hostSuffix = "-host"
 
 // sanitizePart makes a part of a name of a machine of s: lower case, a character that is not a
@@ -1229,6 +1230,7 @@ func (r *run) writeHostname(sysroot string) {
 		return
 	}
 
+	appended := false
 	if !hostsNames(data, name) {
 		add := "127.0.0.1\t" + name + "\n"
 		if len(data) > 0 && data[len(data)-1] != '\n' {
@@ -1245,12 +1247,42 @@ func (r *run) writeHostname(sysroot string) {
 			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be written: " + errReason(err))
 			return
 		}
+		appended = true
 	}
-	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
-		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + " (the /etc/hosts of the package only gained a loopback line)")
+	if err := writeFileInPlace(hostnamePath, []byte(name+"\n")); err != nil {
+		left := " (/etc/hosts is unchanged)"
+		if appended {
+			left = " (the /etc/hosts of the package only gained a loopback line)"
+		}
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + left)
 		return
 	}
 	r.hostnameMade = name
+}
+
+// writeFileInPlace writes data to path through a temporary file of the same directory that is
+// renamed over path, so that a failed write cannot leave path empty or half written. The
+// temporary file is removed on any failure.
+func writeFileInPlace(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".hostname-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home

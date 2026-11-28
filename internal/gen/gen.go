@@ -3,9 +3,10 @@
 // service, the compose.yaml that "ops compose up" reads, and a report.
 //
 // The rules are generic. Nothing is decided by the name of a program or of an
-// image; the one place that looks at the program is a note of the report
-// (dotnet), which only adds a line and changes nothing in the package. Whatever does not convert is written to the report with its key and
-// the reason, and is never dropped in silence. What comes out is what was
+// image; the one place that looks at the name of the program to add something
+// is the dotnet note (hub rows are chosen for a program, and that is another
+// matter). Whatever does not convert is written to the report with its key
+// and the reason, and is never dropped in silence. What comes out is what was
 // observed, to be reviewed; Render says so on its first line.
 package gen
 
@@ -859,14 +860,23 @@ func isDotnet(obs *observe.Result) bool {
 	if obs.Sysroot == "" {
 		return false
 	}
+	// the root does not follow a link out of the sysroot (an absolute link would lead to the
+	// files of this machine)
+	r, err := os.OpenRoot(obs.Sysroot)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
 	// the runtime library is beside the program, or in a shared framework directory of the package
-	if _, err := os.Lstat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
-		return true
+	if rel := path.Join(strings.TrimPrefix(path.Dir(obs.Program), "/"), "libcoreclr.so"); filepath.IsLocal(filepath.FromSlash(rel)) {
+		if _, err := r.Lstat(filepath.FromSlash(rel)); err == nil {
+			return true
+		}
 	}
 	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
 		// the pattern is relative to the sysroot, so that the path of the sysroot is never a pattern
 		pat := path.Join(base, "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
-		if m, err := fs.Glob(os.DirFS(obs.Sysroot), pat); err == nil && len(m) > 0 {
+		if m, err := fs.Glob(r.FS(), pat); err == nil && len(m) > 0 {
 			return true
 		}
 	}

@@ -2492,7 +2492,7 @@ func TestHostnameOfThePackageIsNoted(t *testing.T) {
 	}
 	// the package name is not the service name: the note names the package name
 	in = newInput(&fake{}, svc("web_app"))
-	in.Services["web_app"].Observed.HostnameMade = "web_app-host"
+	in.Services["web_app"].Observed.HostnameMade = "web-app-host"
 	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "peers reach it as web-app.service (and web-app with an ops")
 	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "The name of the service (web_app) and its package name (web-app) are not mapped there")
 	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "the DNS of ops answers the package name, not the service name web_app")
@@ -2563,6 +2563,38 @@ func TestIsDotnetSeesTheRuntimeLibraryOfThePackage(t *testing.T) {
 	}
 	if isDotnet(&observe.Result{Program: "/app/Web"}) {
 		t.Error("isDotnet is true with no sysroot")
+	}
+}
+
+func TestIsDotnetDoesNotFollowALinkOutOfTheSysroot(t *testing.T) {
+	// the runtime is on the machine that builds, outside the sysroot: an absolute link must not lead there
+	outside := t.TempDir()
+	lib := filepath.Join(outside, "shared", "Microsoft.NETCore.App", "8.0.0", "libcoreclr.so")
+	if err := os.MkdirAll(filepath.Dir(lib), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lib, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "libcoreclr.so"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "usr", "share"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "usr", "share", "dotnet")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "app")); err != nil {
+		t.Fatal(err)
+	}
+	if isDotnet(&observe.Result{Program: "/srv/Web", Sysroot: root}) {
+		t.Error("isDotnet follows usr/share/dotnet out of the sysroot")
+	}
+	// the directory of the program is the link
+	if isDotnet(&observe.Result{Program: "/app/Web", Sysroot: root}) {
+		t.Error("isDotnet follows the directory of the program out of the sysroot")
 	}
 }
 

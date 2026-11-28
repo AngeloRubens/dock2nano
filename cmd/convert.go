@@ -763,8 +763,7 @@ func dependencyOrder(p *compose.Project) ([]*compose.Service, error) {
 }
 
 // takenNames lists, lower-cased and once each, the names the services answer to: the service name
-// (which is also its network alias) and its package name. It is called with every service of the
-// project, converted or not.
+// and its package name. It is called with every service of the project, converted or not.
 func takenNames(all []string, pkgOf map[string]string) []string {
 	var out []string
 	for _, name := range all {

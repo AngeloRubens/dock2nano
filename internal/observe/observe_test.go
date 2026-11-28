@@ -3260,6 +3260,26 @@ func readEtc(t *testing.T, dir, name string) string {
 	return string(b)
 }
 
+// skipUnlessDenied skips the test when path can be written although the test made it
+// read-only: a directory gets a sentinel file, any other path is opened for writing. Root,
+// CAP_DAC_OVERRIDE and filesystems that ignore the modes get there.
+func skipUnlessDenied(t *testing.T, path string) {
+	t.Helper()
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		sentinel := filepath.Join(path, ".probe")
+		if f, err := os.Create(sentinel); err == nil {
+			f.Close()
+			os.Remove(sentinel)
+			t.Skip("the mode of the directory is not enforced here")
+		}
+		return
+	}
+	if f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		f.Close()
+		t.Skip("the mode of the file is not enforced here")
+	}
+}
+
 func TestWriteHostnameMakesBothFilesWhenTheSysrootHasNone(t *testing.T) {
 	r, dir := hostnameScene(t, "web", nil)
 	if got := readEtc(t, dir, "hostname"); got != "web-host\n" {
@@ -3273,6 +3293,17 @@ func TestWriteHostnameMakesBothFilesWhenTheSysrootHasNone(t *testing.T) {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
 	}
 	equal(t, "warnings", r.warn, []string(nil))
+	// the temporary file of the write of /etc/hostname does not stay
+	entries, err := os.ReadDir(filepath.Join(dir, "etc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	equal(t, "files of /etc", names, []string{"hostname", "hosts"})
 }
 
 func TestWriteHostnameNeverMapsTheServiceNameToLoopback(t *testing.T) {
@@ -3464,9 +3495,6 @@ func TestWriteHostnameWritesNothingWhenTheHostsFileIsNotUsable(t *testing.T) {
 }
 
 func TestWriteHostnameClaimsNothingWhenTheAppendFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root writes a read-only file")
-	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -3474,6 +3502,7 @@ func TestWriteHostnameClaimsNothingWhenTheAppendFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "etc", "hosts"), []byte("10.0.0.1 db\n"), 0o444); err != nil {
 		t.Fatal(err)
 	}
+	skipUnlessDenied(t, filepath.Join(dir, "etc", "hosts"))
 	r := hostnameRun(dir, "web")
 	if r.hostnameMade != "" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
@@ -3490,9 +3519,6 @@ func TestWriteHostnameClaimsNothingWhenTheAppendFails(t *testing.T) {
 }
 
 func TestWriteHostnameClaimsNothingWhenTheHostnameWriteFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root writes into a directory that is not writable")
-	}
 	// /etc cannot get a new file, while /etc/hosts can be appended to: the append works and the
 	// write of /etc/hostname fails
 	dir := t.TempDir()
@@ -3507,6 +3533,7 @@ func TestWriteHostnameClaimsNothingWhenTheHostnameWriteFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(etc, 0o755) })
+	skipUnlessDenied(t, etc)
 	r := hostnameRun(dir, "web")
 	if r.hostnameMade != "" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
@@ -3519,6 +3546,60 @@ func TestWriteHostnameClaimsNothingWhenTheHostnameWriteFails(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(etc, "hostname")); err == nil {
 		t.Error("/etc/hostname exists")
+	}
+}
+
+func TestWriteHostnameSaysTheHostsFileIsUnchangedWhenNothingWasAppended(t *testing.T) {
+	// the hosts file has the name already, so nothing is appended; the directory cannot get the
+	// temporary file, so the write of /etc/hostname fails
+	dir := t.TempDir()
+	etc := filepath.Join(dir, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hosts := "127.0.0.1\tweb-host\n"
+	if err := os.WriteFile(filepath.Join(etc, "hosts"), []byte(hosts), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(etc, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(etc, 0o755) })
+	skipUnlessDenied(t, etc)
+	r := hostnameRun(dir, "web")
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if len(r.warn) != 1 || !strings.Contains(r.warn[0], "/etc/hosts is unchanged") || strings.Contains(r.warn[0], "gained") {
+		t.Errorf("warnings = %q", r.warn)
+	}
+	if got := readEtc(t, dir, "hosts"); got != hosts {
+		t.Errorf("/etc/hosts = %q", got)
+	}
+}
+
+func TestWriteHostnameKeepsTheOldHostnameWhenTheWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	etc := filepath.Join(dir, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]string{"hosts": "127.0.0.1\tweb-host\n", "hostname": "mine\n"} {
+		if err := os.WriteFile(filepath.Join(etc, name), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(etc, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(etc, 0o755) })
+	skipUnlessDenied(t, etc)
+	r := hostnameRun(dir, "web")
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if got := readEtc(t, dir, "hostname"); got != "mine\n" {
+		t.Errorf("/etc/hostname = %q", got)
 	}
 }
 
