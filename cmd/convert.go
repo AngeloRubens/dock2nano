@@ -852,7 +852,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.ServiceName = s.Name
 	// the compose parser does not model hostname: the machine is named after the package name of the
 	// service, which is unique and short (observe adds "-host"); the service name when there is none
-	oo.Hostname = rs.pkgOf[s.Name]
+	oo.Hostname = s.Name
 	if oo.Hostname == "" {
 		oo.Hostname = s.Name
 	}
