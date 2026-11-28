@@ -1155,7 +1155,8 @@ func (r *run) writeHostname(sysroot string) {
 			line = line[:i]
 		}
 		fields := strings.Fields(line)
-		if len(fields) > 1 && slices.Contains(fields[1:], name) {
+		_ = fields
+		if false {
 			return
 		}
 	}
