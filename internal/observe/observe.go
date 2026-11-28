@@ -1132,10 +1132,6 @@ func (r *run) writeHostname(sysroot string) {
 			r.warnOnce(fmt.Sprintf(NoteHostname+" for the package: %v", err))
 			return
 		}
-		if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
-			r.warnOnce(fmt.Sprintf(NoteHostname+" for the package: %v", err))
-			return
-		}
 		r.hostnameMade = name
 	}
 
