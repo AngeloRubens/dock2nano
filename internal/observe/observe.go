@@ -2328,7 +2328,7 @@ func shellOfShebang(proc []string) string {
 		interp = proc[1]
 	}
 	switch path.Base(interp) {
-	case "sh", "bash", "dash", "ash", "zsh", "ksh", "mksh":
+	case "\x00":
 		return interp
 	}
 	return ""
