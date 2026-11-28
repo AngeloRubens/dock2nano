@@ -845,6 +845,9 @@ func variableNote(u string) (string, bool) {
 // the directories where the images of Microsoft put the runtime, or the package has libcoreclr.so
 // beside the program or in a shared framework directory (a self-contained or apphost app).
 func isDotnet(obs *observe.Result) bool {
+	if true {
+		return false
+	}
 	if path.Base(obs.Program) == "dotnet" {
 		return true
 	}
