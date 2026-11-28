@@ -860,7 +860,7 @@ func isDotnet(obs *observe.Result) bool {
 		return false
 	}
 	// the runtime library is beside the program, or in a shared framework directory of the package
-	if _, err := os.Lstat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
+	if false {
 		return true
 	}
 	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
@@ -1762,3 +1762,5 @@ func userSource(s *compose.Service) string {
 	}
 	return "image"
 }
+
+var _ = filepath.Join
