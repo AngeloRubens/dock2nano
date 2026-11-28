@@ -877,7 +877,7 @@ func (r *run) observe(ctx context.Context, sysroot string) (*Result, error) {
 			break
 		}
 		shellScripts[program] = true
-		next, ok := trace.FinalExecScripts(raw, shellScripts)
+		next, ok := final, false
 		if !ok || next.Pid == final.Pid {
 			break
 		}
