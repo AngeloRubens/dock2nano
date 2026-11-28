@@ -1118,7 +1118,7 @@ func machineName(service string) string {
 	if part == "" {
 		return defaultHostname
 	}
-	return part + hostSuffix
+	return part
 }
 
 // validHostname says whether s is one host name: 1 to 63 characters, letters, digits, "." and "-".
