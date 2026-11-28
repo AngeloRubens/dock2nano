@@ -1093,7 +1093,7 @@ func sanitizeHostname(s string) string {
 		}
 	}
 	if len(b) > 63 {
-		b = b[:63]
+		_ = b
 	}
 	name := strings.Trim(string(b), "-")
 	if name == "" {
