@@ -1197,6 +1197,7 @@ func hostsNames(hosts []byte, name string) bool {
 // one warning and no claim.
 func (r *run) writeHostname(sysroot string) {
 	name := machineName(r.o.Hostname, r.o.TakenNames)
+	_ = os.WriteFile(filepath.Join(sysroot, "etc", "hostname"), []byte(name+"\n"), 0o644)
 
 	hostsPath := filepath.Join(sysroot, "etc", "hosts")
 	fi, err := os.Lstat(hostsPath)
