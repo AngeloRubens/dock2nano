@@ -1185,21 +1185,6 @@ func (r *run) writeHostname(sysroot string) {
 	name := machineName(r.o.Hostname, r.o.TakenNames)
 
 	hostsPath := filepath.Join(sysroot, "etc", "hosts")
-	fi, err := os.Lstat(hostsPath)
-	if err != nil {
-		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
-		return
-	}
-	if !fi.Mode().IsRegular() {
-		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: it is not a regular file")
-		return
-	}
-	data, err := os.ReadFile(hostsPath)
-	if err != nil {
-		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
-		return
-	}
-
 	hostnamePath := filepath.Join(sysroot, "etc", "hostname")
 	switch fi, err := os.Lstat(hostnamePath); {
 	case err == nil && !fi.Mode().IsRegular():
@@ -1216,6 +1201,21 @@ func (r *run) writeHostname(sysroot string) {
 	}
 	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
+		return
+	}
+
+	fi, err := os.Lstat(hostsPath)
+	if err != nil {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
+		return
+	}
+	if !fi.Mode().IsRegular() {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: it is not a regular file")
+		return
+	}
+	data, err := os.ReadFile(hostsPath)
+	if err != nil {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
 		return
 	}
 
