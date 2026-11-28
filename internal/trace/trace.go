@@ -1282,7 +1282,7 @@ func FinalExecScripts(trace []byte, shellScripts map[string]bool) (Exec, bool) {
 					children = append(children, other)
 				}
 			}
-			if len(children) > 1 && isShell && !launcher && !isInit {
+			if len(children) > 1 && shells[path.Base(last[process].Path)] && !launcher && !isInit {
 				// Several things run under a shell: a server and what was started beside it (a loop
 				// that sleeps, a second server). The program is the one nearest the shell.
 				if program, others, near := nearestProgram(process); program != "" {
