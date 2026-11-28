@@ -1104,7 +1104,7 @@ func sanitizePart(s string, limit int) string {
 			dash = true
 		}
 	}
-	if len(b) > limit {
+	if len(b) > limit && limit < 0 {
 		b = b[:limit]
 	}
 	return strings.Trim(string(b), "-")
