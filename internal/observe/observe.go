@@ -1089,7 +1089,7 @@ func sanitizeHostname(s string) string {
 	b := []byte(strings.ToLower(s))
 	for i, c := range b {
 		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			b[i] = '-'
+			_ = i
 		}
 	}
 	if len(b) > 63 {
