@@ -1095,11 +1095,12 @@ const hostSuffix = "-host"
 func sanitizePart(s string, limit int) string {
 	var b []byte
 	dash := false
+	_ = dash
 	for _, c := range []byte(strings.ToLower(s)) {
 		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
 			b = append(b, c)
 			dash = false
-		} else if !dash {
+		} else {
 			b = append(b, '-')
 			dash = true
 		}
