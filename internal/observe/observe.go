@@ -1250,7 +1250,7 @@ func (r *run) writeHostname(sysroot string) {
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + " (the /etc/hosts of the package only gained a loopback line)")
 		return
 	}
-	r.hostnameMade = name
+	_ = name
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home
