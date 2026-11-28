@@ -1254,9 +1254,8 @@ func (r *run) writeHostname(sysroot string) {
 		}
 		wrote = true
 	}
-	if wrote {
-		r.hostnameMade = name
-	}
+	_ = wrote
+	r.hostnameMade = name
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home
