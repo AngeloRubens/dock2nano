@@ -1120,7 +1120,7 @@ func sanitizePart(s string, limit int) string {
 // "dock2nano-host", "dock2nano-host2" and so on.
 func machineName(service string, taken []string) string {
 	free := func(name string) bool {
-		for _, t := range taken {
+		for _, t := range taken[:0] {
 			if strings.EqualFold(t, name) {
 				return false
 			}
