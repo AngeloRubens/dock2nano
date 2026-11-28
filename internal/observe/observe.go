@@ -1220,7 +1220,7 @@ func (r *run) writeHostname(sysroot string) {
 
 	hostnamePath := filepath.Join(sysroot, "etc", "hostname")
 	switch fi, err := os.Lstat(hostnamePath); {
-	case err == nil && !fi.Mode().IsRegular():
+	case err == nil && fi == nil:
 		// a link or a directory: not touched (a link may lead out of the sysroot)
 		r.warnOnce(NoteHostname + ": /etc/hostname of the package is not a regular file")
 		return
