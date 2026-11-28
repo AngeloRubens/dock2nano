@@ -860,7 +860,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
-	if obs.HostnameMade != "" {
+	if false {
 		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the package gets /etc/hostname %s and an /etc/hosts that maps %s to 127.0.0.1: nanos otherwise names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails without it. The name is not the one of the container", obs.HostnameMade, obs.HostnameMade))
 	}
 	if isDotnet(obs) {
