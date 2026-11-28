@@ -151,11 +151,15 @@ type Options struct {
 
 	// Hostname is the name of the service. The machine is named after it, with "-host" added
 	// (lower-cased and reduced to letters, digits and "-", at most 63 characters in all; "dock2nano"
-	// when nothing is left): that name is in /etc/hostname and on 127.0.0.1 and ::1 in /etc/hosts,
-	// and the service name itself is not, as peers resolve it to the address of the machine. The
-	// hostname: key of a compose file is not read. An /etc/hostname that the sysroot already has,
-	// when it is one valid host name, is kept, and its name is the one that /etc/hosts gets.
+	// when nothing is left): that name is in /etc/hostname and on 127.0.0.1 in /etc/hosts, and the
+	// service name itself is not, as peers resolve it to the address of the machine. The hostname:
+	// key of a compose file is not read. An /etc/hostname that the sysroot has as a regular file is
+	// replaced.
 	Hostname string
+	// TakenNames are the names that the converted services use (service name, package name, network
+	// alias), lower case. The name of the machine is none of them: when "<service>-host" is one,
+	// "-host2", "-host3" and so on are tried. Only these names are checked.
+	TakenNames []string
 
 	// ServiceName is the name of the service in the compose file. It is used only in the text of a
 	// warning that names --exercise-host; "SVC" is written when it is empty.
@@ -180,10 +184,9 @@ type Result struct {
 	// LocalNames says that the package was given an /etc/hosts that names localhost: the one of the
 	// container is not carried.
 	LocalNames bool
-	// HostnameMade is the name of the machine when the tool wrote something for it (the file
-	// /etc/hostname, or a line in /etc/hosts) and, at the end, /etc/hostname has the name and
-	// /etc/hosts names it on 127.0.0.1. It is empty when both already had the name, and when a
-	// file was not a regular file or could not be written (a warning says it).
+	// HostnameMade is the name of the machine when /etc/hostname of the package has it and
+	// /etc/hosts names it on 127.0.0.1. It is empty when a file was not a regular file, could not
+	// be read or could not be written (a warning says it).
 	HostnameMade string
 	// TmpMade says that the package was given an empty /tmp: nanos has none.
 	TmpMade bool
@@ -324,7 +327,7 @@ type run struct {
 	cleanup []error
 	// localNames: the package got an /etc/hosts of its own.
 	localNames bool
-	// hostnameMade: the name that was written into /etc/hostname or /etc/hosts of the package.
+	// hostnameMade: the name that /etc/hostname of the package has and /etc/hosts names on 127.0.0.1.
 	hostnameMade string
 	once         map[string]bool
 
@@ -1079,7 +1082,10 @@ func (r *run) writeLocalNames(sysroot string) {
 // defaultHostname is the name of the machine when the one asked for has nothing usable in it.
 const defaultHostname = "dock2nano"
 
-// hostSuffix ends the name of the machine, so that it is a name that no peer uses for the service.
+// hostSuffix ends the name of the machine. The name is checked against TakenNames, the names that
+// the converted services have (service name, package name, network alias), and a number is added
+// when one of them is the same. A name that is not in the compose file, and is used by something
+// else on the network of the program, is not checked.
 const hostSuffix = "-host"
 
 // sanitizePart makes a part of a name of a machine of s: lower case, a character that is not a
@@ -1098,41 +1104,39 @@ func sanitizePart(s string, limit int) string {
 	return strings.Trim(string(b), "-")
 }
 
-// sanitizeHostname makes a name of a machine of s: lower case, a character that is not a letter, a
-// digit or "-" turned into "-", at most 63 characters, no "-" at either end. "dock2nano" when
-// nothing is left.
-func sanitizeHostname(s string) string {
-	if name := sanitizePart(s, 63); name != "" {
-		return name
-	}
-	return defaultHostname
-}
-
 // machineName is the name of the machine of the service: its name, sanitized, and "-host" (the
 // service part is cut so that the whole is at most 63 characters). It is not the name of the
 // service: the peers use that name for the address of the service, and a program that is
-// configured with its own service name must not find 127.0.0.1 behind it. "dock2nano", with no
-// suffix, when nothing is left of the service name.
-func machineName(service string) string {
+// configured with its own service name must not find 127.0.0.1 behind it. When the name is one of
+// taken (without regard to case), "-host2", "-host3" and so on are tried until one is not. When
+// nothing is left of the service name, the name is "dock2nano" when that is not taken, and else
+// "dock2nano-host", "dock2nano-host2" and so on.
+func machineName(service string, taken []string) string {
+	free := func(name string) bool {
+		for _, t := range taken {
+			if strings.EqualFold(t, name) {
+				return false
+			}
+		}
+		return true
+	}
 	part := sanitizePart(service, 63-len(hostSuffix))
 	if part == "" {
-		return defaultHostname
+		if free(defaultHostname) {
+			return defaultHostname
+		}
+		part = defaultHostname
 	}
-	return part + hostSuffix
-}
-
-// validHostname says whether s is one host name: 1 to 63 characters, letters, digits, "." and "-".
-func validHostname(s string) bool {
-	if s == "" || len(s) > 63 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
-			return false
+	for n := 1; ; n++ {
+		suffix := hostSuffix
+		if n > 1 {
+			suffix += strconv.Itoa(n)
+		}
+		name := sanitizePart(part, 63-len(suffix)) + suffix
+		if free(name) {
+			return name
 		}
 	}
-	return true
 }
 
 // errReason is the text of err without the path of this machine, when err is a path error.
@@ -1144,15 +1148,15 @@ func errReason(err error) string {
 	return err.Error()
 }
 
-// hostsNames says whether a line of the hosts file has name as a name (not as the address, and not
-// in a comment), without regard to case.
+// hostsNames says whether a line of the hosts file has name as a name on 127.0.0.1 (not as the
+// address, not on another address, and not in a comment), without regard to case.
 func hostsNames(hosts []byte, name string) bool {
 	for _, line := range strings.Split(string(hosts), "\n") {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) < 2 || fields[0] != "127.0.0.1" {
 			continue
 		}
 		for _, f := range fields[1:] {
@@ -1169,94 +1173,71 @@ func hostsNames(hosts []byte, name string) bool {
 // named after its address (192-168-33-209) and nothing resolves that name, so a program that
 // looks up its own host name fails (WildFly: UnknownHostException in InetAddress.getLocalHost();
 // ASP.NET: SocketException in Dns.GetHostEntry). The name is machineName of the service, and only
-// that name is put on 127.0.0.1 and ::1: the service name stays the name that peers resolve to
-// the address of the machine. An /etc/hostname of the sysroot that is one valid host name is kept
-// and its name is used; another one (empty, several lines, a space) is replaced, with a warning.
-// /etc/hosts gets a line for the name when no line has it as a name. It runs after
-// writeLocalNames. hostnameMade is set only when the tool wrote something and, at the end, both
-// files have the name. A file that is not a regular file, a missing /etc/hosts or a write that
-// fails is one warning and no claim.
+// that name is put on 127.0.0.1: the service name stays the name that peers resolve to the
+// address of the machine. An /etc/hostname of the sysroot that is a regular file is replaced; a
+// link or a directory there is not touched. /etc/hosts must be a regular file that can be read,
+// and it is checked before anything is written: when it cannot be used nothing is written. It
+// gets the line "127.0.0.1<TAB>name" when no line of it has the name on 127.0.0.1. It runs after
+// writeLocalNames. hostnameMade is set when both files have the name at the end. A file that is
+// not a regular file or a write that fails is one warning and no claim, and no /etc/hostname
+// left behind by this call.
 func (r *run) writeHostname(sysroot string) {
-	name := machineName(r.o.Hostname)
-	warned := false
-	warn := func(text string) {
-		if !warned {
-			warned = true
-			r.warnOnce(NoteHostname + text)
-		}
-	}
-	wrote := false
-
-	hostnamePath := filepath.Join(sysroot, "etc", "hostname")
-	write := true
-	fi, err := os.Lstat(hostnamePath)
-	switch {
-	case err == nil && !fi.Mode().IsRegular():
-		// a link or a directory: not touched, and not read (a link may lead out of the sysroot)
-		warn(": /etc/hostname of the package is not a regular file")
-		return
-	case err == nil:
-		data, rerr := os.ReadFile(hostnamePath)
-		if rerr != nil {
-			warn(" for the package: " + errReason(rerr))
-			return
-		}
-		if have := strings.TrimRight(string(data), "\r\n"); validHostname(have) {
-			name = have
-			write = false
-		} else {
-			r.warnOnce(fmt.Sprintf("%s: the /etc/hostname of the image is not one host name, so the package gets %s in its place", NoteHostname, name))
-		}
-	case !errors.Is(err, fs.ErrNotExist):
-		warn(" for the package: " + errReason(err))
-		return
-	}
-	if write {
-		if err := os.MkdirAll(filepath.Dir(hostnamePath), 0o755); err != nil {
-			warn(" for the package: " + errReason(err))
-			return
-		}
-		if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
-			warn(" for the package: " + errReason(err))
-			return
-		}
-		wrote = true
-	}
+	name := machineName(r.o.Hostname, r.o.TakenNames)
 
 	hostsPath := filepath.Join(sysroot, "etc", "hosts")
-	fi, err = os.Lstat(hostsPath)
-	if err != nil || !fi.Mode().IsRegular() {
-		warn(": /etc/hosts of the package is missing or is not a regular file")
+	fi, err := os.Lstat(hostsPath)
+	if err != nil {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
+		return
+	}
+	if !fi.Mode().IsRegular() {
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: it is not a regular file")
 		return
 	}
 	data, err := os.ReadFile(hostsPath)
 	if err != nil {
-		warn(": /etc/hosts of the package: " + errReason(err))
+		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
 		return
 	}
+
+	hostnamePath := filepath.Join(sysroot, "etc", "hostname")
+	switch fi, err := os.Lstat(hostnamePath); {
+	case err == nil && !fi.Mode().IsRegular():
+		// a link or a directory: not touched (a link may lead out of the sysroot)
+		r.warnOnce(NoteHostname + ": /etc/hostname of the package is not a regular file")
+		return
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(hostnamePath), 0o755); err != nil {
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
+		return
+	}
+	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
+		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
+		return
+	}
+
 	if !hostsNames(data, name) {
-		add := "127.0.0.1\t" + name + "\n::1\t" + name + "\n"
+		add := "127.0.0.1\t" + name + "\n"
 		if len(data) > 0 && data[len(data)-1] != '\n' {
 			add = "\n" + add
 		}
 		f, err := os.OpenFile(hostsPath, os.O_WRONLY|os.O_APPEND, 0)
+		if err == nil {
+			_, err = f.WriteString(add)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+		}
 		if err != nil {
-			warn(": /etc/hosts of the package: " + errReason(err))
+			os.Remove(hostnamePath)
+			r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: " + errReason(err))
 			return
 		}
-		_, werr := f.WriteString(add)
-		if cerr := f.Close(); werr == nil {
-			werr = cerr
-		}
-		if werr != nil {
-			warn(": /etc/hosts of the package: " + errReason(werr))
-			return
-		}
-		wrote = true
 	}
-	if wrote {
-		r.hostnameMade = name
-	}
+	r.hostnameMade = name
 }
 
 // resolveUser gives the user name strace -u runs the program as, or "" for root, and the home

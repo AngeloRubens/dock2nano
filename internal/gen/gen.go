@@ -402,7 +402,7 @@ func (g *generator) service(s *compose.Service, si ServiceInput, skipped map[str
 	g.identity(s, si, obs, &m)
 	g.waitForAddress(s, skipped, &m)
 	g.unknown(s, si)
-	g.observed(s, obs)
+	g.observed(s, obs, pkg)
 	g.plan.Report = append(g.plan.Report, si.HubItems...)
 	m.BaseVolumeSz = volumeSize(obs.Sysroot)
 	if si.MinVolume != "" {
@@ -858,11 +858,11 @@ func isDotnet(obs *observe.Result) bool {
 	}
 	// a self-contained or apphost app: the runtime library is beside the program, or in a shared
 	// framework directory of the package
-	patterns := []string{filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")}
-	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet"} {
-		patterns = append(patterns, filepath.Join(obs.Sysroot, filepath.FromSlash(base), "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so"))
+	if _, err := os.Stat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
+		return true
 	}
-	for _, pat := range patterns {
+	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
+		pat := filepath.Join(obs.Sysroot, filepath.FromSlash(base), "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
 		if m, err := filepath.Glob(pat); err == nil && len(m) > 0 {
 			return true
 		}
@@ -870,12 +870,12 @@ func isDotnet(obs *observe.Result) bool {
 	return false
 }
 
-func (g *generator) observed(s *compose.Service, obs *observe.Result) {
+func (g *generator) observed(s *compose.Service, obs *observe.Result, pkg string) {
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
 	if obs.HostnameMade != "" {
-		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts that maps only that name to 127.0.0.1 (and ::1). The name of the service (%s) and its %s.service name are not mapped there: they keep resolving through the DNS of ops to the address of the machine, so a program configured with its own service name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails", obs.HostnameMade, obs.HostnameMade, s.Name, s.Name))
+		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts with the line 127.0.0.1 %s, and no other name of ours on loopback. The name of the service (%s) and its package name (%s) are not mapped there: peers reach it as %s.service (and %s with an ops that includes nanovms/ops#1815), which the DNS of ops answers with the address of the machine, so a program configured with that name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails. The same holds the other way: a program that announces the address of its own host name (Cassandra with listen_address unset, the default advertised listener of Kafka, the node names of RabbitMQ and Hazelcast) now announces loopback or %s with no error, where before it failed loudly with UnknownHostException; set its advertised address to %s.service. Not measured: naming the machine %s.service with no line in /etc/hosts", obs.HostnameMade, obs.HostnameMade, obs.HostnameMade, s.Name, pkg, pkg, pkg, obs.HostnameMade, pkg, pkg))
 	}
 	if isDotnet(obs) {
 		g.add(s.Name, plan.Note, "dotnet", "the program is a .NET one: in the 9 measured rows (the ASP.NET sample, with DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0, kvm, and the library or the framework directory copied into the package) 3 started the server, 5 stopped with signal 11 (a page fault in the CLR) and 1 did neither; only one row answered 200. A library that the CLR loads only when an exception is thrown (Microsoft.AspNetCore.Diagnostics.Abstractions.dll) is not carried unless the observation reaches that path. The start is not reliable: review the output")

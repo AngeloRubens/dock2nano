@@ -89,16 +89,20 @@ func (a *App) convert(ctx context.Context, o *options) (int, error) {
 		}
 		converted = append(converted, s.Name)
 	}
+	var taken []string
 	if len(converted) > 0 {
-		if _, _, err := gen.PackageNames(project, converted); err != nil {
+		pkgOf, _, err := gen.PackageNames(project, converted)
+		if err != nil {
 			return 0, err
 		}
+		taken = takenNames(converted, pkgOf)
 	}
 
 	// One network for the whole run: the service under observation and the
 	// services it depends on reach each other by the names of the file, as they
 	// do with docker compose. It is removed however the run ends.
 	rs := &runState{dir: dir, noWith: o.noWith, cmdNotes: cmdNotes, hostNotes: hostNotesByService, retried: map[string]bool{}, hubArgs: map[string]hubArgs{}, extra: map[string][]string{}, firstUp: map[string][]string{}, crashed: map[string]bool{}, firstImg: map[string]builtImage{}, stopped: map[string]bool{}, ordered: ordered, skipped: skipped, starts: map[string]observe.StartOptions{}, running: map[string]Stopper{}, noted: map[string][]string{}, served: map[string][]string{}, failed: map[string]string{}, late: map[string]string{}}
+	rs.taken = taken
 	// The copies of the binds are removed however the run ends, after the
 	// containers that use them are stopped.
 	defer rs.removeCopies(a)
@@ -747,6 +751,21 @@ func dependencyOrder(p *compose.Project) ([]*compose.Service, error) {
 	return out, nil
 }
 
+// takenNames lists, lower-cased and once each, the names the converted services answer to: the
+// service name, its package name and its network alias (the service name).
+func takenNames(converted []string, pkgOf map[string]string) []string {
+	var out []string
+	for _, name := range converted {
+		for _, n := range []string{name, pkgOf[name]} {
+			n = strings.ToLower(n)
+			if n != "" && !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
 // prepare gets the image of one service, inspects it and observes it. The
 // returned input holds the observation even when the error is not nil, so that
 // the caller can remove its sysroot.
@@ -821,6 +840,7 @@ func (a *App) prepare(ctx context.Context, o *options, p *compose.Project, dir s
 	oo.ServiceName = s.Name
 	// the compose parser does not model hostname: the machine is named after the service (observe adds "-host")
 	oo.Hostname = s.Name
+	oo.TakenNames = rs.taken
 	if cmds := exerciseFor(s.Name, o.exerciseCmd, p); len(cmds) > 0 {
 		oo.ExerciseCmd = strings.Join(cmds, " && ")
 	}
@@ -1185,6 +1205,10 @@ func networkName() (string, error) {
 // others.
 type runState struct {
 	network string
+	// taken holds the names that the converted services use for themselves and for each other
+	// (service name, package name, network alias, lower case): the machine of a service is not
+	// named with one of them.
+	taken []string
 	// noWith is --no-with; retry holds the services to observe again with the others running;
 	// retried the ones that were.
 	noWith  bool

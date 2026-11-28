@@ -2479,9 +2479,19 @@ func TestHostnameOfThePackageIsNoted(t *testing.T) {
 	in.Services["web"].Observed.HostnameMade = "web-host"
 	p := mustGen(t, in)
 	want1(t, p, "web", plan.Note, "hostname", "the machine is named web-host")
-	want1(t, p, "web", plan.Note, "hostname", "maps only that name to 127.0.0.1")
-	want1(t, p, "web", plan.Note, "hostname", "The name of the service (web) and its web.service name are not mapped there")
+	want1(t, p, "web", plan.Note, "hostname", "the line 127.0.0.1 web-host")
+	want1(t, p, "web", plan.Note, "hostname", "The name of the service (web) and its package name (web) are not mapped there: peers reach it as web.service (and web with an ops that includes nanovms/ops#1815)")
 	want1(t, p, "web", plan.Note, "hostname", "Dns.GetHostEntry")
+	want1(t, p, "web", plan.Note, "hostname", "announces the address of its own host name")
+	want1(t, p, "web", plan.Note, "hostname", "set its advertised address to web.service")
+	want1(t, p, "web", plan.Note, "hostname", "Not measured: naming the machine web.service with no line in /etc/hosts")
+	if m := itemsOf(p, "web", plan.Note, "hostname")[0].Message; strings.Contains(m, "::1") {
+		t.Errorf("the note names ::1: %q", m)
+	}
+	// the package name is not the service name: the note names the package name
+	in = newInput(&fake{}, svc("web_app"))
+	in.Services["web_app"].Observed.HostnameMade = "web_app-host"
+	want1(t, mustGen(t, in), "web_app", plan.Note, "hostname", "peers reach it as web-app.service (and web-app with an ops")
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "hostname")
 }
 
@@ -2503,6 +2513,9 @@ func TestIsDotnetSeesTheRuntimeLibraryOfThePackage(t *testing.T) {
 		{"beside the program", "/app/Web", "app/libcoreclr.so", true},
 		{"shared framework in usr/share", "/app/Web", "usr/share/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
 		{"shared framework in usr/lib", "/app/Web", "usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
+		{"shared framework in usr/lib64", "/app/Web", "usr/lib64/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
+		{"shared framework in opt", "/app/Web", "opt/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
+		{"program with a glob character in its path", "/app/[x]/Web", "app/[x]/libcoreclr.so", true},
 		{"in another directory", "/app/Web", "other/libcoreclr.so", false},
 		{"no library", "/app/Web", "", false},
 	} {
