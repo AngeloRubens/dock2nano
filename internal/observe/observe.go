@@ -1201,7 +1201,7 @@ func (r *run) writeHostname(sysroot string) {
 			warn(" for the package: " + errReason(rerr))
 			return
 		}
-		if have := strings.TrimRight(string(data), "\r\n"); validHostname(have) {
+		if have := string(data); validHostname(have) {
 			name = have
 			write = false
 		} else {
