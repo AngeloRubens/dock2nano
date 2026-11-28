@@ -1220,7 +1220,7 @@ func (r *run) writeHostname(sysroot string) {
 	}
 
 	if !hostsNames(data, name) {
-		add := "127.0.0.1\t" + name + "\n"
+		add := "127.0.0.1\t" + name + "\n::1\t" + name + "\n"
 		if len(data) > 0 && data[len(data)-1] != '\n' {
 			add = "\n" + add
 		}
