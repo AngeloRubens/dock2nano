@@ -20,10 +20,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: openliberty-a, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: openliberty-b, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
-          - {name: jenkins, repo: jenkinsci/docker, sha: 155bf2878d9880c32fe9534269811d306186ec09, dockerfile: debian/Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "JAVA_RELEASE=21", ccmd: ""}
-          - {name: halo, repo: halo-dev/halo, sha: d29609ae2846c3c9c98990f4902e65bea6c63f75, dockerfile: Dockerfile, context: ".", port: "8090", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", pre: "JAVA_HOME=$JAVA_HOME_21_X64 PATH=$JAVA_HOME_21_X64/bin:$PATH ./gradlew bootJar -x test --no-daemon -q"}
+          - {name: tomee-a, repo: tomitribe/docker-tomee, sha: c24ab039cbbc9a4ed02e91b7b634c4ae1d7db9fd, dockerfile: TomEE-11.0/jre21/Temurin/ubuntu/webprofile/Dockerfile, context: "TomEE-11.0/jre21/Temurin/ubuntu/webprofile", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: tomee-b, repo: tomitribe/docker-tomee, sha: c24ab039cbbc9a4ed02e91b7b634c4ae1d7db9fd, dockerfile: TomEE-11.0/jre21/Temurin/ubuntu/webprofile/Dockerfile, context: "TomEE-11.0/jre21/Temurin/ubuntu/webprofile", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: payara-a, repo: local, sha: ci-rows/payara, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: payara-b, repo: local, sha: ci-rows/payara, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: glassfish-a, repo: local, sha: ci-rows/glassfish, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: glassfish-b, repo: local, sha: ci-rows/glassfish, dockerfile: Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
