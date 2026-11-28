@@ -565,7 +565,7 @@ func TestObserveOptions(t *testing.T) {
 	}
 	got.Network, got.NetworkAliases = "", nil
 	ep := []string{"/entry.sh"}
-	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app", User: "1000:1000", ServiceName: "web"}
+	want := observe.Options{Image: "nginx:1", Entrypoint: &ep, Cmd: []string{"serve", "--port", "80"}, Seconds: 7, WorkingDir: "/srv/app", User: "1000:1000", ServiceName: "web", Hostname: "web"}
 	want.Env = []string{"A=1", "B=hb", "C=c", "D=sl", "E=from-file", "Q=quoted", "R=raw", "S=keep # this"}
 	// the read-only bind is mounted as it is, the other one as a copy
 	if len(got.Binds) != 2 || got.Binds[0] != filepath.Join(h.dir, "conf")+":/etc/conf:ro" {

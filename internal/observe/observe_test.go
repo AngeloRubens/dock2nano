@@ -518,7 +518,7 @@ func TestObserveSuccess(t *testing.T) {
 		"/lib/libc.so.6", "/bin/sh",
 	})
 	equal(t, "sysroot files", tree(t, res.Sysroot), []string{
-		"app/rel.txt", "bin/sh", "etc/app.conf", "etc/hosts", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
+		"app/rel.txt", "bin/sh", "etc/app.conf", "etc/hostname", "etc/hosts", "lib/libc.so", "lib/libc.so.6", "usr/bin/app", "var/log/app.log",
 	})
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
@@ -1804,10 +1804,13 @@ func TestObserveNetworkFilesOfTheRuntimeAreNotCarried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"etc/resolv.conf", "etc/hostname"} {
-		if _, err := os.Stat(filepath.Join(res.Sysroot, f)); err == nil {
-			t.Errorf("%s is in the sysroot", f)
-		}
+	if _, err := os.Stat(filepath.Join(res.Sysroot, "etc", "resolv.conf")); err == nil {
+		t.Errorf("etc/resolv.conf is in the sysroot")
+	}
+	// the hostname file of the container is not carried either: the package has one of its own, with
+	// the name that was asked for (none here, so the default), not the one of the container
+	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hostname")); err != nil || strings.Contains(string(b), "abc") || strings.TrimSpace(string(b)) != "dock2nano" {
+		t.Errorf("etc/hostname = %q, %v", b, err)
 	}
 	// the hosts file of the container is not carried: the package has one of its own
 	if b, err := os.ReadFile(filepath.Join(res.Sysroot, "etc", "hosts")); err != nil || strings.Contains(string(b), "abc") || !strings.Contains(string(b), "localhost") {
