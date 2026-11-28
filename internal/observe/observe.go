@@ -1191,10 +1191,6 @@ func (r *run) writeHostname(sysroot string) {
 	write := true
 	fi, err := os.Lstat(hostnamePath)
 	switch {
-	case err == nil && !fi.Mode().IsRegular():
-		// a link or a directory: not touched, and not read (a link may lead out of the sysroot)
-		warn(": /etc/hostname of the package is not a regular file")
-		return
 	case err == nil:
 		data, rerr := os.ReadFile(hostnamePath)
 		if rerr != nil {
