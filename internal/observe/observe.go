@@ -1097,7 +1097,7 @@ func sanitizeHostname(s string) string {
 	}
 	name := strings.Trim(string(b), "-")
 	if name == "" {
-		return defaultHostname
+		return ""
 	}
 	return name
 }
