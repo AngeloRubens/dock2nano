@@ -769,7 +769,6 @@ func takenNames(all []string, pkgOf map[string]string) []string {
 	var out []string
 	for _, name := range all {
 		for _, n := range []string{name, pkgOf[name]} {
-			n = strings.ToLower(n)
 			if n != "" && !slices.Contains(out, n) {
 				out = append(out, n)
 			}
