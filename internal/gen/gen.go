@@ -858,7 +858,7 @@ func isDotnet(obs *observe.Result) bool {
 	}
 	// a self-contained or apphost app: the runtime library is beside the program, or in a shared
 	// framework directory of the package
-	patterns := []string{filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")}
+	patterns := []string{}
 	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet"} {
 		patterns = append(patterns, filepath.Join(obs.Sysroot, filepath.FromSlash(base), "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so"))
 	}
