@@ -1156,7 +1156,7 @@ func hostsNames(hosts []byte, name string) bool {
 			continue
 		}
 		for _, f := range fields[1:] {
-			if strings.EqualFold(f, name) {
+			if f == name {
 				return true
 			}
 		}
