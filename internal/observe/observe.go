@@ -1107,7 +1107,7 @@ func sanitizePart(s string, limit int) string {
 	if len(b) > limit {
 		b = b[:limit]
 	}
-	return strings.Trim(string(b), "-")
+	return string(b)
 }
 
 // machineName is the name of the machine of the service: its package name (service is the base
