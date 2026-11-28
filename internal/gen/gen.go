@@ -863,7 +863,7 @@ func isDotnet(obs *observe.Result) bool {
 	if _, err := os.Lstat(filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")); err == nil {
 		return true
 	}
-	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "usr/lib64/dotnet", "opt/dotnet"} {
+	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet", "opt/dotnet"} {
 		// the pattern is relative to the sysroot, so that the path of the sysroot is never a pattern
 		pat := path.Join(base, "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so")
 		if m, err := fs.Glob(os.DirFS(obs.Sysroot), pat); err == nil && len(m) > 0 {
