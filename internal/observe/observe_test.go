@@ -3353,6 +3353,11 @@ func TestWriteHostnameAppendsToAHostsFileThatLacksTheName(t *testing.T) {
 	if got := readEtc(t, dir, "hosts"); got != "web-host db\n127.0.0.1\tweb-host\n" {
 		t.Errorf("/etc/hosts = %q", got)
 	}
+	// a name after a comment sign on a line of 127.0.0.1 is a comment, not a name of the line
+	_, dir = hostnameScene(t, "web", map[string]string{"hosts": "127.0.0.1 db # web-host\n"})
+	if got := readEtc(t, dir, "hosts"); got != "127.0.0.1 db # web-host\n127.0.0.1\tweb-host\n" {
+		t.Errorf("/etc/hosts = %q", got)
+	}
 }
 
 func TestWriteHostnameReplacesARegularHostnameFile(t *testing.T) {
