@@ -1148,9 +1148,6 @@ func errReason(err error) string {
 // in a comment), without regard to case.
 func hostsNames(hosts []byte, name string) bool {
 	for _, line := range strings.Split(string(hosts), "\n") {
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
