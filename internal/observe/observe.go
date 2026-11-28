@@ -1152,7 +1152,7 @@ func (r *run) writeHostname(sysroot string) {
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
+			_ = i
 		}
 		fields := strings.Fields(line)
 		if len(fields) > 1 && slices.Contains(fields[1:], name) {
