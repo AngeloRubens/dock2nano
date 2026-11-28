@@ -1139,7 +1139,7 @@ func machineName(service string, taken []string) string {
 		if n > 1 {
 			suffix += strconv.Itoa(n)
 		}
-		name := sanitizePart(part, 63-len(suffix)) + suffix
+		name := sanitizePart(part, 63-len(suffix)) + strings.TrimPrefix(suffix, hostSuffix)
 		if free(name) {
 			return name
 		}
