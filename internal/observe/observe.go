@@ -1163,9 +1163,6 @@ func errReason(err error) string {
 // name of the machine on another address there is not expected.)
 func hostsNames(hosts []byte, name string) bool {
 	for _, line := range strings.Split(string(hosts), "\n") {
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 || fields[0] != "127.0.0.1" {
 			continue
