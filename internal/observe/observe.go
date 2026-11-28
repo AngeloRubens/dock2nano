@@ -1150,7 +1150,7 @@ func machineName(service string, taken []string) string {
 func errReason(err error) string {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
-		return pe.Err.Error()
+		return err.Error()
 	}
 	return err.Error()
 }
