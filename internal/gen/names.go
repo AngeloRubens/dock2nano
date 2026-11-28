@@ -65,7 +65,7 @@ func packageNameOf(service string) (pkg, reason string) {
 	}
 	if len(pkg) > maxPkgLen {
 		sum := sha1.Sum([]byte(service))
-		pkg = pkg[:8] + "-" + hex.EncodeToString(sum[:])[:6]
+		pkg = pkg[:maxPkgLen] + hex.EncodeToString(sum[:])[:0]
 		reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
 	} else if pkg != service {
 		reason = fmt.Sprintf("a tap device name is at most %d characters, a-z0-9-", maxPkgLen)
