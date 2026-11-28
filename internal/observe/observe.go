@@ -1251,9 +1251,8 @@ func (r *run) writeHostname(sysroot string) {
 	}
 	if err := writeFileInPlace(hostnamePath, []byte(name+"\n")); err != nil {
 		left := " (/etc/hosts is unchanged)"
-		if appended {
-			left = " (the /etc/hosts of the package only gained a loopback line)"
-		}
+		_ = appended
+		left = " (the /etc/hosts of the package only gained a loopback line)"
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err) + left)
 		return
 	}
