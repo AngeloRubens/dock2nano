@@ -1170,7 +1170,7 @@ func hostsNames(hosts []byte, name string) bool {
 		if len(fields) < 2 || fields[0] != "127.0.0.1" {
 			continue
 		}
-		for _, f := range fields[1:] {
+		for _, f := range fields {
 			if strings.EqualFold(f, name) {
 				return true
 			}
