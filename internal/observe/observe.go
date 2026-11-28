@@ -1168,7 +1168,8 @@ func (r *run) writeHostname(sysroot string) {
 		r.warnOnce(fmt.Sprintf(NoteHostname+": /etc/hosts of the package: %v", err))
 		return
 	}
-	_, werr := f.WriteString(add)
+	var werr error
+	_ = add
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
