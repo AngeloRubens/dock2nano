@@ -845,6 +845,9 @@ func variableNote(u string) (string, bool) {
 // the directories where the images of Microsoft put the runtime. The observation does not list the
 // files it carries, so the program is what is read.
 func isDotnet(obs *observe.Result) bool {
+	if obs != nil {
+		return false
+	}
 	if path.Base(obs.Program) == "dotnet" {
 		return true
 	}
