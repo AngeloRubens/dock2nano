@@ -1445,3 +1445,27 @@ func TestFinalExecScriptsIgnoresAPathThatIsNotAnExecPath(t *testing.T) {
 		t.Errorf("FinalExecScripts = %+v, %v; want the script, process 9", got, found)
 	}
 }
+
+// A shell script that is named in shellScripts is a shell for nearestProgram too, not only for the
+// descent: under the outer shell 5 there are the worker (pid 8, forked first) and the script
+// /app/helper.sh (pid 6, forked later) that runs java (pid 7) below it. The script is a candidate
+// that is not a program, so the choice is between the worker at distance 1 and java at distance 2:
+// the worker wins by distance, and java, which is not below the worker, is Beside. Were the script
+// taken for a program (c.isShell false for it), it would be at the same distance as the worker and,
+// forked later, would win; the descent would then go through it to java, and the worker would be
+// Beside. So the expected result is the worker, process 8, with java alone in Beside.
+func TestFinalExecScriptsSkipsANamedScriptAmongTheCandidates(t *testing.T) {
+	trace := `5     execve("/bin/sh", ["sh", "-c", "worker & /app/helper.sh"], 0x55e04c68b400 /* 16 vars */) = 0
+5     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 8
+8     execve("/app/worker", ["/app/worker"], 0x55e04c68b400 /* 16 vars */) = 0
+5     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 6
+6     execve("/app/helper.sh", ["/app/helper.sh"], 0x55e04c68b400 /* 16 vars */) = 0
+6     clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f005306ca10) = 7
+7     execve("/opt/java/openjdk/bin/java", ["/opt/java/openjdk/bin/java", "-jar", "/app/x.jar"], 0x55e04c68b400 /* 16 vars */) = 0
+`
+	got, found := FinalExecScripts([]byte(trace), map[string]bool{"/app/helper.sh": true})
+	wantBeside := []string{besideLabel("/opt/java/openjdk/bin/java", []string{"/opt/java/openjdk/bin/java", "-jar", "/app/x.jar"})}
+	if !found || got.Pid != "8" || got.Path != "/app/worker" || !reflect.DeepEqual(got.Beside, wantBeside) {
+		t.Errorf("FinalExecScripts = %+v, %v; want the worker, process 8, with Beside %v", got, found, wantBeside)
+	}
+}
