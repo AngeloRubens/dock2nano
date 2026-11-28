@@ -20,10 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: activemq, repo: apache/activemq, sha: 2dae41f0fceb051c684e0b2365410cbf7924d1cf, dockerfile: assembly/src/docker/Dockerfile, context: "assembly/src/docker", port: "8161", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "activemq_dist=https://archive.apache.org/dist/activemq/6.4.0/apache-activemq-6.4.0-bin.tar.gz", ccmd: ""}
-          - {name: activemq-b, repo: apache/activemq, sha: 2dae41f0fceb051c684e0b2365410cbf7924d1cf, dockerfile: assembly/src/docker/Dockerfile, context: "assembly/src/docker", port: "8161", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "activemq_dist=https://archive.apache.org/dist/activemq/6.4.0/apache-activemq-6.4.0-bin.tar.gz", ccmd: ""}
-          - {name: keycloak, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "KEYCLOAK_VERSION=26.8.2", ccmd: "start-dev"}
-          - {name: keycloak-b, repo: keycloak/keycloak, sha: 317dc60618ab8077e0a07278a4023c0bb06cc398, dockerfile: quarkus/container/Dockerfile, context: "quarkus/container", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "KEYCLOAK_VERSION=26.8.2", ccmd: "start-dev"}
+          - {name: openliberty-a, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: openliberty-b, repo: OpenLiberty/ci.docker, sha: 359269412a55bc43579d3088617851447ac85ace, dockerfile: releases/latest/full/Dockerfile.ubuntu.openjdk17, context: "releases/latest/full", port: "9080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: ""}
+          - {name: jenkins, repo: jenkinsci/docker, sha: 155bf2878d9880c32fe9534269811d306186ec09, dockerfile: debian/Dockerfile, context: ".", port: "8080", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", bargs: "JAVA_RELEASE=21", ccmd: ""}
+          - {name: halo, repo: halo-dev/halo, sha: d29609ae2846c3c9c98990f4902e65bea6c63f75, dockerfile: Dockerfile, context: ".", port: "8090", probe: http, kvm: "yes", env: "", tries: "60", cargs: "", mkdirs: "", copy: "", path: "/", jq: "", pre: "JAVA_HOME=$JAVA_HOME_21_X64 PATH=$JAVA_HOME_21_X64/bin:$PATH ./gradlew bootJar -x test --no-daemon -q"}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
