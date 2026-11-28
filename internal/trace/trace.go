@@ -1272,7 +1272,7 @@ func FinalExecScripts(trace []byte, shellScripts map[string]bool) (Exec, bool) {
 		for step := 0; step < 8; step++ {
 			_, _, launcher := Launcher(last[process].Path, last[process].Argv)
 			isInit := IsInit(last[process].Path)
-			isShell := shells[path.Base(last[process].Path)] || shellScripts[last[process].Path]
+			isShell := shells[path.Base(last[process].Path)]
 			if !launcher && !isInit && !isShell {
 				break
 			}
