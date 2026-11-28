@@ -539,6 +539,9 @@ func TestObserveSuccess(t *testing.T) {
 	if st, err := os.Lstat(filepath.Join(res.Sysroot, "var/log/app.log")); err != nil || st.Mode()&os.ModeSymlink != 0 {
 		t.Errorf("var/log/app.log is a link: %v %v", st, err)
 	}
+	// the package has a machine name of its own: the default one, as no service name was given
+	equal(t, "hostname made", res.HostnameMade, "dock2nano")
+	equal(t, "etc/hostname", read("etc/hostname"), "dock2nano\n")
 
 	// the program and its command line come from /proc
 	equal(t, "program", res.Program, "/usr/bin/app")
@@ -1786,6 +1789,27 @@ func TestObserveWorkingDirectoryExistsInTheSysroot(t *testing.T) {
 				t.Errorf("%s in the sysroot: %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestObserveNamesTheMachineAfterTheService(t *testing.T) {
+	s := newScene(t)
+	s.o.Hostname = "web"
+	res, err := s.observe(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "hostname made", res.HostnameMade, "web-host")
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(res.Sysroot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	equal(t, "etc/hostname", read("etc/hostname"), "web-host\n")
+	if hosts := read("etc/hosts"); !strings.Contains(hosts, "127.0.0.1\tweb-host\n") {
+		t.Errorf("etc/hosts = %q", hosts)
 	}
 }
 
@@ -3216,10 +3240,15 @@ func hostnameScene(t *testing.T, hostname string, files map[string]string) (*run
 			t.Fatal(err)
 		}
 	}
+	return hostnameRun(dir, hostname), dir
+}
+
+// hostnameRun runs writeLocalNames and writeHostname on dir.
+func hostnameRun(dir, hostname string) *run {
 	r := &run{once: map[string]bool{}, o: Options{Hostname: hostname}}
 	r.writeLocalNames(dir)
 	r.writeHostname(dir)
-	return r, dir
+	return r
 }
 
 func readEtc(t *testing.T, dir, name string) string {
@@ -3233,54 +3262,222 @@ func readEtc(t *testing.T, dir, name string) string {
 
 func TestWriteHostnameMakesBothFilesWhenTheSysrootHasNone(t *testing.T) {
 	r, dir := hostnameScene(t, "web", nil)
-	if got := readEtc(t, dir, "hostname"); got != "web\n" {
+	if got := readEtc(t, dir, "hostname"); got != "web-host\n" {
 		t.Errorf("/etc/hostname = %q", got)
 	}
 	hosts := readEtc(t, dir, "hosts")
-	if !strings.Contains(hosts, "127.0.0.1\tlocalhost") || !strings.Contains(hosts, "127.0.0.1\tweb\n") {
+	if !strings.Contains(hosts, "127.0.0.1\tlocalhost") || !strings.Contains(hosts, "127.0.0.1\tweb-host\n") || !strings.Contains(hosts, "::1\tweb-host\n") {
 		t.Errorf("/etc/hosts = %q", hosts)
 	}
-	if r.hostnameMade != "web" {
+	if r.hostnameMade != "web-host" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
 	}
 	equal(t, "warnings", r.warn, []string(nil))
 }
 
+func TestWriteHostnameNeverMapsTheServiceNameToLoopback(t *testing.T) {
+	for _, files := range []map[string]string{nil, {"hosts": "10.0.0.1 db\n"}} {
+		_, dir := hostnameScene(t, "web", files)
+		for _, line := range strings.Split(readEtc(t, dir, "hosts"), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 1 && slices.Contains(fields[1:], "web") {
+				t.Errorf("the service name is a host name of the line %q", line)
+			}
+		}
+		if !strings.Contains(readEtc(t, dir, "hosts"), "127.0.0.1\tweb-host\n") {
+			t.Errorf("/etc/hosts = %q", readEtc(t, dir, "hosts"))
+		}
+	}
+}
+
 func TestWriteHostnameAppendsToAHostsFileThatLacksTheName(t *testing.T) {
-	// no newline at the end: one is added before the line
+	// no newline at the end: one is added before the lines
 	r, dir := hostnameScene(t, "web", map[string]string{"hosts": "10.0.0.1 db"})
-	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n127.0.0.1\tweb\n" {
+	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n127.0.0.1\tweb-host\n::1\tweb-host\n" {
 		t.Errorf("/etc/hosts = %q", got)
 	}
-	if r.hostnameMade != "web" {
+	if r.hostnameMade != "web-host" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
 	}
-	// a name that is already a word of a line (and one in a comment is not)
-	_, dir = hostnameScene(t, "web", map[string]string{"hosts": "# web\n10.0.0.1 db web\n"})
-	if got := readEtc(t, dir, "hosts"); got != "# web\n10.0.0.1 db web\n" {
+	// a name that is already a name of a line, in any case (and one in a comment is not)
+	r, dir = hostnameScene(t, "web", map[string]string{"hosts": "# web-host\n10.0.0.1 db Web-Host\n"})
+	if got := readEtc(t, dir, "hosts"); got != "# web-host\n10.0.0.1 db Web-Host\n" {
 		t.Errorf("/etc/hosts = %q", got)
 	}
-	_, dir = hostnameScene(t, "web", map[string]string{"hosts": "# web\n10.0.0.1 db\n"})
-	if got := readEtc(t, dir, "hosts"); got != "# web\n10.0.0.1 db\n127.0.0.1\tweb\n" {
+	// the hostname file was written, so the claim stands
+	if r.hostnameMade != "web-host" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	_, dir = hostnameScene(t, "web", map[string]string{"hosts": "# web-host\n10.0.0.1 db\n"})
+	if got := readEtc(t, dir, "hosts"); got != "# web-host\n10.0.0.1 db\n127.0.0.1\tweb-host\n::1\tweb-host\n" {
+		t.Errorf("/etc/hosts = %q", got)
+	}
+	// the name in the address column only is not a name of the line
+	_, dir = hostnameScene(t, "web", map[string]string{"hosts": "web-host db\n"})
+	if got := readEtc(t, dir, "hosts"); got != "web-host db\n127.0.0.1\tweb-host\n::1\tweb-host\n" {
 		t.Errorf("/etc/hosts = %q", got)
 	}
 }
 
-func TestWriteHostnameKeepsTheHostnameFileOfTheSysroot(t *testing.T) {
-	r, dir := hostnameScene(t, "web", map[string]string{"hostname": "  mine  \nsecond\n", "hosts": "10.0.0.1 db\n"})
-	if got := readEtc(t, dir, "hostname"); got != "  mine  \nsecond\n" {
+func TestWriteHostnameClaimsNothingWhenBothFilesHadTheName(t *testing.T) {
+	r, dir := hostnameScene(t, "web", map[string]string{"hostname": "web-host\n", "hosts": "127.0.0.1 localhost web-host\n"})
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if got := readEtc(t, dir, "hostname"); got != "web-host\n" {
 		t.Errorf("/etc/hostname = %q", got)
 	}
-	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n127.0.0.1\tmine\n" {
+	if got := readEtc(t, dir, "hosts"); got != "127.0.0.1 localhost web-host\n" {
+		t.Errorf("/etc/hosts = %q", got)
+	}
+	equal(t, "warnings", r.warn, []string(nil))
+}
+
+func TestWriteHostnameKeepsTheHostnameFileOfTheSysroot(t *testing.T) {
+	r, dir := hostnameScene(t, "web", map[string]string{"hostname": "mine\n", "hosts": "10.0.0.1 db\n"})
+	if got := readEtc(t, dir, "hostname"); got != "mine\n" {
+		t.Errorf("/etc/hostname = %q", got)
+	}
+	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n127.0.0.1\tmine\n::1\tmine\n" {
 		t.Errorf("/etc/hosts = %q", got)
 	}
 	if r.hostnameMade != "mine" {
 		t.Errorf("hostnameMade = %q", r.hostnameMade)
 	}
-	// an empty one counts as none
-	_, dir = hostnameScene(t, "web", map[string]string{"hostname": "\n"})
-	if got := readEtc(t, dir, "hostname"); got != "web\n" {
-		t.Errorf("/etc/hostname = %q", got)
+	equal(t, "warnings", r.warn, []string(nil))
+	// CRLF at the end is stripped, as nanos does; a name with dots is one name
+	for _, c := range []struct{ content, name string }{
+		{"mine\r\n", "mine"},
+		{"db.example.org", "db.example.org"},
+		{"Mine\n\n", "Mine"},
+	} {
+		r, dir := hostnameScene(t, "web", map[string]string{"hostname": c.content, "hosts": "10.0.0.1 db\n"})
+		if got := readEtc(t, dir, "hostname"); got != c.content {
+			t.Errorf("/etc/hostname = %q, want %q kept", got, c.content)
+		}
+		if r.hostnameMade != c.name || !strings.Contains(readEtc(t, dir, "hosts"), "127.0.0.1\t"+c.name+"\n") {
+			t.Errorf("%q: hostnameMade = %q, /etc/hosts = %q", c.content, r.hostnameMade, readEtc(t, dir, "hosts"))
+		}
+		equal(t, "warnings", r.warn, []string(nil))
+	}
+}
+
+func TestWriteHostnameReplacesAHostnameFileThatIsNotOneName(t *testing.T) {
+	for _, content := range []string{"", "\n", "  mine  \nsecond\n", "two words\n", "a\nb\n", "bad_name\n", strings.Repeat("a", 64) + "\n"} {
+		r, dir := hostnameScene(t, "web", map[string]string{"hostname": content})
+		if got := readEtc(t, dir, "hostname"); got != "web-host\n" {
+			t.Errorf("%q: /etc/hostname = %q", content, got)
+		}
+		if r.hostnameMade != "web-host" {
+			t.Errorf("%q: hostnameMade = %q", content, r.hostnameMade)
+		}
+		if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) {
+			t.Errorf("%q: warnings = %q", content, r.warn)
+		}
+	}
+}
+
+func TestWriteHostnameDoesNotTouchAFileThatIsNotARegularFile(t *testing.T) {
+	check := func(t *testing.T, r *run) {
+		t.Helper()
+		if r.hostnameMade != "" {
+			t.Errorf("hostnameMade = %q", r.hostnameMade)
+		}
+		if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) {
+			t.Errorf("warnings = %q", r.warn)
+		}
+	}
+	t.Run("hostname is a link", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/proc/sys/kernel/hostname", filepath.Join(dir, "etc", "hostname")); err != nil {
+			t.Fatal(err)
+		}
+		r := hostnameRun(dir, "web")
+		check(t, r)
+		if _, err := os.Stat(filepath.Join(dir, "etc", "hosts")); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(readEtc(t, dir, "hosts"), "web-host") {
+			t.Errorf("/etc/hosts = %q", readEtc(t, dir, "hosts"))
+		}
+	})
+	t.Run("hostname is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "etc", "hostname"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r := hostnameRun(dir, "web")
+		check(t, r)
+		if strings.Contains(readEtc(t, dir, "hosts"), "web-host") {
+			t.Errorf("/etc/hosts = %q", readEtc(t, dir, "hosts"))
+		}
+	})
+	t.Run("hosts is a link", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(dir, "elsewhere"), filepath.Join(dir, "etc", "hosts")); err != nil {
+			t.Fatal(err)
+		}
+		r := hostnameRun(dir, "web")
+		check(t, r)
+		if _, err := os.Lstat(filepath.Join(dir, "elsewhere")); err == nil {
+			t.Error("the link was written through")
+		}
+	})
+	t.Run("hosts is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "etc", "hosts"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check(t, hostnameRun(dir, "web"))
+	})
+}
+
+func TestWriteHostnameClaimsNothingWhenTheAppendFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only file")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "etc", "hosts"), []byte("10.0.0.1 db\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	r := hostnameRun(dir, "web")
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if len(r.warn) != 1 || !strings.HasPrefix(r.warn[0], NoteHostname) || strings.Contains(r.warn[0], dir) {
+		t.Errorf("warnings = %q", r.warn)
+	}
+	if got := readEtc(t, dir, "hosts"); got != "10.0.0.1 db\n" {
+		t.Errorf("/etc/hosts = %q", got)
+	}
+}
+
+func TestWriteHostnameWarningsHaveNoPathOfThisMachine(t *testing.T) {
+	// etc is a file: nothing can be made under it
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "etc"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := hostnameRun(dir, "web")
+	if r.hostnameMade != "" {
+		t.Errorf("hostnameMade = %q", r.hostnameMade)
+	}
+	if len(r.warn) == 0 {
+		t.Fatal("no warning")
+	}
+	for _, w := range r.warn {
+		if strings.Contains(w, dir) {
+			t.Errorf("the warning has the path of this machine: %q", w)
+		}
 	}
 }
 
@@ -3298,8 +3495,25 @@ func TestSanitizeHostname(t *testing.T) {
 			t.Errorf("sanitizeHostname(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+func TestMachineName(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"web", "web-host"},
+		{"My_App.Svc", "my-app-svc-host"},
+		{"", "dock2nano"},
+		{"___", "dock2nano"},
+		{"dock2nano", "dock2nano-host"},
+		{strings.Repeat("a", 70), strings.Repeat("a", 58) + "-host"},
+		{strings.Repeat("a", 57) + "_x", strings.Repeat("a", 57) + "-host"},
+	} {
+		got := machineName(c.in)
+		if got != c.want || len(got) > 63 {
+			t.Errorf("machineName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
 	_, dir := hostnameScene(t, "Web_1", nil)
-	if got := readEtc(t, dir, "hostname"); got != "web-1\n" {
+	if got := readEtc(t, dir, "hostname"); got != "web-1-host\n" {
 		t.Errorf("/etc/hostname = %q", got)
 	}
 }

@@ -842,14 +842,28 @@ func variableNote(u string) (string, bool) {
 }
 
 // isDotnet says whether the program of the observation is the .NET host (dotnet), or a file under
-// the directories where the images of Microsoft put the runtime. The observation does not list the
-// files it carries, so the program is what is read.
+// the directories where the images of Microsoft put the runtime, or the package has libcoreclr.so
+// beside the program or in a shared framework directory (a self-contained or apphost app).
 func isDotnet(obs *observe.Result) bool {
 	if path.Base(obs.Program) == "dotnet" {
 		return true
 	}
 	for _, dir := range []string{"/usr/share/dotnet/", "/usr/lib/dotnet/"} {
 		if strings.HasPrefix(obs.Program, dir) {
+			return true
+		}
+	}
+	if obs.Sysroot == "" {
+		return false
+	}
+	// a self-contained or apphost app: the runtime library is beside the program, or in a shared
+	// framework directory of the package
+	patterns := []string{filepath.Join(obs.Sysroot, filepath.FromSlash(path.Dir(obs.Program)), "libcoreclr.so")}
+	for _, base := range []string{"usr/share/dotnet", "usr/lib/dotnet"} {
+		patterns = append(patterns, filepath.Join(obs.Sysroot, filepath.FromSlash(base), "shared", "Microsoft.NETCore.App", "*", "libcoreclr.so"))
+	}
+	for _, pat := range patterns {
+		if m, err := filepath.Glob(pat); err == nil && len(m) > 0 {
 			return true
 		}
 	}
@@ -861,7 +875,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
 	if obs.HostnameMade != "" {
-		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the package gets /etc/hostname %s and an /etc/hosts that maps %s to 127.0.0.1: nanos otherwise names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails without it. The name is not the one of the container", obs.HostnameMade, obs.HostnameMade))
+		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts that maps only that name to 127.0.0.1 (and ::1). The name of the service (%s) and its %s.service name are not mapped there: they keep resolving through the DNS of ops to the address of the machine, so a program configured with its own service name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails", obs.HostnameMade, obs.HostnameMade, s.Name, s.Name))
 	}
 	if isDotnet(obs) {
 		g.add(s.Name, plan.Note, "dotnet", "the program is a .NET one: in the 9 measured rows (the ASP.NET sample, with DOTNET_EnableWriteXorExecute=0 DOTNET_TieredCompilation=0 DOTNET_TieredPGO=0 DOTNET_gcConcurrent=0 DOTNET_gcServer=0, kvm, and the library or the framework directory copied into the package) 3 started the server, 5 stopped with signal 11 (a page fault in the CLR) and 1 did neither; only one row answered 200. A library that the CLR loads only when an exception is thrown (Microsoft.AspNetCore.Diagnostics.Abstractions.dll) is not carried unless the observation reaches that path. The start is not reliable: review the output")

@@ -2476,9 +2476,11 @@ func TestPackageWithOwnHostsFileIsNoted(t *testing.T) {
 
 func TestHostnameOfThePackageIsNoted(t *testing.T) {
 	in := newInput(&fake{}, svc("web"))
-	in.Services["web"].Observed.HostnameMade = "web"
+	in.Services["web"].Observed.HostnameMade = "web-host"
 	p := mustGen(t, in)
-	want1(t, p, "web", plan.Note, "hostname", "/etc/hostname web and an /etc/hosts that maps web to 127.0.0.1")
+	want1(t, p, "web", plan.Note, "hostname", "the machine is named web-host")
+	want1(t, p, "web", plan.Note, "hostname", "maps only that name to 127.0.0.1")
+	want1(t, p, "web", plan.Note, "hostname", "The name of the service (web) and its web.service name are not mapped there")
 	want1(t, p, "web", plan.Note, "hostname", "Dns.GetHostEntry")
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "hostname")
 }
@@ -2491,6 +2493,38 @@ func TestDotnetProgramIsNoted(t *testing.T) {
 		want1(t, mustGen(t, in), "web", plan.Note, "dotnet", "signal 11")
 	}
 	wantNone(t, mustGen(t, newInput(&fake{}, svc("web"))), "web", plan.Note, "dotnet")
+}
+
+func TestIsDotnetSeesTheRuntimeLibraryOfThePackage(t *testing.T) {
+	for _, c := range []struct {
+		name, program, lib string
+		want               bool
+	}{
+		{"beside the program", "/app/Web", "app/libcoreclr.so", true},
+		{"shared framework in usr/share", "/app/Web", "usr/share/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
+		{"shared framework in usr/lib", "/app/Web", "usr/lib/dotnet/shared/Microsoft.NETCore.App/8.0.1/libcoreclr.so", true},
+		{"in another directory", "/app/Web", "other/libcoreclr.so", false},
+		{"no library", "/app/Web", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if c.lib != "" {
+				f := filepath.Join(root, filepath.FromSlash(c.lib))
+				if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(f, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := isDotnet(&observe.Result{Program: c.program, Sysroot: root}); got != c.want {
+				t.Errorf("isDotnet = %v, want %v", got, c.want)
+			}
+		})
+	}
+	if isDotnet(&observe.Result{Program: "/app/Web"}) {
+		t.Error("isDotnet is true with no sysroot")
+	}
 }
 
 func TestMachineFilesOfThePackageAreNoted(t *testing.T) {
