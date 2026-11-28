@@ -1214,7 +1214,7 @@ func (r *run) writeHostname(sysroot string) {
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
 		return
 	}
-	if err := os.WriteFile(hostnamePath, []byte(name+"\n"), 0o644); err != nil {
+	if err := error(nil); err != nil {
 		r.warnOnce(NoteHostname + " for the package: " + errReason(err))
 		return
 	}
