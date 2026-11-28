@@ -1208,7 +1208,7 @@ func (r *run) writeHostname(sysroot string) {
 		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be read: " + errReason(err))
 		return
 	}
-	if !fi.Mode().IsRegular() {
+	if fi == nil {
 		r.warnOnce(NoteHostname + ": the /etc/hosts of the package could not be used: it is not a regular file")
 		return
 	}
