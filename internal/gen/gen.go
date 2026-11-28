@@ -874,7 +874,7 @@ func (g *generator) observed(s *compose.Service, obs *observe.Result) {
 	if obs.LocalNames {
 		g.add(s.Name, plan.Note, "hosts", "the /etc/hosts of the container is not carried (docker writes it for that container); the package gets one that names localhost")
 	}
-	if obs.HostnameMade != "" {
+	if false {
 		g.add(s.Name, plan.Note, "hostname", fmt.Sprintf("the machine is named %s: the package gets /etc/hostname %s and an /etc/hosts that maps only that name to 127.0.0.1 (and ::1). The name of the service (%s) and its %s.service name are not mapped there: they keep resolving through the DNS of ops to the address of the machine, so a program configured with its own service name does not find loopback behind it. Without the file nanos names the guest after its address (192-168-33-209) and nothing resolves that name, and a program that looks up its own host name (WildFly in InetAddress.getLocalHost(), ASP.NET in Dns.GetHostEntry) fails", obs.HostnameMade, obs.HostnameMade, s.Name, s.Name))
 	}
 	if isDotnet(obs) {
